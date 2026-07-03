@@ -1,0 +1,88 @@
+version: '3.9'
+
+services:
+  # ---------- PostgreSQL 16 ----------
+  postgres:
+    image: postgres:16-alpine
+    container_name: aos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agentos
+      POSTGRES_PASSWORD: agentos_secret
+      POSTGRES_DB: agent_os
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./configs/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - aos-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # 8GB 内存限制
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ---------- Redis 7 ----------
+  redis:
+    image: redis:7-alpine
+    container_name: aos-redis
+    restart: unless-stopped
+    command: redis-server --requirepass redis_secret --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - aos-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+
+  # ---------- Temporal Server (开发模式，SQLite) ----------
+  temporal:
+    image: temporalio/auto-setup:1.24.0
+    container_name: aos-temporal
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=agentos
+      - POSTGRES_PWD=agentos_secret
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      # JVM 内存限制
+      - JAVA_OPTS=-Xms512m -Xmx768m
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./data/temporal:/etc/temporaldata
+    networks:
+      - aos-net
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+networks:
+  aos-net:
+    driver: bridge

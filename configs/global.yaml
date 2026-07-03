@@ -1,0 +1,18 @@
+deploy_mode: standalone  # 由 detect_env.sh 动态写入
+
+# 服务连接信息（这些与 docker-compose 服务名一致）
+services:
+  postgres:
+    host: postgres
+    port: 5432
+    user: agentos
+    password: agentos_secret
+    db: agent_os
+    audit_db: agent_audit
+  redis:
+    host: redis
+    port: 6379
+    password: redis_secret
+  temporal:
+    host: temporal
+    port: 7233
