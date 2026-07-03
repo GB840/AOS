@@ -1,5 +1,13 @@
-import grpc
+import sys
+import os
+
+# 将 src/common 加入模块搜索路径
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'common'))
+
 from concurrent import futures
+import grpc
+import meta_orchestrator_pb2 as mo_pb2
+import meta_orchestrator_pb2_grpc as mo_grpc
 
 # proto 生成的代码在 src/common 目录，需要先确保路径
 import sys
