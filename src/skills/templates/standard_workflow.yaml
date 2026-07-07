@@ -1,0 +1,104 @@
+name: standard_workflow
+description: "标准工作流技能模板 - 基于Superpowers五步门控方法论"
+version: "1.0.0"
+author: "AOS"
+license: "MIT"
+category: "workflow"
+tags: ["workflow", "standard", "gate", "superpowers"]
+capabilities: ["task_understanding", "planning", "execution", "verification", "review"]
+
+stages:
+  - name: understand
+    description: "深度理解任务需求，提取关键信息"
+    required_inputs: ["task", "context"]
+    expected_outputs: ["key_points", "constraints", "success_criteria"]
+    gate_questions:
+      - "我是否完全理解了任务需求？"
+      - "是否有未明确的约束条件？"
+      - "成功的标准是什么？"
+
+  - name: plan
+    description: "制定详细执行计划"
+    required_inputs: ["key_points", "constraints"]
+    expected_outputs: ["steps", "estimated_time", "resources"]
+    gate_questions:
+      - "计划是否完整覆盖所有需求？"
+      - "是否考虑了潜在风险？"
+      - "时间估算是否合理？"
+
+  - name: execute
+    description: "执行计划，生成结果"
+    required_inputs: ["steps", "resources"]
+    expected_outputs: ["output", "logs", "intermediate_results"]
+    gate_questions:
+      - "执行是否按计划进行？"
+      - "是否需要调整计划？"
+      - "中间结果是否符合预期？"
+
+  - name: verify
+    description: "验证结果质量"
+    required_inputs: ["output", "success_criteria"]
+    expected_outputs: ["verified", "issues", "suggestions"]
+    gate_questions:
+      - "结果是否符合成功标准？"
+      - "是否存在质量问题？"
+      - "是否需要修复？"
+
+  - name: review
+    description: "审查并交付最终结果"
+    required_inputs: ["verified", "issues"]
+    expected_outputs: ["final_output", "summary", "next_steps"]
+    gate_questions:
+      - "结果是否可以交付？"
+      - "是否有改进空间？"
+      - "经验是否可以复用？"
+
+tools:
+  - name: file_read
+    description: "读取文件内容"
+    parameters:
+      path: "文件路径"
+    required: false
+
+  - name: file_write
+    description: "写入文件内容"
+    parameters:
+      path: "文件路径"
+      content: "文件内容"
+    required: false
+
+  - name: code_execute
+    description: "执行代码"
+    parameters:
+      code: "代码内容"
+      language: "编程语言"
+    required: false
+
+test_cases:
+  - name: simple_task
+    input_context:
+      task: "创建一个简单的Hello World程序"
+      context: "使用Python语言"
+    expected_output:
+      success: true
+    validation_rules:
+      - "'success' in result"
+
+  - name: complex_task
+    input_context:
+      task: "设计一个RESTful API"
+      context: "使用FastAPI框架，包含用户认证"
+    expected_output:
+      success: true
+    validation_rules:
+      - "result.get('success', False)"
+
+execution_context:
+  default_model: "qwen2.5:7b"
+  timeout: 300
+  max_retries: 3
+
+default_config:
+  gate_enabled: true
+  auto_verify: true
+  verbose_logging: false

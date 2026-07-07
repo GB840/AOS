@@ -19,16 +19,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Generator
 
 from utils.config import config
-from skills import (
-    SkillRegistry, LoopEngineeringSkill, ViMaxSkill, RuFloSkill,
-    PixelleVideoSkill, CodebaseMemorySkill, SearXNGSkill, LightRAGSkill,
-    JinaReaderSkill, OllamaSkill, ViiTorVoiceSkill, UITarsSkill,
-    ZvecSkill, LlamaCppSkill, ComfyUISkill,
-    CodebaseMemoryMCPSkill, AgencyAgentsSkill,
-    OmniRouteSkill, OpenMontageSkill, VideoUseSkill,
-    CogneeSkill, HerdrSkill,
-    DesignMdSkill, NoMistakesSkill, LingbotMapSkill,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +249,7 @@ class UnifiedBrain:
             ("meta_debate", self._init_meta_debate),
             ("meta_orchestrator", self._init_meta_orchestrator),
             ("router", self._init_router),
+            ("fabric", self._init_fabric),
         ]
         
         # 逐步初始化，每步都有错误恢复
@@ -437,6 +428,53 @@ class UnifiedBrain:
         from router import Router
         self.router = Router()
         logger.info("Router ready")
+
+    def _init_fabric(self):
+        """步骤17: 开放 Agent Fabric 薄缝 —— 新能力可选经 fabric 路由到真实引擎。
+
+        双轨共存: 不取代现有装配, 仅作为'更优薄缝'供新能力按需委派。
+        所有适配器均懒加载重依赖, 缺包时 health()=False, registry 自动绕开,
+        故注册过程永不崩; 任一适配器导入失败都被单独吞掉, 不影响其余。
+        """
+        try:
+            from core.fabric import FabricRegistry
+            from core.fabric.adapters import (
+                OpenClawAdapter, AG2Adapter, LiteLLMAdapter,
+                Mem0Adapter, BrowserUseAdapter, LangfuseAdapter,
+            )
+        except Exception as e:
+            logger.warning("fabric 不可用(跳过): %s", e)
+            self.fabric = None
+            return
+
+        reg = FabricRegistry()
+        for ad_cls in (OpenClawAdapter, AG2Adapter, LiteLLMAdapter,
+                       Mem0Adapter, BrowserUseAdapter, LangfuseAdapter):
+            try:
+                reg.register(ad_cls())
+            except Exception as e:
+                logger.warning("fabric adapter 注册失败 %s: %s", ad_cls.__name__, e)
+        self.fabric = reg
+        live = [eid for eid, a in reg._adapters.items() if a.health()]
+        logger.info("Fabric 薄缝就绪: 注册 %d 适配器, 当前 live %d (%s)",
+                    len(reg._adapters), len(live), ", ".join(live) or "无")
+
+    def route_via_fabric(self, capability, payload, trace_id=None):
+        """经 fabric 薄缝路由一项能力(双轨: 新能力优先走 fabric)。
+
+        返回 InvokeResult; 若 fabric 不可用或无 live provider, 返回 None,
+        调用方据此回退到现有装配(brain 内部路由), 绝不阻断服务。
+        """
+        reg = getattr(self, "fabric", None)
+        if reg is None:
+            return None
+        try:
+            from core.fabric.adapter import InvokeRequest
+            res = reg.route(InvokeRequest(capability=capability, payload=payload, trace_id=trace_id))
+            return res if res.ok else None
+        except Exception as e:
+            logger.warning("fabric 路由失败, 回退现有装配: %s", e)
+            return None
 
     def _init_meta_orchestrator(self):
         """步骤: 元调度引擎 (L3.5 顶层调度/策略/信任)。
@@ -1174,94 +1212,159 @@ class UnifiedBrain:
     # ========================================================================
 
     def health_check(self) -> Dict[str, Any]:
-        """Comprehensive health check across all components."""
-        import json as _json
+        """Comprehensive health check across all components.
+
+        与容错初始化一致: 任何组件初始化失败, 这里都不崩, 而是标记为
+        unavailable / degraded, 并汇总到顶层 status。
+        """
         from datetime import datetime as _dt
 
-        checks = {
-            "status": "healthy",
-            "timestamp": _dt.now().isoformat(),
-            "aid": self.identity.aid,
-            "components": {
-                "hermes": {
-                    "status": "ok",
-                    "type": "AIAgent v0.15.2",
-                    "deep": {
-                        "self_evolving_skills": self._deep_hermes_enabled,
-                        "nudge_engine": self._deep_hermes_enabled,
-                        "memory_lifecycle": self._deep_hermes_enabled,
-                        "context_engine": self._deep_hermes_enabled,
-                    },
-                },
-                "deerflow": {
-                    "status": "ok",
-                    "type": "DeerFlow 2.0 DEEP",
-                    "deep": {
-                        "runtime_journal": self._deep_deerflow_enabled,
-                        "tracing": self._deep_deerflow_enabled,
-                        "user_context": self._deep_deerflow_enabled,
-                        "middleware_chain": "14-layer onion model",
-                    },
-                },
-                "memory": {"status": "ok", "type": "SQLite + ChromaDB"},
-                "persistence": {"status": "ok", "entries": self.persistence.get_stats()},
-                "skills": {"status": "ok", "count": len(self.skill_registry._skills)},
-                "subagents": {"status": "ok", "count": self.subagents.get_stats().get("total", 0)},
-                "mcp": {"status": "ok" if self.mcp else "disabled"},
-                "compliance": {
-                    "audit": self.audit.get_stats(),
-                    "identity": self.aid_gen.get_stats(),
-                    "tracer": self.tracer.get_stats(),
-                },
-            }
+        def _safe(obj, method="get_stats", default=None):
+            if obj is None:
+                return {"status": "unavailable"}
+            try:
+                fn = getattr(obj, method, None)
+                return fn() if callable(fn) else (default or {"status": "ok"})
+            except Exception as e:  # pragma: no cover - 防御性
+                return {"status": f"degraded: {e}"}
+
+        identity = getattr(self, "identity", None)
+        hermes = getattr(self, "hermes", None)
+        deerflow = getattr(self, "deerflow", None)
+        fabric = getattr(self, "fabric", None)
+
+        components = {
+            "hermes": _safe(hermes, method="get_stats"),
+            "deerflow": _safe(deerflow, method="get_stats"),
+            "memory": _safe(getattr(self, "memory", None), method="get_stats"),
+            "persistence": _safe(getattr(self, "persistence", None), method="get_stats"),
+            "skills": {"count": len(getattr(getattr(self, "skill_registry", None), "_skills", {}))},
+            "subagents": _safe(getattr(self, "subagents", None), method="get_stats"),
+            "mcp": {"status": "ok" if getattr(self, "mcp", None) else "disabled"},
+            "fabric": (
+                {"adapters": len(getattr(fabric, "_adapters", {})),
+                 "live": [e for e, a in getattr(fabric, "_adapters", {}).items() if a.health()]}
+                if fabric is not None else {"status": "disabled"}
+            ),
+            "compliance": {
+                "audit": _safe(getattr(self, "audit", None), method="get_stats"),
+                "identity": _safe(getattr(self, "aid_gen", None), method="get_stats"),
+                "tracer": _safe(getattr(self, "tracer", None), method="get_stats"),
+            },
         }
 
-        # Quick self-test
-        try:
-            self.hermes.get_providers_status()
-        except Exception as e:
-            checks["components"]["hermes"]["status"] = f"degraded: {e}"
+        # hermes / deerflow deep 标志 (仅当对应对象存在时)
+        if hermes is not None:
+            components["hermes"]["deep"] = {
+                "self_evolving_skills": getattr(self, "_deep_hermes_enabled", False),
+                "nudge_engine": getattr(self, "_deep_hermes_enabled", False),
+                "memory_lifecycle": getattr(self, "_deep_hermes_enabled", False),
+                "context_engine": getattr(self, "_deep_hermes_enabled", False),
+            }
+        if deerflow is not None:
+            components["deerflow"]["deep"] = {
+                "runtime_journal": getattr(self, "_deep_deerflow_enabled", False),
+                "tracing": getattr(self, "_deep_deerflow_enabled", False),
+                "user_context": getattr(self, "_deep_deerflow_enabled", False),
+                "middleware_chain": "14-layer onion model",
+            }
 
-        return checks
+        # hermes 快速自检 (失败仅降级, 不崩)
+        if hermes is not None:
+            try:
+                hermes.get_providers_status()
+            except Exception as e:
+                components["hermes"]["status"] = f"degraded: {e}"
+
+        init_summary = self.get_init_status()
+        status = "healthy" if init_summary["failed_components"] == 0 else "degraded"
+
+        return {
+            "status": status,
+            "timestamp": _dt.now().isoformat(),
+            "aid": getattr(identity, "aid", None),
+            "init_summary": init_summary,
+            "components": components,
+        }
 
     def get_full_stats(self) -> Dict[str, Any]:
-        """Aggregate stats from all components."""
+        """Aggregate stats from all components. Defensive: never raises."""
         from datetime import datetime as _dt
-        return {
-            "app": {"name": "AOS v5.0", "aid": self.identity.aid, "timestamp": _dt.now().isoformat()},
-            "hermes": self.hermes.get_stats(),
-            "deerflow": self.deerflow.get_stats(),
-            "subagents": self.subagents.get_stats(),
-            "skills": self.hermes.list_skills(),
+
+        def _stats(obj, method="get_stats"):
+            if obj is None:
+                return {"status": "unavailable"}
+            try:
+                fn = getattr(obj, method, None)
+                return fn() if callable(fn) else {"status": "ok"}
+            except Exception as e:
+                return {"status": f"degraded: {e}"}
+
+        hermes = getattr(self, "hermes", None)
+        deerflow = getattr(self, "deerflow", None)
+
+        stats: Dict[str, Any] = {
+            "app": {
+                "name": "AOS v5.0",
+                "aid": getattr(getattr(self, "identity", None), "aid", None),
+                "timestamp": _dt.now().isoformat(),
+            },
+            "hermes": _stats(hermes),
+            "deerflow": _stats(deerflow),
+            "subagents": _stats(getattr(self, "subagents", None)),
+            "skills": _stats(hermes, method="list_skills"),
             "compliance": {
-                "audit": self.audit.get_stats(),
-                "identity": self.aid_gen.get_stats(),
-                "tracing": self.tracer.get_stats(),
+                "audit": _stats(getattr(self, "audit", None)),
+                "identity": _stats(getattr(self, "aid_gen", None)),
+                "tracing": _stats(getattr(self, "tracer", None)),
             },
-            "persistence": self.persistence.get_stats(),
-            "deerflow_deep": {
-                "sandbox_ready": self.deerflow._sandbox_bridge is not None,
-                "guardrails_ready": self.deerflow._guardrails_bridge is not None,
-                "agents_factory_ready": self.deerflow._agents_bridge is not None,
-                "subagent_executor_ready": self.deerflow._subagent_bridge is not None,
-            },
-            "deep_hermes": {
-                "self_evolving_skills": self._deep_hermes_enabled,
-                "nudge_engine": self._deep_hermes_enabled,
-                "memory_lifecycle": self._deep_hermes_enabled,
-                "context_engine": self._deep_hermes_enabled,
-                "skill_count": len(self.hermes.deep_hermes._skill_commands) if self.hermes.deep_hermes else 0,
-                "review_enabled": self.hermes.deep_hermes._review_enabled if self.hermes.deep_hermes else False,
-                "context_status": self.hermes.get_context_status() if self.hermes.deep_hermes else {},
-            },
-            "deep_deerflow": {
-                "journal_enabled": self.deerflow.deep_deerflow._journal is not None,
-                "tracing_enabled": bool(self.deerflow.deep_deerflow._tracing_callbacks),
-                "middleware_layers": len(self.deerflow.deep_deerflow.MIDDLEWARE_CHAIN),
-                "task_count": self.deerflow.deep_deerflow._task_counter,
-                "active_user_contexts": len(self.deerflow.deep_deerflow._user_contexts),
-            },
+            "persistence": _stats(getattr(self, "persistence", None)),
+            "fabric": (
+                {"adapters": len(getattr(getattr(self, "fabric", None), "_adapters", {}))}
+                if getattr(self, "fabric", None) else {"status": "disabled"}
+            ),
         }
+
+        # DeerFlow deep (仅当真实 DeerFlow 网关且带 deep 属性时)
+        if deerflow is not None and getattr(deerflow, "deep_deerflow", None) is not None:
+            try:
+                dd = deerflow.deep_deerflow
+                stats["deerflow_deep"] = {
+                    "sandbox_ready": getattr(deerflow, "_sandbox_bridge", None) is not None,
+                    "guardrails_ready": getattr(deerflow, "_guardrails_bridge", None) is not None,
+                    "agents_factory_ready": getattr(deerflow, "_agents_bridge", None) is not None,
+                    "subagent_executor_ready": getattr(deerflow, "_subagent_bridge", None) is not None,
+                    "journal_enabled": getattr(dd, "_journal", None) is not None,
+                    "tracing_enabled": bool(getattr(dd, "_tracing_callbacks", []) or []),
+                    "middleware_layers": len(getattr(dd, "MIDDLEWARE_CHAIN", []) or []),
+                    "task_count": getattr(dd, "_task_counter", 0),
+                    "active_user_contexts": len(getattr(dd, "_user_contexts", {}) or {}),
+                }
+            except Exception:
+                stats["deerflow_deep"] = {"status": "unavailable"}
+        else:
+            stats["deerflow_deep"] = {"status": "unavailable"}
+
+        # Deep Hermes (仅当真实 Hermes 且带 deep_hermes 时)
+        if hermes is not None and getattr(hermes, "deep_hermes", None) is not None:
+            try:
+                dh = hermes.deep_hermes
+                stats["deep_hermes"] = {
+                    "self_evolving_skills": getattr(self, "_deep_hermes_enabled", False),
+                    "nudge_engine": getattr(self, "_deep_hermes_enabled", False),
+                    "memory_lifecycle": getattr(self, "_deep_hermes_enabled", False),
+                    "context_engine": getattr(self, "_deep_hermes_enabled", False),
+                    "skill_count": len(getattr(dh, "_skill_commands", []) or []),
+                    "review_enabled": getattr(dh, "_review_enabled", False),
+                    "context_status": getattr(hermes, "get_context_status", lambda: {})()
+                    if hasattr(hermes, "get_context_status") else {},
+                }
+            except Exception:
+                stats["deep_hermes"] = {"status": "unavailable"}
+        else:
+            stats["deep_hermes"] = {"status": "unavailable"}
+
+        return stats
 
     # ========================================================================
     #  Session Management

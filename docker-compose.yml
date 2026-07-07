@@ -1,84 +1,262 @@
+# =============================================================================
+# AOS v5.0 Docker Compose - Full Stack
+# =============================================================================
+
 services:
-  # ---------- PostgreSQL 16 ----------
+
+  # ---- Core API Service ----
+  aos-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: aos-api
+    profiles:
+      - api
+      - full
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./logs:/app/logs
+      - ./external:/app/external:ro
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DEBUG=false
+      - SQLITE_DB_PATH=/app/data/sqlite/aos.db
+      - CHROMADB_PERSIST_DIR=/app/data/chroma
+      - DATA_DIR=/app/data
+      - SKILLS_OUTPUT_DIR=/app/outputs/skills
+      - COMFYUI_OUTPUT_DIR=/app/outputs/comfyui
+      - COGNEE_DATA_DIR=/app/data/cognee
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    networks:
+      - aos-net
+
+  # ---- Streamlit Web UI ----
+  aos-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: aos-web
+    profiles:
+      - web
+      - full
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./external:/app/external:ro
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DEBUG=false
+      - API_BASE_URL=http://aos-api:8000
+      - SQLITE_DB_PATH=/app/data/sqlite/aos.db
+      - CHROMADB_PERSIST_DIR=/app/data/chroma
+    restart: unless-stopped
+    depends_on:
+      aos-api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    networks:
+      - aos-net
+
+  # ---- PostgreSQL (for production persistence) ----
   postgres:
     image: postgres:16-alpine
     container_name: aos-postgres
-    restart: unless-stopped
+    profiles:
+      - db
+      - full
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: agentos
-      POSTGRES_PASSWORD: agentos_secret
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aos_secret}
       POSTGRES_DB: agent_os
-    ports:
-      - "5432:5432"
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-      - ./configs/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - aos-net
+      - postgres_data:/var/lib/postgresql/data
+      - ./configs/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h localhost -U agentos"]
+      test: ["CMD-SHELL", "pg_isready -U agentos -d agent_os"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     deploy:
       resources:
         limits:
-          memory: 256m
+          memory: 1G
+        reservations:
+          memory: 256M
+    networks:
+      - aos-net
 
-  # ---------- Redis 7 ----------
+  # ---- Redis (for caching and pub/sub) ----
   redis:
     image: redis:7-alpine
     container_name: aos-redis
-    restart: unless-stopped
-    command: redis-server --requirepass redis_secret --appendonly yes
+    profiles:
+      - cache
+      - full
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secret}
     volumes:
-      - ./data/redis:/data
-    networks:
-      - aos-net
+      - redis_data:/data
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     deploy:
       resources:
         limits:
-          memory: 64m
+          memory: 512M
+        reservations:
+          memory: 128M
+    networks:
+      - aos-net
 
-  # ---------- Temporal Server ----------
+  # ---- Temporal (for workflow orchestration) ----
   temporal:
-    image: temporalio/auto-setup:1.24.0
+    image: temporalio/auto-setup:1.22.0
     container_name: aos-temporal
-    restart: unless-stopped
+    profiles:
+      - workflow
+      - full
+    ports:
+      - "${TEMPORAL_PORT:-7233}:7233"
+      - "${TEMPORAL_WEB_PORT:-8088}:8088"
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=agentos
+      - POSTGRES_PWD=${POSTGRES_PASSWORD:-aos_secret}
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development-sql.yaml
+    volumes:
+      - temporal_data:/etc/temporal
+      - ./configs/temporal:/etc/temporal/config:ro
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      - DB=postgres12
-      - DB_PORT=5432
-      - POSTGRES_USER=agentos
-      - POSTGRES_PWD=agentos_secret
-      - POSTGRES_SEEDS=postgres
-      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
-    volumes:
-      - ./configs/temporal/development-sql.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml
-    ports:
-      - "7233:7233"
+    restart: unless-stopped
     networks:
       - aos-net
-    healthcheck:
-      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 90s
+
+  # ---- Ollama (local LLM, optional) ----
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aos-ollama
+    profiles:
+      - ollama
+      - full
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 1g
+          memory: 8G
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+        reservations:
+          memory: 2G
+    networks:
+      - aos-net
 
+  # ---- Jaeger (distributed tracing, optional) ----
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: aos-jaeger
+    profiles:
+      - tracing
+      - full
+    ports:
+      - "${JAEGER_PORT:-16686}:16686"
+      - "6831:6831/udp"
+      - "14268:14268"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
+    networks:
+      - aos-net
+
+  # ---- Nginx (reverse proxy, optional) ----
+  nginx:
+    image: nginx:alpine
+    container_name: aos-nginx
+    profiles:
+      - proxy
+      - full
+    ports:
+      - "${NGINX_PORT:-80}:80"
+      - "${NGINX_SSL_PORT:-443}:443"
+    volumes:
+      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./configs/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./configs/nginx/ssl:/etc/ssl/private:ro
+    depends_on:
+      aos-api:
+        condition: service_healthy
+      aos-web:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - aos-net
+
+# =============================================================================
+# Networks
+# =============================================================================
 networks:
   aos-net:
     driver: bridge
+    name: aos-network
+
+# =============================================================================
+# Volumes (persistent data)
+# =============================================================================
+volumes:
+  postgres_data:
+    name: aos-postgres-data
+  redis_data:
+    name: aos-redis-data
+  ollama_data:
+    name: aos-ollama-data
+  temporal_data:
+    name: aos-temporal-data

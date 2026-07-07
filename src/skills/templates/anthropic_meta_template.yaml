@@ -1,0 +1,116 @@
+name: anthropic_meta_template
+description: "Anthropic官方风格技能元模板 - 标准化技能开发模板"
+version: "1.0.0"
+author: "AOS"
+license: "MIT"
+category: "meta"
+tags: ["meta", "template", "anthropic", "standard"]
+capabilities: ["skill_creation", "standardization", "testing"]
+
+stages:
+  - name: define_purpose
+    description: "定义技能的核心目的和价值主张"
+    required_inputs: ["purpose", "value_proposition"]
+    expected_outputs: ["goal", "use_cases"]
+    gate_questions:
+      - "技能的核心价值是什么？"
+      - "目标用户是谁？"
+      - "解决什么具体问题？"
+
+  - name: design_interface
+    description: "设计技能的输入输出接口"
+    required_inputs: ["goal", "use_cases"]
+    expected_outputs: ["input_schema", "output_schema", "parameters"]
+    gate_questions:
+      - "输入是否清晰明确？"
+      - "输出格式是否标准化？"
+      - "参数是否合理？"
+
+  - name: implement_logic
+    description: "实现技能的核心逻辑"
+    required_inputs: ["input_schema", "output_schema"]
+    expected_outputs: ["code", "prompt_template", "tools"]
+    gate_questions:
+      - "逻辑是否完整？"
+      - "是否考虑了边界情况？"
+      - "是否有错误处理？"
+
+  - name: write_documentation
+    description: "编写技能文档"
+    required_inputs: ["code", "input_schema", "output_schema"]
+    expected_outputs: ["readme", "examples", "api_reference"]
+    gate_questions:
+      - "文档是否清晰？"
+      - "是否有示例？"
+      - "是否易于理解？"
+
+  - name: create_tests
+    description: "创建测试用例"
+    required_inputs: ["code", "input_schema", "output_schema"]
+    expected_outputs: ["unit_tests", "integration_tests", "edge_cases"]
+    gate_questions:
+      - "测试覆盖率是否足够？"
+      - "是否覆盖边界情况？"
+      - "测试是否可自动化？"
+
+  - name: review_and_publish
+    description: "审查并发布技能"
+    required_inputs: ["code", "documentation", "tests"]
+    expected_outputs: ["published", "version", "changelog"]
+    gate_questions:
+      - "代码质量是否达标？"
+      - "测试是否全部通过？"
+      - "文档是否完整？"
+
+tools:
+  - name: code_generator
+    description: "生成代码"
+    parameters:
+      language: "编程语言"
+      framework: "使用的框架"
+      requirements: "功能需求"
+    required: true
+
+  - name: prompt_optimizer
+    description: "优化提示词"
+    parameters:
+      goal: "优化目标"
+      constraints: "约束条件"
+      examples: "示例"
+    required: false
+
+  - name: test_runner
+    description: "运行测试"
+    parameters:
+      test_type: "测试类型"
+      coverage: "覆盖率要求"
+    required: true
+
+test_cases:
+  - name: basic_skill_creation
+    input_context:
+      purpose: "创建一个简单的天气查询技能"
+      value_proposition: "快速获取天气信息"
+    expected_output:
+      success: true
+    validation_rules:
+      - "result.get('success', False)"
+
+  - name: complex_skill_creation
+    input_context:
+      purpose: "创建一个代码审查技能"
+      value_proposition: "自动化代码质量检查"
+    expected_output:
+      success: true
+    validation_rules:
+      - "result.get('success', False)"
+
+execution_context:
+  default_model: "qwen2.5:7b"
+  timeout: 600
+  max_retries: 3
+
+default_config:
+  enable_gate_review: true
+  auto_format_output: true
+  generate_documentation: true

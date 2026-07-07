@@ -1,2 +1,187 @@
-data/ 
-docker 
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+node_modules/
+
+# Byte-compiled / optimized / DLL files
+*.pyc
+*.pyo
+*.pyd
+
+# C extensions
+*.c
+*.o
+*.so
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Ruff
+.ruff_cache/
+.mypy_cache/
+.ruff_cache/
+
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
+.env
+.env.*
+!.env.example
+cookies.txt
+
+# =============================================================================
+# Data & Generated Files
+# =============================================================================
+data/
+outputs/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+chroma_db/
+chroma/
+cognee_data/
+zvec_data/
+codebase_index/
+qdrant_storage/
+
+# Model weights
+*.bin
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.onnx
+
+# Generated images/videos
+*.png
+*.jpg
+!tests/fixtures/*.png
+!tests/fixtures/*.jpg
+*.mp4
+*.webm
+!tests/fixtures/*.mp4
+
+# =============================================================================
+# IDE & Editor
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.code-workspace
+.ropeproject/
+
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# =============================================================================
+# Logs
+# =============================================================================
+*.log
+logs/
+*.log.*
+log.txt
+
+# =============================================================================
+# Temporary Files
+# =============================================================================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.swp
+*.swo
+*.orig
+*.rej
+*.patch
+
+# Deployed contracts
+*.flattened
+
+# Misc
+*.pot
+*.mo
+
+# =============================================================================
+# Docker
+# =============================================================================
+.docker/
+.dockerignore
+
+# =============================================================================
+# External Dependencies (cloned repos)
+# =============================================================================
+external/
+!external/.gitkeep
+
+# =============================================================================
+# Test fixtures (keep some, remove others)
+# =============================================================================
+tests/fixtures/generated/
+tests/outputs/
+
+# =============================================================================
+# Coverage
+# =============================================================================
+htmlcov/
+coverage.xml
+.coverage
+.coverage.*
