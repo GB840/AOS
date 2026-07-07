@@ -1,0 +1,21 @@
+# AOS v5.0 pre-commit hooks
+# 安装: pre-commit install  (依赖已在 pyproject dev 中)
+repos:
+  - repo: local
+    hooks:
+      - id: ast-duplicate-defs
+        name: AST duplicate definitions (同作用域重复 def/class)
+        description: >
+          检测同一作用域内被多次定义的函数/方法/类。Python 只会绑定最后一个
+          定义，前面的会被静默遮蔽 —— 这是 brain.py 历史 "72 处重复方法" 的根因。
+        entry: python scripts/check_ast_duplicates.py src
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+
+      - id: ruff
+        name: ruff
+        entry: ruff check src/ tests/
+        language: system
+        types: [python]
