@@ -425,8 +425,8 @@ class UnifiedBrain:
     
     def _init_router(self):
         """步骤16: 路由器"""
-        from router import Router
-        self.router = Router()
+        from router import LLMRouter
+        self.router = LLMRouter()
         logger.info("Router ready")
 
     def _init_fabric(self):
@@ -922,33 +922,66 @@ class UnifiedBrain:
                 return self._route_l1(message, session_id, **kwargs)
         except Exception as e:
             logger.error(f"Task routing failed: {e}", exc_info=True)
-            try:
-                return self.hermes.chat(message, session_id=session_id, **kwargs)
-            except TypeError:
-                return self.hermes.chat(message)
+            return self._llm_cloud_fallback(message, session_id, level="L1", channel="路由失败-云端回落")
+
+    def _llm_cloud_fallback(self, message: str, session_id: str = None,
+                             level: str = "L1", channel: str = "云端LLM回落") -> Dict[str, Any]:
+        """Hermes/本地模型不可用时, 回落到云端 LLMRouter(已配有效密钥)。
+
+        这是'个人级开箱即用'的关键兜底: 即使本地 ollama 没装, 只要 .env 里有
+        任意云端供应商密钥(ZHIPU/SILICONFLOW/BAIDU/XFYUN), 对话仍能正常出结果。
+        """
+        router = getattr(self, "router", None)
+        if router is None:
+            return {
+                "success": False,
+                "error": "无可用的LLM后端(Hermes 与 云端路由均未配置)",
+                "level": level, "channel": channel,
+            }
+        try:
+            out = router.chat([{"role": "user", "content": message}])
+            return {
+                "success": out.get("success", False),
+                "response": out.get("content", ""),
+                "provider": out.get("provider"),
+                "model": out.get("model"),
+                "level": level,
+                "channel": channel,
+                "backend": "cloud_router",
+            }
+        except Exception as e:
+            logger.error("云端 LLM 回落也失败: %s", e, exc_info=True)
+            return {"success": False, "error": f"LLM 调用失败: {e}", "level": level, "channel": channel}
 
     def _route_l1(self, message: str, session_id: str = None, **kwargs) -> Dict[str, Any]:
-        """L1 - 直通通道: Hermes直接回复"""
+        """L1 - 直通通道: 优先 Hermes 直接回复, 失败/返回错误则回落云端 LLM"""
         try:
             result = self.hermes.chat(message, session_id=session_id, **kwargs)
-            result["level"] = "L1"
-            result["channel"] = "直接对话"
-            return result
-        except TypeError:
-            result = self.hermes.chat(message)
-            result["level"] = "L1"
-            result["channel"] = "直接对话"
-            return result
+        except Exception as e:
+            logger.warning("L1 Hermes 异常, 回落云端 LLM: %s", e)
+            return self._llm_cloud_fallback(message, session_id, level="L1")
+        # Hermes 可能返回带 error 字段的 dict(即便 success=True), 或无内容 -> 回落云端
+        if isinstance(result, dict) and (
+            result.get("error") or not (result.get("response") or result.get("content"))
+        ):
+            logger.warning("L1 Hermes 返回错误/空内容, 回落云端 LLM: %s", result.get("error"))
+            return self._llm_cloud_fallback(message, session_id, level="L1")
+        result["level"] = "L1"
+        result["channel"] = "直接对话"
+        return result
 
     def _route_l2(self, message: str, session_id: str = None, **kwargs) -> Dict[str, Any]:
-        """L2 - 快速通道: 选1个角色直接执行"""
+        """L2 - 快速通道: 选1个角色直接执行; 无匹配角色则回落 L1 对话"""
         similar = self.task_fingerprint.search_similar(message)
-        if similar:
-            template = similar[0]
-            role = template.role_whitelist[0] if template.role_whitelist else "default"
-            logger.info(f"L2复用模板: {template.fingerprint} -> {role}")
+        if similar and similar[0].role_whitelist:
+            role = similar[0].role_whitelist[0]
+            logger.info(f"L2复用模板: {similar[0].fingerprint} -> {role}")
         else:
             role = self._find_best_single_role(message)
+
+        if not role:
+            logger.info("L2 无匹配角色, 回落 L1 对话")
+            return self._route_l1(message, session_id, **kwargs)
 
         result = self.skill_registry.execute(role, {"task": message})
         result["level"] = "L2"
@@ -957,14 +990,17 @@ class UnifiedBrain:
         return result
 
     def _route_l3(self, message: str, session_id: str = None, **kwargs) -> Dict[str, Any]:
-        """L3 - 标准通道: 选1主+1辅角色，轻量协商"""
+        """L3 - 标准通道: 选1主+1辅角色，轻量协商; 无匹配则回落 L1"""
         similar = self.task_fingerprint.search_similar(message)
-        if similar:
-            template = similar[0]
-            roles = template.role_whitelist[:2] if template.role_whitelist else []
-            logger.info(f"L3复用模板: {template.fingerprint} -> {roles}")
+        if similar and similar[0].role_whitelist:
+            roles = similar[0].role_whitelist[:2]
+            logger.info(f"L3复用模板: {similar[0].fingerprint} -> {roles}")
         else:
             roles = self._find_main_and_support_roles(message)
+
+        if not roles:
+            logger.info("L3 无匹配角色, 回落 L1 对话")
+            return self._route_l1(message, session_id, **kwargs)
 
         results = []
         for role in roles:
@@ -1084,21 +1120,21 @@ class UnifiedBrain:
             ),
         }
 
-    def _find_best_single_role(self, message: str) -> str:
-        """找到最适合任务的单个角色"""
+    def _find_best_single_role(self, message: str) -> Optional[str]:
+        """找到最适合任务的单个角色; 无匹配返回 None(由上层回落 L1)"""
         skills = self.skill_registry.search(message)
         if skills:
             return skills[0]["name"]
-        return "default"
+        return None
 
     def _find_main_and_support_roles(self, message: str) -> List[str]:
-        """找到主角色和辅助角色"""
+        """找到主角色和辅助角色; 无匹配返回空列表(由上层回落 L1)"""
         skills = self.skill_registry.search(message)
         if len(skills) >= 2:
             return [skills[0]["name"], skills[1]["name"]]
         elif skills:
-            return [skills[0]["name"], "default"]
-        return ["default"]
+            return [skills[0]["name"]]
+        return []
 
     def _synthesize_results(self, results: List[Dict[str, Any]]) -> str:
         """综合多个角色的结果"""

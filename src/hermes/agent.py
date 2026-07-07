@@ -176,9 +176,11 @@ class HermesAgent:
         try:
             result = self._agent.run_conversation(enriched_message)
             response_text = result.get("final_response", "")
+            failed = False
         except Exception as e:
             logger.error(f"Hermes chat error: {e}")
             response_text = f"[Hermes error: {e}]"
+            failed = True
 
         self.memory.add_conversation(
             session_id=session_id, role="assistant", content=response_text,
@@ -191,10 +193,11 @@ class HermesAgent:
 
         return {
             "session_id": session_id,
-            "response": response_text,
+            "response": "" if failed else response_text,
+            "error": response_text if failed else None,
             "provider": self._resolve_provider()["provider"],
             "model": self._resolve_provider()["model"],
-            "success": True,
+            "success": not failed,
             "timestamp": datetime.now().isoformat(),
             "_lifecycle": {
                 "memory_prefetched": bool(memory_context),

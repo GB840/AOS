@@ -41,6 +41,16 @@ def main():
     if str(PROJECT_ROOT / "src") not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+    # 关键修复：子进程(uvicorn/streamlit)是独立 Python，不会继承本进程的 sys.path 插入。
+    # 必须把项目根与 src/ 注入 PYTHONPATH，否则子进程里 `from utils.config` / `import src.api.main` 会失败。
+    _env = os.environ.copy()
+    _pp = _env.get("PYTHONPATH", "")
+    _pp_parts = _pp.split(os.pathsep) if _pp else []
+    for _p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
+        if _p not in _pp_parts:
+            _pp_parts.insert(0, _p)
+    _env["PYTHONPATH"] = os.pathsep.join(_pp_parts)
+
     print(f"  Project root: {PROJECT_ROOT}")
     print(f"  Working directory: {os.getcwd()}")
 
@@ -65,7 +75,7 @@ def main():
                 "--host", args.host,
                 "--port", str(args.port),
                 "--reload",
-            ], cwd=str(PROJECT_ROOT))
+            ], cwd=str(PROJECT_ROOT), env=_env)
             processes.append(("API", api_proc))
             print(f"  API: http://localhost:{args.port}")
             print(f"  Docs: http://localhost:{args.port}/docs")
@@ -78,7 +88,7 @@ def main():
                 "src/web/app.py",
                 "--server.port", str(args.ui_port),
                 "--server.headless", "true",
-            ], cwd=str(PROJECT_ROOT))
+            ], cwd=str(PROJECT_ROOT), env=_env)
             processes.append(("UI", ui_proc))
             print(f"  UI: http://localhost:{args.ui_port}")
 
