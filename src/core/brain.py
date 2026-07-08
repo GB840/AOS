@@ -583,20 +583,38 @@ class UnifiedBrain:
     #  REAL Hermes-Agent Integration (Nous Research v0.18.0)
     # ========================================================================
     def _init_real_hermes(self):
-        """Initialize REAL Hermes-Agent from Nous Research."""
+        """Initialize REAL Hermes-Agent from Nous Research.
+
+        注意命名空间解冲突: hermes-agent 自带顶层 `utils` 包 (utils.py, 含
+        base_url_hostname 等), 与 AOS 自身的 src/utils 包同名. AOS 启动时
+        `utils` 已被加载进 sys.modules, 会遮蔽 hermes-agent 的 utils, 导致
+        `from utils import base_url_hostname` 失败. 这里在加载 hermes 前暂存并
+        移除 AOS 的 `utils*` 命名空间, 让 hermes-agent 加载自己的 utils, 加载
+        完成后再还原 AOS 的 `utils`, 两者互不污染 (符合"薄缝集成"原则, 不改
+        hermes-agent 内部).
+        """
         import sys
         hermes_path = config.HERMES_SOURCE_PATH
-        
+
         if hermes_path and os.path.exists(hermes_path):
+            # --- 暂存并移除 AOS 的 utils* 命名空间, 避免遮蔽 hermes 的 utils ---
+            _saved_utils = {
+                k: sys.modules[k]
+                for k in list(sys.modules)
+                if k == "utils" or k.startswith("utils.")
+            }
+            for k in _saved_utils:
+                del sys.modules[k]
+
             try:
                 sys.path.insert(0, hermes_path)
-                
+
                 import os as _os
                 _os.environ.setdefault("HERMES_HOME", str(Path(hermes_path) / "config" / "hermes"))
                 _os.makedirs(_os.environ["HERMES_HOME"], exist_ok=True)
-                
+
                 from run_agent import AIAgent
-                
+
                 self.hermes = AIAgent(
                     base_url=config.ZHIPU_BASE_URL,
                     api_key=config.ZHIPU_API_KEY,
@@ -604,12 +622,12 @@ class UnifiedBrain:
                     verbose_logging=config.DEBUG,
                     quiet_mode=True,
                 )
-                
+
                 logger.info(f"✅ REAL Hermes-Agent loaded from {hermes_path}")
                 logger.info(f"   - Class: {type(self.hermes).__name__}")
                 logger.info(f"   - Model: {config.ZHIPU_MODEL}")
                 logger.info(f"   - Base URL: {config.ZHIPU_BASE_URL}")
-                
+
                 self.hermes.real_hermes = True
                 return
             except Exception as e:
@@ -617,7 +635,13 @@ class UnifiedBrain:
             finally:
                 if hermes_path in sys.path:
                     sys.path.remove(hermes_path)
-        
+                # 清理 hermes-agent 注入的 utils* 命名空间, 还原 AOS 的 utils
+                for k in [k2 for k2 in list(sys.modules) if k2 == "utils" or k2.startswith("utils.")]:
+                    if k not in _saved_utils:
+                        del sys.modules[k]
+                for k, v in _saved_utils.items():
+                    sys.modules[k] = v
+
         logger.info("⚠️ Falling back to AOS Hermes implementation")
         from hermes.agent import HermesAgent
         self.hermes = HermesAgent()
@@ -1270,8 +1294,16 @@ class UnifiedBrain:
         fabric = getattr(self, "fabric", None)
 
         components = {
-            "hermes": _safe(hermes, method="get_stats"),
-            "deerflow": _safe(deerflow, method="get_stats"),
+            "hermes": (
+                {"status": "ok", "real": True, "class": type(hermes).__name__}
+                if getattr(hermes, "real_hermes", False)
+                else _safe(hermes, method="get_stats")
+            ),
+            "deerflow": (
+                {"status": "ok", "real": True, "class": type(deerflow).__name__}
+                if getattr(deerflow, "real_deerflow", False)
+                else _safe(deerflow, method="get_stats")
+            ),
             "memory": _safe(getattr(self, "memory", None), method="get_stats"),
             "persistence": _safe(getattr(self, "persistence", None), method="get_stats"),
             "skills": {"count": len(getattr(getattr(self, "skill_registry", None), "_skills", {}))},
@@ -1305,8 +1337,8 @@ class UnifiedBrain:
                 "middleware_chain": "14-layer onion model",
             }
 
-        # hermes 快速自检 (失败仅降级, 不崩)
-        if hermes is not None:
+        # hermes 快速自检 (失败仅降级, 不崩). REAL Hermes AIAgent 无此方法, 跳过.
+        if hermes is not None and not getattr(hermes, "real_hermes", False):
             try:
                 hermes.get_providers_status()
             except Exception as e:
