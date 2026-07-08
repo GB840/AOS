@@ -207,7 +207,7 @@ class SkillMarketplace:
             try:
                 with open(reviews_file, "r", encoding="utf-8") as f:
                     reviews = json.load(f)
-            except:
+            except Exception:
                 pass
         
         reviews.append({

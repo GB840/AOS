@@ -76,7 +76,7 @@ def _safe_eval_condition(condition: str, context: Dict[str, Any], results: Dict[
         if re.match(pattern, condition):
             try:
                 return bool(eval(condition, {}, safe_vars))
-            except:
+            except Exception:
                 return False
     
     return False

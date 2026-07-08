@@ -62,7 +62,7 @@ def make_api_request(endpoint, method="GET", **kwargs):
     except requests.exceptions.RequestException as e:
         try:
             return {"error": response.json() if response else str(e)}
-        except:
+        except Exception:
             return {"error": str(e)}
 
 
@@ -81,7 +81,7 @@ def make_audio_request(endpoint, audio_bytes, **kwargs):
     except requests.exceptions.RequestException as e:
         try:
             return {"error": response.json() if response else str(e)}
-        except:
+        except Exception:
             return {"error": str(e)}
 
 
@@ -454,7 +454,7 @@ elif page == "🎤 语音交互":
             status_text.error(f"❌ 录音失败: {e}")
             try:
                 p.terminate()
-            except:
+            except Exception:
                 pass
 
 
@@ -1829,7 +1829,7 @@ elif page == "🎨 设计规范":
                 import json
                 try:
                     params["design_data"] = json.loads(design_json)
-                except:
+                except Exception:
                     st.error("无效的JSON格式")
                     st.stop()
             
@@ -3008,7 +3008,7 @@ elif page == "🤖 本地模型":
         else:
             local_models = []
             local_model_names = []
-    except:
+    except Exception:
         ollama_running = False
         ollama_status = "🔴 未运行"
         local_models = []
@@ -3271,7 +3271,7 @@ elif page == "🤖 本地模型":
                 st.info("地址: http://localhost:8080")
             else:
                 st.warning("⚠️ Llama.cpp 服务器状态异常")
-        except:
+        except Exception:
             st.info("🔄 Llama.cpp 服务器未运行")
     
     with tab5:
@@ -3308,7 +3308,7 @@ elif page == "🖱️ UI-TARS自动化":
     try:
         from deerflow.path_detect import detect_uitars_path
         uitars_available = detect_uitars_path() is not None
-    except:
+    except Exception:
         pass
     
     status = "🟢 源码可用" if uitars_available else "🔴 未安装"
@@ -4050,7 +4050,7 @@ elif page == "📁 项目导入":
                                     "size": size,
                                     "modified": os.path.getmtime(full_path)
                                 })
-                            except:
+                            except Exception:
                                 pass
                 
                 st.session_state.project_files = {f["full_path"]: f for f in files}

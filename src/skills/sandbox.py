@@ -75,7 +75,7 @@ class SkillSandbox:
         if hasattr(self, 'sandbox_dir') and self.sandbox_dir.exists():
             try:
                 shutil.rmtree(self.sandbox_dir)
-            except:
+            except Exception:
                 pass
     
     def execute_code(self, code: str, language: str = "python") -> SandboxResult:
@@ -132,7 +132,7 @@ class SkillSandbox:
                             duration_ms=duration_ms,
                             memory_used_mb=result_data.get("memory_used", 0),
                         )
-                    except:
+                    except Exception:
                         pass
             
             if proc.returncode == 0:

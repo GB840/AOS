@@ -196,7 +196,6 @@ from .合规审计师 import 合规审计师Skill
 from .事件响应专家 import 事件响应专家Skill
 from .渗透测试员 import 渗透测试员Skill
 from .高级安全运营工程师 import 高级安全运营工程师Skill
-from .威胁检测工程师 import 威胁检测工程师Skill
 from .威胁情报分析师 import 威胁情报分析师Skill
 from .macos_metal_空间工程师 import MacosMetal空间工程师Skill
 from .终端集成专家 import 终端集成专家Skill
@@ -238,7 +237,6 @@ from .组织心理学家 import 组织心理学家Skill
 from .个人成长导师 import 个人成长导师Skill
 from .提示词工程师 import 提示词工程师Skill
 from .房地产经纪助手 import 房地产经纪助手Skill
-from .招聘专家 import 招聘专家Skill
 from .报告分发师 import 报告分发师Skill
 from .零售退货专家 import 零售退货专家Skill
 from .销售数据提取师 import 销售数据提取师Skill

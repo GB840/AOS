@@ -209,7 +209,7 @@ class SkillAdapter:
         import json
         try:
             return json.loads(raw_output)
-        except:
+        except Exception:
             return {"success": True, "content": raw_output}
     
     def get_adapter_info(self) -> Dict[str, Any]:

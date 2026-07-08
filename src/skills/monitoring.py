@@ -81,7 +81,7 @@ class SkillMonitor:
                 with open(metrics_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.metrics = [SkillMetric(**item) for item in data]
-            except:
+            except Exception:
                 pass
     
     def _save_data(self):

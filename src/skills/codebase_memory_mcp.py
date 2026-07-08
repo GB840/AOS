@@ -466,7 +466,7 @@ class CodebaseMemoryMCPSkill(Skill):
                     content = f.read()
                 if symbol_name in content:
                     references.append(file_path)
-            except:
+            except Exception:
                 pass
         
         return {

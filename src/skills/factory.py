@@ -139,7 +139,7 @@ class TemplateSkill(Skill):
             if re.match(pattern, rule):
                 try:
                     return bool(eval(rule, {}, safe_vars))
-                except:
+                except Exception:
                     return False
         
         return False

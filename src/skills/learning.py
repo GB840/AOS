@@ -81,7 +81,7 @@ class SkillLearningSystem:
                 with open(feedbacks_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.feedbacks = [FeedbackRecord(**item) for item in data]
-            except:
+            except Exception:
                 pass
         
         if improvements_file.exists():
@@ -89,14 +89,14 @@ class SkillLearningSystem:
                 with open(improvements_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.improvements = [SkillImprovement(**item) for item in data]
-            except:
+            except Exception:
                 pass
         
         if performance_file.exists():
             try:
                 with open(performance_file, "r", encoding="utf-8") as f:
                     self.performance_history = json.load(f)
-            except:
+            except Exception:
                 pass
     
     def _save_data(self):

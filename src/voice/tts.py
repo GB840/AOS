@@ -77,7 +77,7 @@ class TTSEngine:
                     try:
                         result = response.json()
                         return {"success": False, "error": result.get("err_msg", "合成失败")}
-                    except:
+                    except Exception:
                         return {"success": False, "error": "未知错误"}
             return {"success": False, "error": f"HTTP错误: {response.status_code}"}
         except Exception as e:
