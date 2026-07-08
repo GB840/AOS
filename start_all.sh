@@ -25,6 +25,12 @@ export AOS_AUTH_JWT_SECRET="aos-jwt-secret-$( "$VENV_PY" -c 'import secrets;prin
 export PYTHONPATH="$AOS_DIR/src;$AOS_DIR"
 export AOS_API_BASE="http://127.0.0.1:8000"
 
+# --- 0) 确保 litellm 推理平面依赖（缺失则最佳努力安装，失败不阻断）---
+if ! "$VENV_PY" -c "import litellm" >/dev/null 2>&1; then
+  echo "[start_all] 安装 litellm (+zhipuai) 推理平面依赖..."
+  "$VENV_PY_DIR/pip" install --quiet litellm zhipuai 2>/dev/null || echo "[start_all] litellm 安装失败(可稍后手动装), fabric 仍会优雅降级"
+fi
+
 echo "[start_all] env ready (ZK=${#ZHIPU_API_KEY} SK=${#SILICONFLOW_API_KEY})"
 
 # --- 1) OpenClaw Gateway (外部引擎, 真实接线) ---

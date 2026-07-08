@@ -21,16 +21,19 @@ How the plane is "turned on" in production:
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
-# Pinned config: a change is a one-line edit. Default targets the LiteLLM
-# proxy port; override per-call via payload["model"] / payload["api_base"].
+# Pinned config: a change is a one-line edit. Library mode (default) calls
+# `litellm.completion()` directly; override per-call via payload["model"] /
+# payload["api_key"] / payload["api_base"]. The default model reuses the
+# Zhipu key already present in the process environment (see config.py).
 LITELLM_CONFIG: Dict[str, Any] = {
-    "api_base": "http://localhost:4000",  # LiteLLM proxy default port
-    "default_model": "gpt-4o-mini",       # any provider/model LiteLLM supports
+    "api_base": "https://open.bigmodel.cn/api/paas/v4",  # Zhipu OpenAI-compat
+    "default_model": "zhipu/glm-4-flash",                # provider/model form
 }
 
 
@@ -38,6 +41,51 @@ def _import_litellm():
     """Lazy import so the adapter is valid code even before `pip install`."""
     import litellm  # type: ignore
     return litellm
+
+
+def _resolve_key() -> Optional[str]:
+    """Resolve the real API key from process env (set by start_all.sh / .env)."""
+    # 1) explicit per-call payload
+    # 2) env var named in config.LITELLM_API_KEY_ENV (e.g. ZHIPU_API_KEY)
+    # 3) generic fallbacks
+    for name in ("ZHIPU_API_KEY", "AOS_ZHIPU_API_KEY", "OPENAI_API_KEY"):
+        v = os.environ.get(name)
+        if v:
+            return v
+    return None
+
+
+def _build_kwargs(req: "InvokeRequest") -> Dict[str, Any]:
+    """Translate an AOS request into a real litellm.completion() call.
+
+    UNIFIED routing (the inference plane):
+      * model "zhipu/<name>" -> strip prefix, call Zhipu via its OpenAI-
+        compatible endpoint (api_base + custom_llm_provider="openai"). This is
+        what actually works here (litellm's native zhipu module is unmapped in
+        this sandbox, but the OpenAI passthrough is).
+      * any other "provider/model" -> hand straight to litellm for native
+        routing (openai/anthropic/... when those keys are present).
+    """
+    payload = req.payload or {}
+    model = payload.get("model", LITELLM_CONFIG["default_model"])
+    messages = payload.get("messages") or [
+        {"role": "user", "content": payload.get("prompt", "")}
+    ]
+    kwargs: Dict[str, Any] = {"messages": messages}
+
+    if model.startswith("zhipu/"):
+        kwargs["model"] = model.split("/", 1)[1]
+        kwargs["custom_llm_provider"] = "openai"
+        kwargs["api_base"] = payload.get("api_base") or LITELLM_CONFIG["api_base"]
+    else:
+        kwargs["model"] = model
+        api_base = payload.get("api_base") or LITELLM_CONFIG["api_base"]
+        if api_base:
+            kwargs["api_base"] = api_base
+
+    kwargs["api_key"] = payload.get("api_key") or _resolve_key()
+    kwargs.update(dict(payload.get("opts", {})))
+    return kwargs
 
 
 class LiteLLMAdapter(BaseAgentAdapter):
@@ -61,21 +109,13 @@ class LiteLLMAdapter(BaseAgentAdapter):
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         try:
             litellm = _import_litellm()
-            model = req.payload.get("model", self._default_model)
-            messages = req.payload.get("messages") or [
-                {"role": "user", "content": req.payload.get("prompt", "")}
-            ]
-            resp = litellm.completion(
-                model=model,
-                messages=messages,
-                api_base=self._api_base,
-                **dict(req.payload.get("opts", {})),
-            )
+            kwargs = _build_kwargs(req)
+            resp = litellm.completion(**kwargs)
             return InvokeResult(
                 ok=True,
                 data={
                     "content": resp.choices[0].message.content,
-                    "model": model,
+                    "model": req.payload.get("model", self._default_model),
                 },
             )
         except Exception as e:  # missing key / network / provider error

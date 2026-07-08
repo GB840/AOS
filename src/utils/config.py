@@ -58,6 +58,12 @@ class Config(BaseSettings):
     ZHIPU_MODEL: str = "glm-4-flash"
     ZHIPU_ENABLED: bool = True
 
+    # LiteLLM 推理平面（统一 LLM 路由 / 库模式复用智谱 key）
+    # 库模式下 litellm.completion 直接调用；model 用 "provider/model" 形式
+    LITELLM_DEFAULT_MODEL: str = "zhipu/glm-4-flash"
+    LITELLM_API_KEY_ENV: str = "ZHIPU_API_KEY"  # 从进程环境读取真实 key
+    LITELLM_API_BASE: str = "https://open.bigmodel.cn/api/paas/v4"  # 智谱 OpenAI 兼容地址
+
     # SiliconFlow - 支持环境变量 AOS_SILICONFLOW_API_KEY
     SILICONFLOW_API_KEY: str = Field(default="", env="AOS_SILICONFLOW_API_KEY")
     SILICONFLOW_BASE_URL: str = "https://api.siliconflow.cn/v1"
