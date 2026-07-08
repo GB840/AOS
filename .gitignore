@@ -185,3 +185,4 @@ htmlcov/
 coverage.xml
 .coverage
 .coverage.*
+src/core/deerflow_subagents.json

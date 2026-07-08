@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -681,7 +682,7 @@ async def deep_subagent_register(req: SubAgentConfigRequest):
             model=req.model, max_turns=req.max_turns,
             timeout_seconds=req.timeout_seconds,
         )
-        return {"success": True, "config": {"name": cfg.name, "description": cfg.description}}
+        return {"success": True, "config": {"name": cfg["name"], "description": cfg["description"]}}
     except Exception as e:
         logger.warning("deep subagent register failed: %s", e)
         return {"success": False, "error": str(e), "available": False}

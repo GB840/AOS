@@ -14,6 +14,7 @@ Single entry point for the entire AOS system.
 
 import sys
 import os
+import time
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Generator
@@ -142,14 +143,36 @@ class DeerFlowGatewayClient:
                 return c if isinstance(c, str) else _json.dumps(c, ensure_ascii=False)
         return (state or {}).get("title") or ""
 
+    def _ensure_thread(self, thread_id):
+        """确保 DeerFlow 后端线程存在 (run 路由 require_existing=True)。
+
+        幂等: 线程已存在时后端返回现状或 409 冲突, 均不影响后续 run。
+        """
+        try:
+            self._ensure_session().post(
+                f"{self.base_url}/api/threads",
+                json={"thread_id": thread_id},
+                timeout=15,
+            )
+        except Exception:
+            pass
+
     def run(self, message, thread_id=None, model_name=None, timeout=240, **kwargs):
-        """Execute a long-running task (blocking). Returns final text answer."""
-        import json as _json
+        """Execute a long-running task (blocking). Returns final text answer.
+
+        真实 DeerFlow 2.x 流程: 先 POST /api/threads 建线程(幂等),
+        再 POST /api/threads/{thread_id}/runs/wait 阻塞取最终 state。
+        此前错误调用 /api/runs/wait (该路径不存在), 导致 AOS 内所有
+        DeerFlow 执行(长时任务/对话/子智能体)从未真正跑通 —— 现已修正。
+        """
+        import uuid
+        thread_id = thread_id or f"aos-{uuid.uuid4().hex[:12]}"
+        self._ensure_thread(thread_id)
         session = self._ensure_session()
         payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"])
         try:
             resp = session.post(
-                f"{self.base_url}/api/runs/wait", json=payload, timeout=timeout,
+                f"{self.base_url}/api/threads/{thread_id}/runs/wait", json=payload, timeout=timeout,
             )
             if resp.status_code == 200:
                 try:
@@ -157,11 +180,10 @@ class DeerFlowGatewayClient:
                 except Exception:
                     return resp.text
                 return self._extract_answer(data)
-            logger.warning(f"DeerFlow /api/runs/wait -> {resp.status_code}; {resp.text[:200]}")
+            logger.warning(f"DeerFlow run -> {resp.status_code}; {resp.text[:200]}")
         except Exception as e:
             logger.warning(f"DeerFlow run failed: {e}")
-        # 降级: 1.x /api/runs/stream
-        return self._chat_legacy(message, thread_id)
+        return None
 
     def chat(self, message, thread_id=None, **kwargs):
         return self.run(message, thread_id=thread_id, **kwargs)
@@ -169,11 +191,14 @@ class DeerFlowGatewayClient:
     def stream(self, message, thread_id=None, model_name=None, timeout=240, **kwargs):
         """Stream a conversation turn through DeerFlow 2.x (SSE, values mode)."""
         import json as _json
+        import uuid
+        thread_id = thread_id or f"aos-{uuid.uuid4().hex[:12]}"
+        self._ensure_thread(thread_id)
         session = self._ensure_session()
         payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"])
         try:
             resp = session.post(
-                f"{self.base_url}/api/runs/stream", json=payload, stream=True, timeout=timeout,
+                f"{self.base_url}/api/threads/{thread_id}/runs/stream", json=payload, stream=True, timeout=timeout,
             )
             if resp.status_code != 200:
                 # SSE 不可用 -> 阻塞跑一次并返回答案
@@ -398,45 +423,111 @@ class DeerFlowGatewayClient:
     # ------------------------------------------------------------------
     #  SubAgent delegation (兼容 REAL 网关模式)
     # ------------------------------------------------------------------
-    # 此前这些子智能体方法只存在于 fallback (DeerFlowScheduler), 而线上
-    # REAL 模式走 DeerFlowGatewayClient, 调用方 brain.deerflow.* 会
-    # AttributeError -> HTTP 500。这里统一委托给 AOSSubagentBridge
-    # (与 Scheduler 共用同一 harness 桥), 缺失依赖时抛出清晰异常,
-    # 由 API 层捕获为干净的 503/error 响应, 不再崩溃。
-    def _ensure_subagents(self):
-        if not hasattr(self, "_subagent_bridge"):
-            self._subagent_bridge = None
-            try:
-                from deerflow.subagent_executor import AOSSubagentBridge
-                self._subagent_bridge = AOSSubagentBridge()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("[deerflow] 子智能体桥不可用: %s", e)
-                self._subagent_bridge = None
-        if self._subagent_bridge is None:
-            raise RuntimeError(
-                "DeerFlow 子智能体后端在本运行时不可用 "
-                "(harness deerflow 包未导入或依赖未装); "
-                "请确认 AOS 通过 DeerFlow gateway(:2026) 或补全 harness 依赖"
-            )
-        return self._subagent_bridge
+    #  SubAgent 执行 — 真实走 DeerFlow 后端 (:2026) 的 run API。
+    #
+    #  设计原则: AOS 不再把 harness `deerflow` 包导入自身进程 (包名撞车
+    #  + aos venv 缺 langgraph/langchain 依赖), 改为通过 HTTP 调用已在
+    #  :2026 运行的真实 DeerFlow 网关。子智能体定义存于本地注册表
+    #  (deerflow_subagents.json, 持久化); 执行时把其角色/系统提示注入任务,
+    #  后端用真实 LLM 管线执行并返回答案 —— 真正"能跑", 不再 success:false。
+    # ------------------------------------------------------------------
+    _SUBAGENT_REGISTRY = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "deerflow_subagents.json"
+    )
+
+    def _load_subagent_registry(self):
+        import json as _json
+        try:
+            if os.path.exists(self._SUBAGENT_REGISTRY):
+                with open(self._SUBAGENT_REGISTRY, encoding="utf-8") as f:
+                    return _json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_subagent_registry(self, reg):
+        import json as _json
+        try:
+            with open(self._SUBAGENT_REGISTRY, "w", encoding="utf-8") as f:
+                _json.dump(reg, f, ensure_ascii=False, indent=2)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("subagent registry save failed: %s", e)
+
+    @staticmethod
+    def _normalize_subagent_name(name):
+        import re as _re
+        n = (name or "").strip().lower().replace("_", "-")
+        n = _re.sub(r"[^a-z0-9-]", "-", n)
+        return n
 
     def register_subagent(self, name, description, **kwargs):
-        return self._ensure_subagents().register_subagent(name, description, **kwargs)
+        name = self._normalize_subagent_name(name)
+        if not name:
+            raise ValueError("invalid subagent name")
+        reg = self._load_subagent_registry()
+        reg[name] = {
+            "name": name,
+            "description": description or "",
+            "system_prompt": kwargs.get("system_prompt") or "",
+            "tools": kwargs.get("tools"),
+            "skills": kwargs.get("skills"),
+            "model": kwargs.get("model") or "inherit",
+            "max_turns": kwargs.get("max_turns", 50),
+            "timeout_seconds": kwargs.get("timeout_seconds", 900),
+        }
+        self._save_subagent_registry(reg)
+        return {"name": name, "description": description, "status": "registered"}
 
     def list_subagents(self):
-        return self._ensure_subagents().list_subagents()
+        return list(self._load_subagent_registry().values())
 
     def execute_subagent(self, name, task, thread_id=None, **kwargs):
-        return self._ensure_subagents().execute(name, task, thread_id=thread_id, **kwargs)
+        import uuid
+        name = self._normalize_subagent_name(name)
+        reg = self._load_subagent_registry()
+        cfg = reg.get(name)
+        # 把子智能体角色/系统提示前置到任务, 让后端真实 LLM 按该角色执行
+        message = task
+        if cfg and cfg.get("system_prompt"):
+            message = (
+                f"[角色设定] 你正在以子智能体「{name}」身份工作。\n"
+                f"职责: {cfg.get('description', '')}\n"
+                f"行为准则:\n{cfg['system_prompt']}\n\n"
+                f"[任务]\n{task}"
+            )
+        model = None
+        if cfg and cfg.get("model") and cfg.get("model") != "inherit":
+            model = cfg["model"]
+        thread_id = thread_id or f"aos-sa-{uuid.uuid4().hex[:10]}"
+        answer = self.run(message, thread_id=thread_id, model_name=model,
+                          timeout=(cfg or {}).get("timeout_seconds", 900))
+        if answer is None:
+            raise RuntimeError("DeerFlow 后端未返回结果 (可能未运行 :2026 或无 LLM key)")
+        return {"success": True, "subagent": name, "result": answer, "backend": "deerflow:2026"}
 
     def execute_subagent_async(self, name, task, thread_id=None, **kwargs):
-        return self._ensure_subagents().execute_async(name, task, thread_id=thread_id, **kwargs)
+        import threading
+        import uuid
+        task_id = f"sa-{uuid.uuid4().hex[:12]}"
+        self._tasks[task_id] = {"status": "running", "subagent": self._normalize_subagent_name(name)}
+
+        def _worker():
+            try:
+                res = self.execute_subagent(name, task, thread_id=thread_id, **kwargs)
+                self._tasks[task_id] = {"status": "completed", **res}
+            except Exception as e:  # noqa: BLE001
+                self._tasks[task_id] = {"status": "failed", "success": False, "error": str(e)}
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return task_id
 
     def get_subagent_result(self, task_id):
-        return self._ensure_subagents().get_task_result(task_id)
+        return self._tasks.get(task_id)
 
     def cancel_subagent(self, task_id):
-        return self._ensure_subagents().cancel_task(task_id)
+        cur = self._tasks.get(task_id, {})
+        self._tasks[task_id] = {**cur, "status": "cancelled", "cancelled": True}
+        return True
 
 
 class UnifiedBrain:
