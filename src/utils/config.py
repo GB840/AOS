@@ -202,3 +202,46 @@ class Config(BaseSettings):
 
 
 config = Config()
+
+
+def _sync_env_from_dotenv() -> None:
+    """将 .env 全部键值注入 os.environ (setdefault, 不覆盖已存在变量)。
+
+    解决「配置分裂」根因：下游模块 (mem0/langfuse/gateway) 读的是**无前缀** env 名
+    (ZHIPU_API_KEY / LANGFUSE_* / OPENCLAW_GATEWAY_TOKEN / SILICONFLOW_API_KEY …)，
+    而 config.py 用 pydantic BaseSettings 只认 **AOS_ 前缀** 的 env 名
+    (env="AOS_ZHIPU_API_KEY")，二者不一致。此前全靠 start_all.sh 单独 export 无前缀
+    名桥接；一旦换启动方式(直接 uvicorn / 容器 / 调试)，这些变量缺失 → 静默降级
+    (mem0/langfuse 不工作、gateway 登录失败)。
+
+    这里在 config 加载后统一把 .env 的键值回填进 os.environ，使**任何启动方式**下
+    下游读取行为一致。用 setdefault 保证：start_all.sh 或其它显式 export 的变量优先级更高。
+    """
+    env_path = _BASE_DIR / ".env"
+    if not env_path.is_file():
+        return
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("[config] 读取 .env 失败, 跳过 env 回填: %s", e)
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+        # 去引号 (支持 'x' / "x")
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_sync_env_from_dotenv()
+

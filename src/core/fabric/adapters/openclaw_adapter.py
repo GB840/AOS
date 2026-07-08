@@ -105,10 +105,12 @@ class OpenClawAdapter(BaseAgentAdapter):
             return InvokeResult(ok=False, error=str(e))
 
     def health(self) -> bool:
+        # 主通路是网关反向代理 (src/api/gateway.py -> :18789); 探活网关端口即可,
+        # 不再依赖 `openclaw health` CLI 是否在 PATH (避免启动期误判 False)。
         try:
-            args = ["health", "--token", self._token] if self._token else ["health"]
-            proc = self._run(*args, timeout=15)
-            return proc.returncode == 0
+            import socket
+            with socket.create_connection(("127.0.0.1", self.GATEWAY_PORT), timeout=2):
+                return True
         except Exception:
             return False
 

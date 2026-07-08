@@ -78,12 +78,22 @@ class DeerFlowGatewayClient:
             return {"error": str(e)}
 
     def _login(self):
-        """Attempt 2.x local auth; returns True if a token was obtained."""
+        """Attempt 2.x local auth; returns True if a token was obtained.
+
+        凭证从 config (AOS_DEERFLOW_ADMIN_USER / AOS_DEERFLOW_ADMIN_PASSWORD) 读取,
+        不再硬编码明文口令 (此前写死 admin/aos123456, 属高危硬编码)。
+        """
+        try:
+            from utils.config import config as _cfg
+            user = getattr(_cfg, "DEERFLOW_ADMIN_USER", "admin") or "admin"
+            pwd = getattr(_cfg, "DEERFLOW_ADMIN_PASSWORD", "aos123456") or "aos123456"
+        except Exception:
+            user, pwd = "admin", "aos123456"
         try:
             session = self._ensure_session()
             resp = session.post(
                 f"{self.base_url}/api/v1/auth/login/local",
-                json={"username": "admin", "password": "aos123456"},
+                json={"username": user, "password": pwd},
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -385,6 +395,49 @@ class DeerFlowGatewayClient:
     def deep_deerflow(self):
         return None
 
+    # ------------------------------------------------------------------
+    #  SubAgent delegation (兼容 REAL 网关模式)
+    # ------------------------------------------------------------------
+    # 此前这些子智能体方法只存在于 fallback (DeerFlowScheduler), 而线上
+    # REAL 模式走 DeerFlowGatewayClient, 调用方 brain.deerflow.* 会
+    # AttributeError -> HTTP 500。这里统一委托给 AOSSubagentBridge
+    # (与 Scheduler 共用同一 harness 桥), 缺失依赖时抛出清晰异常,
+    # 由 API 层捕获为干净的 503/error 响应, 不再崩溃。
+    def _ensure_subagents(self):
+        if not hasattr(self, "_subagent_bridge"):
+            self._subagent_bridge = None
+            try:
+                from deerflow.subagent_executor import AOSSubagentBridge
+                self._subagent_bridge = AOSSubagentBridge()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[deerflow] 子智能体桥不可用: %s", e)
+                self._subagent_bridge = None
+        if self._subagent_bridge is None:
+            raise RuntimeError(
+                "DeerFlow 子智能体后端在本运行时不可用 "
+                "(harness deerflow 包未导入或依赖未装); "
+                "请确认 AOS 通过 DeerFlow gateway(:2026) 或补全 harness 依赖"
+            )
+        return self._subagent_bridge
+
+    def register_subagent(self, name, description, **kwargs):
+        return self._ensure_subagents().register_subagent(name, description, **kwargs)
+
+    def list_subagents(self):
+        return self._ensure_subagents().list_subagents()
+
+    def execute_subagent(self, name, task, thread_id=None, **kwargs):
+        return self._ensure_subagents().execute(name, task, thread_id=thread_id, **kwargs)
+
+    def execute_subagent_async(self, name, task, thread_id=None, **kwargs):
+        return self._ensure_subagents().execute_async(name, task, thread_id=thread_id, **kwargs)
+
+    def get_subagent_result(self, task_id):
+        return self._ensure_subagents().get_task_result(task_id)
+
+    def cancel_subagent(self, task_id):
+        return self._ensure_subagents().cancel_task(task_id)
+
 
 class UnifiedBrain:
     """The one brain to rule them all.
@@ -649,6 +702,34 @@ class UnifiedBrain:
             logger.warning("fabric 路由失败, 回退现有装配: %s", e)
             return None
 
+    def route_capability(self, capability: str, payload: Dict[str, Any], trace_id=None):
+        """能力路由的**单一公共入口** (薄缝到 fabric)。
+
+        此前 fabric 的 registry/adapter 是「死设计」——生产链路零调用、真实路由另有
+        一套。现统一所有能力委派都经此方法 (groupchat 等已接), 杜绝重复路由逻辑。
+        无 live provider 时返回 None, 调用方回退到 brain 现有装配, 绝不阻断服务。
+        """
+        return self.route_via_fabric(capability, payload, trace_id=trace_id)
+
+    def resolve_engine(self, capability: str) -> Optional[str]:
+        """单一可信源：返回当前能服务某能力(capability)的 live 引擎 id。
+
+        若 fabric 不可用或无 live provider, 返回 None。供 introspection/日志使用,
+        让「哪个引擎负责哪个能力」只有这一个答案, 不再双轨并存。
+        """
+        reg = getattr(self, "fabric", None)
+        if reg is None:
+            return None
+        try:
+            for eid, adapter in reg._adapters.items():
+                caps = [c.value if hasattr(c, "value") else str(c)
+                        for c in adapter.advertise_capabilities()]
+                if capability in caps and adapter.health():
+                    return eid
+        except Exception:
+            return None
+        return None
+
     def _init_meta_orchestrator(self):
         """步骤: 元调度引擎 (L3.5 顶层调度/策略/信任)。
 
@@ -740,13 +821,9 @@ class UnifiedBrain:
         except Exception as e:
             logger.warning("Task Fingerprint init failed: %s", e)
 
-        # 15. OpenClaw - L1任务入口 (接单→清洗需求→上报Hermes)
-        try:
-            from core.open_claw import OpenClaw
-            self.open_claw = OpenClaw(brain=self)
-            logger.info("OpenClaw ready (L1 task entry: receive→clean→escalate)")
-        except Exception as e:
-            logger.warning("OpenClaw init failed: %s", e)
+        # OpenClaw 接入已收敛到网关反向代理 (src/api/gateway.py -> :18789)
+        # + Fabric OpenClawAdapter。不再在 brain 内自研实例化 core.open_claw
+        # (违反铁律: 接入层须用真实开源 OpenClaw, 非自己写)。
 
         # 16. AgentCARD - 成本-精度优化策略 (初稿小模型→定稿大模型)
         try:
@@ -998,15 +1075,22 @@ class UnifiedBrain:
         logger.info("✅ Execution layer tools registered to DeerFlow")
 
     def _register_subagents(self, cfg):
+        # OpenClaw 不再由自研 OpenClawSubAgent 注册 (DEPRECATED, 违反"用真实开源"
+        # 铁律, 且其 detect_openclaw_path 实际返回 None 桥接悬空)。OpenClaw 统一由
+        # Fabric OpenClawAdapter 经真实部署的 OpenClaw Gateway(:18789) 服务。
+        if getattr(cfg, 'OPENCLAW_ENABLED', False):
+            logger.info("OpenClaw 由 Fabric OpenClawAdapter (真实 Gateway) 提供服务, "
+                        "跳过自研 OpenClawSubAgent 注册")
+
         try:
-            if getattr(cfg, 'OPENCLAW_ENABLED', False):
-                oa = OpenClawSubAgent(command=getattr(cfg, 'OPENCLAW_COMMAND', 'npx'),
-                                      cwd=getattr(cfg, 'OPENCLAW_CWD', '.'))
-                self.subagents.register("openclaw", oa.DESCRIPTION, oa.CAPABILITIES, oa.handle)
-                self.deerflow.register_handler("openclaw", oa.handle)
-                logger.info("OpenClaw subagent registered")
+            if getattr(cfg, 'UITARS_ENABLED', False):
+                ut = UITarsSubAgent(use_mcp=getattr(cfg, 'UITARS_USE_MCP', False),
+                                    mcp_port=getattr(cfg, 'UITARS_MCP_PORT', 8090))
+                self.subagents.register("uitars", ut.DESCRIPTION, ut.CAPABILITIES, ut.handle)
+                self.deerflow.register_handler("gui_automation", ut.handle)
+                logger.info("UI-TARS subagent registered")
         except Exception as e:
-            logger.warning("OpenClaw subagent unavailable: %s", e)
+            logger.warning("UI-TARS subagent unavailable: %s", e)
 
         try:
             if getattr(cfg, 'UITARS_ENABLED', False):
@@ -1091,8 +1175,13 @@ class UnifiedBrain:
     # ========================================================================
 
     def chat(self, message: str, session_id: str = None,
-             use_deerflow: bool = False, **kwargs) -> Dict[str, Any]:
-        """Unified chat with five-channel routing: L1-L5 task classification."""
+             use_deerflow: bool = False, meta_decision: Optional[Dict[str, Any]] = None,
+             **kwargs) -> Dict[str, Any]:
+        """Unified chat with five-channel routing: L1-L5 task classification.
+
+        meta_decision: 若调用方已算过 L3.5 意图分层决策(如 /api/chat 端点), 传入以
+        复用, 避免重复调用 route_intent 导致 evolution_log 双写。为 None 时本方法自行计算。
+        """
         
         import re
         date_patterns = ["今天几号", "今天日期", "日期", "几号", "几月几号", "几号了", "什么日子", "星期几"]
@@ -1120,7 +1209,7 @@ class UnifiedBrain:
         #   - 其余层 -> 仍由 task_classifier 的 L1-L5 路由处理
         # 引擎对 DB 写入 best-effort, 任何异常都回退到原有路由, 不阻断服务。
         mo = getattr(self, "meta_orchestrator", None)
-        if mo is not None:
+        if meta_decision is None and mo is not None:
             try:
                 meta_decision = mo.route_intent(
                     message,

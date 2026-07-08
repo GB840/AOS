@@ -298,22 +298,25 @@ async def fabric_status():
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
-        result = brain.chat(message=request.message, session_id=request.session_id)
-        # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策
-        # (best-effort, 失败不阻断；路由结果落 evolution_log)
+        # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策。
+        # 关键：只算一次, 结果传给 brain.chat() 复用 —— 避免重复调用 route_intent
+        # 导致 evolution_log 双写 (此前 /api/chat 与 brain.chat() 各调一次)。
+        meta_decision = None
         try:
-            meta = brain.meta_orchestrator.route_intent(
+            meta_decision = brain.meta_orchestrator.route_intent(
                 intent=request.message, user_id="chat",
                 trace_id=request.session_id or "")
-            if isinstance(result, dict):
-                result["meta"] = {
-                    "layer": meta.get("layer"),
-                    "complexity": meta.get("complexity"),
-                    "workflow_id": meta.get("workflow_id"),
-                    "priority": meta.get("priority"),
-                }
         except Exception as e:  # pragma: no cover - 治理钩子绝不阻断主流程
             logger.debug("meta governance hook skipped: %s", e)
+        result = brain.chat(message=request.message, session_id=request.session_id,
+                            meta_decision=meta_decision)
+        if isinstance(result, dict) and meta_decision:
+            result["meta"] = {
+                "layer": meta_decision.get("layer"),
+                "complexity": meta_decision.get("complexity"),
+                "workflow_id": meta_decision.get("workflow_id"),
+                "priority": meta_decision.get("priority"),
+            }
         # 可观测钩子: 发 Langfuse trace (input/output/metadata 含 meta 分层)
         try:
             tracer = getattr(brain, "langfuse_tracer", None)
@@ -668,39 +671,67 @@ class SubAgentExecuteRequest(BaseModel):
 
 @app.post("/api/subagents/deep/register")
 async def deep_subagent_register(req: SubAgentConfigRequest):
-    cfg = brain.deerflow.register_subagent(
-        name=req.name, description=req.description,
-        system_prompt=req.system_prompt or None,
-        tools=req.tools, skills=req.skills,
-        model=req.model, max_turns=req.max_turns,
-        timeout_seconds=req.timeout_seconds,
-    )
-    return {"success": True, "config": {"name": cfg.name, "description": cfg.description}}
+    # 防御式: REAL DeerFlow 网关模式下, 子智能体后端依赖 harness deerflow 包;
+    # 若该运行时未导入/缺依赖, 返回干净的 success:false 而非 AttributeError->HTTP 500。
+    try:
+        cfg = brain.deerflow.register_subagent(
+            name=req.name, description=req.description,
+            system_prompt=req.system_prompt or None,
+            tools=req.tools, skills=req.skills,
+            model=req.model, max_turns=req.max_turns,
+            timeout_seconds=req.timeout_seconds,
+        )
+        return {"success": True, "config": {"name": cfg.name, "description": cfg.description}}
+    except Exception as e:
+        logger.warning("deep subagent register failed: %s", e)
+        return {"success": False, "error": str(e), "available": False}
+
 
 @app.get("/api/subagents/deep")
 async def deep_subagent_list():
-    return {"subagents": brain.deerflow.list_subagents()}
+    try:
+        return {"subagents": brain.deerflow.list_subagents()}
+    except Exception as e:
+        logger.warning("deep subagent list failed: %s", e)
+        return {"subagents": [], "success": False, "error": str(e), "available": False}
+
 
 @app.post("/api/subagents/deep/execute")
 async def deep_subagent_execute(req: SubAgentExecuteRequest):
-    thread_id = f"aos-api-{req.name}-{int(time.time())}"
-    if req.async_mode:
-        task_id = brain.deerflow.execute_subagent_async(req.name, req.task, thread_id=thread_id)
-        return {"task_id": task_id, "mode": "async"}
-    result = brain.deerflow.execute_subagent(req.name, req.task, thread_id=thread_id)
-    return result
+    try:
+        thread_id = f"aos-api-{req.name}-{int(time.time())}"
+        if req.async_mode:
+            task_id = brain.deerflow.execute_subagent_async(req.name, req.task, thread_id=thread_id)
+            return {"task_id": task_id, "mode": "async"}
+        result = brain.deerflow.execute_subagent(req.name, req.task, thread_id=thread_id)
+        return result
+    except Exception as e:
+        logger.warning("deep subagent execute failed: %s", e)
+        return {"success": False, "error": str(e), "available": False}
+
 
 @app.get("/api/subagents/deep/task/{task_id}")
 async def deep_subagent_task(task_id: str):
-    result = brain.deerflow.get_subagent_result(task_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return result
+    try:
+        result = brain.deerflow.get_subagent_result(task_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("deep subagent task query failed: %s", e)
+        return {"success": False, "error": str(e), "available": False}
+
 
 @app.post("/api/subagents/deep/task/{task_id}/cancel")
 async def deep_subagent_cancel(task_id: str):
-    brain.deerflow.cancel_subagent(task_id)
-    return {"success": True}
+    try:
+        brain.deerflow.cancel_subagent(task_id)
+        return {"success": True}
+    except Exception as e:
+        logger.warning("deep subagent cancel failed: %s", e)
+        return {"success": False, "error": str(e), "available": False}
 
 
 # ---- ViMax Video API ----
@@ -1265,6 +1296,39 @@ async def voice_chat(audio: bytes = File(...), format: str = "wav", session_id: 
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---- Multimodal API ----
+
+@app.post("/api/groupchat")
+async def api_groupchat(message: str, agents: Optional[List[str]] = None):
+    """真实 AG2 群聊编排入口 (满足铁律: 群聊/多智能体由真实开源 AG2 驱动)。
+
+    经 fabric 薄缝统一入口 route_capability 路由到 live 的 AG2 适配器 (真实 GroupChat)。
+    若 AG2 不可用 (未装 ag2 / 无 LLM key), 返回 503 而非假装成功。
+    """
+    try:
+        res = brain.route_capability("group.orchestration", {"text": message})
+        if res is None or not res.ok:
+            raise HTTPException(
+                status_code=503,
+                detail="AG2 group orchestration unavailable (ag2 not live / no LLM key)",
+            )
+        return {
+            "engine": "ag2",
+            "group_chat": True,
+            "reply": (res.data or {}).get("reply", ""),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Group chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/capability/{capability}")
+async def api_resolve_engine(capability: str):
+    """能力→引擎 单一可信源 introspection (fabric 真实调用面, 非死设计)。"""
+    engine = brain.resolve_engine(capability)
+    return {"capability": capability, "engine": engine, "live": engine is not None}
+
 
 @app.post("/api/multimodal/analyze")
 async def analyze_image(image: UploadFile = File(...), prompt: str = "分析这张图片"):
