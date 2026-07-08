@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# AOS 一键启动脚本（个人级 → 团队级可演进）
+# 启动: AOS API (:8000) + Web 控制台 (:8501) + OpenClaw Gateway (:18789)
+# 用法: bash start_all.sh   (在 D:\AOS 目录下运行)
+set -e
+
+AOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$AOS_DIR"
+
+VENV_PY="$USERPROFILE/.workbuddy/binaries/python/envs/aos/Scripts/python.exe"
+VENV_PY_DIR="$USERPROFILE/.workbuddy/binaries/python/envs/aos/Scripts"
+
+# --- 从 .env 读取密钥（不打印值）---
+read_env() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- ; }
+
+ZHIPU_API_KEY="$(read_env ZHIPU_API_KEY)"
+SILICONFLOW_API_KEY="$(read_env SILICONFLOW_API_KEY)"
+OPENCLAW_GATEWAY_TOKEN="$(read_env OPENCLAW_GATEWAY_TOKEN)"
+[ -z "$OPENCLAW_GATEWAY_TOKEN" ] && OPENCLAW_GATEWAY_TOKEN="aos-fabric-2026local"
+
+export ZHIPU_API_KEY SILICONFLOW_API_KEY OPENCLAW_GATEWAY_TOKEN
+export AOS_LLM_BASE_URL="https://open.bigmodel.cn/api/paas/v4"
+export AOS_LLM_MODEL="glm-4-flash"
+export AOS_AUTH_JWT_SECRET="aos-jwt-secret-$( "$VENV_PY" -c 'import secrets;print(secrets.token_hex(16))' )"
+export PYTHONPATH="$AOS_DIR/src;$AOS_DIR"
+export AOS_API_BASE="http://127.0.0.1:8000"
+
+echo "[start_all] env ready (ZK=${#ZHIPU_API_KEY} SK=${#SILICONFLOW_API_KEY})"
+
+# --- 1) OpenClaw Gateway (外部引擎, 真实接线) ---
+if curl -s -m 4 -o /dev/null http://127.0.0.1:18789/ 2>/dev/null; then
+  echo "[start_all] OpenClaw Gateway 已在运行"
+else
+  echo "[start_all] 启动 OpenClaw Gateway (:18789)..."
+  ( openclaw gateway run --bind loopback --port 18789 --token "$OPENCLAW_GATEWAY_TOKEN" > openclaw_gw.log 2>&1 & )
+  sleep 12
+fi
+
+# --- 2) AOS API (:8000) ---
+if curl -s -m 4 -o /dev/null http://127.0.0.1:8000/health 2>/dev/null; then
+  echo "[start_all] AOS API 已在运行"
+else
+  echo "[start_all] 启动 AOS API (:8000)..."
+  ( "$VENV_PY" -u -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --log-level info > aos_live.log 2>&1 & )
+  # 等待健康
+  for i in $(seq 1 24); do
+    c=$(curl -s -m 4 -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null)
+    [ "$c" = "200" ] && { echo "[start_all] AOS API 就绪 (${i}x5s)"; break; }
+    sleep 5
+  done
+fi
+
+# --- 3) Web 控制台 (:8501) ---
+if curl -s -m 4 -o /dev/null http://127.0.0.1:8501/ 2>/dev/null; then
+  echo "[start_all] Web 控制台已在运行"
+else
+  echo "[start_all] 启动 Web 控制台 (:8501)..."
+  ( "$VENV_PY_DIR/streamlit" run web/console.py --server.port 8501 --server.headless true --browser.gatherUsageStats false > web_console.log 2>&1 & )
+  sleep 8
+fi
+
+echo
+echo "[start_all] === 全部启动完成 ==="
+echo "  AOS API      : http://127.0.0.1:8000  (health: $(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health))"
+echo "  Web 控制台   : http://127.0.0.1:8501"
+echo "  OpenClaw 网关: http://127.0.0.1:18789"

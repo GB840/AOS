@@ -113,6 +113,37 @@ def verify_api_key_hash(api_key: str, hashed_key: str) -> bool:
         return False
 
 
+# ===== OAuth2 / JWT (团队级认证 seam：与 API-Key 并存) =====
+# 个人级用 API-Key；团队/公司级可无缝切换为 OAuth2/JWT，调用方接口不变。
+def _import_jwt():
+    import jwt  # PyJWT
+    return jwt
+
+
+def create_access_token(subject: str, expires_min: Optional[int] = None) -> str:
+    """签发 JWT (HS256). 团队级多用户/SSO 接入时换实现(如 RS256/OIDC)即可。"""
+    jwt = _import_jwt()
+    now = datetime.now()
+    exp = now + timedelta(minutes=expires_min or config.AUTH_JWT_EXPIRE_MINUTES)
+    payload = {"sub": subject, "iat": int(now.timestamp()), "exp": int(exp.timestamp())}
+    return jwt.encode(payload, config.AUTH_JWT_SECRET, algorithm=config.AUTH_JWT_ALGORITHM)
+
+
+def decode_access_token(token: str) -> Optional[str]:
+    """校验 JWT，返回 subject；无效/过期返回 None。"""
+    try:
+        jwt = _import_jwt()
+        payload = jwt.decode(token, config.AUTH_JWT_SECRET, algorithms=[config.AUTH_JWT_ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        return None
+
+
+def authenticate_user(username: str, password: str) -> bool:
+    """校验用户凭据（团队级可替换为 DB/OIDC/LDAP，接口不变）。"""
+    return username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD
+
+
 async def get_api_key(
     api_key_header: Optional[str] = Security(api_key_header),
     api_key_query: Optional[str] = Security(api_key_query),
@@ -147,22 +178,35 @@ async def get_api_key(
 class APISecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
-        
+
         if path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi.json"):
             return await call_next(request)
-        
-        if path == "/" or path.endswith("/health"):
+
+        if path == "/" or path.endswith("/health") or path == "/api/auth/token":
             return await call_next(request)
-        
+
+        # 1) 团队级: OAuth2/JWT Bearer（与 API-Key 并存）
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            sub = decode_access_token(auth[7:].strip())
+            if sub:
+                return await call_next(request)
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Unauthorized", "detail": "Invalid or expired token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # 2) 个人级: 静态 API-Key
         if config.API_KEY:
             api_key = request.headers.get(API_KEY_NAME) or request.query_params.get(API_KEY_NAME)
             if api_key != config.API_KEY:
                 logger.warning(f"Unauthorized access attempt to {path} from {request.client.host}")
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    content={"error": "Unauthorized", "detail": "Invalid or missing API Key"},
+                    content={"error": "Unauthorized", "detail": "Invalid or missing API Key / Bearer token"},
                 )
-        
+
         response = await call_next(request)
         return response
 

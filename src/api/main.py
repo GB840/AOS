@@ -21,10 +21,12 @@ from core import get_brain
 from mcp import MCPMessage
 from router import TaskType
 from api.security import (
-    APISecurityMiddleware, 
+    APISecurityMiddleware,
     RateLimitMiddleware,
     HTTPSRedirectMiddleware,
-    SecurityHeadersMiddleware
+    SecurityHeadersMiddleware,
+    create_access_token,
+    authenticate_user,
 )
 from utils.exceptions import setup_exception_handlers
 
@@ -214,6 +216,42 @@ async def root():
 @app.get("/health")
 async def health_check():
     return brain.health_check()
+
+
+# ---- 团队级认证 (OAuth2/JWT, 与 API-Key 并存) ----
+
+class TokenRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/token")
+async def issue_token(req: TokenRequest):
+    """用账号密码换取 JWT (Bearer). 团队级可替换为 OIDC/LDAP, 接口不变."""
+    if not authenticate_user(req.username, req.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_access_token(req.username)
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@app.get("/api/fabric")
+async def fabric_status():
+    """查看 fabric 薄缝当前 live 引擎与能力 (演进接口可视化)."""
+    if not getattr(brain, "fabric", None):
+        return {"fabric": "unavailable", "engines": []}
+    engines = []
+    for eid, ad in brain.fabric._adapters.items():
+        try:
+            engines.append({
+                "engine_id": eid,
+                "live": ad.health(),
+                "capabilities": [c.value for c in ad.advertise_capabilities()],
+                "protocols": ad.supported_protocols(),
+            })
+        except Exception as e:
+            engines.append({"engine_id": eid, "live": False, "error": str(e)})
+    live = [e["engine_id"] for e in engines if e.get("live")]
+    return {"fabric": "ok", "live_count": len(live), "live": live, "engines": engines}
 
 
 # ---- Chat ----

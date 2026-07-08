@@ -22,6 +22,21 @@ class Config(BaseSettings):
     ALLOWED_ORIGINS: str = "http://localhost:8501,http://localhost:8000"
     MAX_REQUESTS_PER_MINUTE: int = 100
 
+    # ===== 团队级认证 (OAuth2/JWT) —— 与 API-Key 并存，升级换实现、接口不变 =====
+    AUTH_JWT_SECRET: str = Field(default="change-me-in-prod", env="AOS_AUTH_JWT_SECRET")
+    AUTH_JWT_ALGORITHM: str = "HS256"
+    AUTH_JWT_EXPIRE_MINUTES: int = 480  # 8h
+    ADMIN_USERNAME: str = Field(default="admin", env="AOS_ADMIN_USERNAME")
+    ADMIN_PASSWORD: str = Field(default="admin", env="AOS_ADMIN_PASSWORD")
+
+    # ===== 状态后端 (团队级可插拔 seam: sqlite(个人) -> postgres(团队/公司)) =====
+    STATE_BACKEND: str = Field(default="sqlite", env="AOS_STATE_BACKEND")  # sqlite | postgres
+    POSTGRES_HOST: str = Field(default="localhost", env="AOS_POSTGRES_HOST")
+    POSTGRES_PORT: int = Field(default=5432, env="AOS_POSTGRES_PORT")
+    POSTGRES_USER: str = Field(default="aos", env="AOS_POSTGRES_USER")
+    POSTGRES_PASSWORD: str = Field(default="", env="AOS_POSTGRES_PASSWORD")
+    POSTGRES_DB: str = Field(default="aos", env="AOS_POSTGRES_DB")
+
     # 统一API - 支持环境变量 AOS_UNIFIED_API_KEY
     UNIFIED_API_KEY: str = Field(default="", env="AOS_UNIFIED_API_KEY")
     UNIFIED_BASE_URL: str = "https://api.deeproute.com/v1"
