@@ -110,9 +110,9 @@ class DeerFlowGatewayClient:
     # ------------------------------------------------------------------
     #  Run / Chat (长时任务执行 — 2.x 主路径)
     # ------------------------------------------------------------------
-    def _build_run_payload(self, message, thread_id=None, model_name=None, stream_mode=None):
+    def _build_run_payload(self, message, thread_id=None, model_name=None, stream_mode=None, assistant_id=None):
         import uuid
-        return {
+        payload = {
             "input": {"messages": [{"role": "user", "content": message}]},
             "config": {"configurable": {"thread_id": thread_id or f"aos-{uuid.uuid4().hex[:12]}"}},
             "context": {"model_name": model_name or self._default_model, "thinking_enabled": False},
@@ -120,6 +120,11 @@ class DeerFlowGatewayClient:
             "on_disconnect": "continue",
             "if_not_exists": "create",
         }
+        # assistant_id: 真实路由到 DeerFlow 后端已注册的自定义 agent (子智能体)。
+        # 经 services.resolve_agent_factory/build_run_config 生效，其 SOUL.md(=system_prompt) 被注入。
+        if assistant_id:
+            payload["assistant_id"] = self._normalize_subagent_name(assistant_id)
+        return payload
 
     @staticmethod
     def _extract_answer(state):
@@ -157,19 +162,20 @@ class DeerFlowGatewayClient:
         except Exception:
             pass
 
-    def run(self, message, thread_id=None, model_name=None, timeout=240, **kwargs):
+    def run(self, message, thread_id=None, model_name=None, timeout=240, assistant_id=None, **kwargs):
         """Execute a long-running task (blocking). Returns final text answer.
 
         真实 DeerFlow 2.x 流程: 先 POST /api/threads 建线程(幂等),
         再 POST /api/threads/{thread_id}/runs/wait 阻塞取最终 state。
         此前错误调用 /api/runs/wait (该路径不存在), 导致 AOS 内所有
         DeerFlow 执行(长时任务/对话/子智能体)从未真正跑通 —— 现已修正。
+        assistant_id: 可选, 路由到后端已注册的自定义 agent (子智能体真实路由)。
         """
         import uuid
         thread_id = thread_id or f"aos-{uuid.uuid4().hex[:12]}"
         self._ensure_thread(thread_id)
         session = self._ensure_session()
-        payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"])
+        payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"], assistant_id=assistant_id)
         try:
             resp = session.post(
                 f"{self.base_url}/api/threads/{thread_id}/runs/wait", json=payload, timeout=timeout,
@@ -188,14 +194,14 @@ class DeerFlowGatewayClient:
     def chat(self, message, thread_id=None, **kwargs):
         return self.run(message, thread_id=thread_id, **kwargs)
 
-    def stream(self, message, thread_id=None, model_name=None, timeout=240, **kwargs):
+    def stream(self, message, thread_id=None, model_name=None, timeout=240, assistant_id=None, **kwargs):
         """Stream a conversation turn through DeerFlow 2.x (SSE, values mode)."""
         import json as _json
         import uuid
         thread_id = thread_id or f"aos-{uuid.uuid4().hex[:12]}"
         self._ensure_thread(thread_id)
         session = self._ensure_session()
-        payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"])
+        payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"], assistant_id=assistant_id)
         try:
             resp = session.post(
                 f"{self.base_url}/api/threads/{thread_id}/runs/stream", json=payload, stream=True, timeout=timeout,
@@ -460,12 +466,47 @@ class DeerFlowGatewayClient:
         n = _re.sub(r"[^a-z0-9-]", "-", n)
         return n
 
+    def _register_agent_in_deerflow(self, name, description, cfg):
+        """Best-effort: 真实注册到 DeerFlow 后端自定义 agent (POST /api/agents)。
+
+        把 AOS 子智能体的 system_prompt 映射为 DeerFlow agent 的 SOUL.md,
+        使 execute_subagent 能经 run 的 assistant_id 字段真实路由(而非提示注入)。
+        agents_api 未启用(默认 False)或出错时返回 (False, reason) 优雅降级,
+        子智能体仍走本地 JSON 注册表 + 提示注入兜底。
+        """
+        try:
+            body = {
+                "name": name,
+                "description": description or "",
+                "soul": cfg.get("system_prompt") or "",
+            }
+            model = cfg.get("model")
+            if model and model != "inherit":
+                body["model"] = model
+            skills = cfg.get("skills")
+            if isinstance(skills, list):
+                body["skills"] = skills
+            resp = self._api_request("POST", "/api/agents", json=body)
+            if isinstance(resp, dict):
+                if resp.get("name") == name:
+                    return True, None
+                detail = str(resp.get("detail", "")).lower()
+                if "already exists" in detail or "409" in str(resp.get("status_code", "")):
+                    return True, None  # 幂等: 已存在视为注册成功
+                if "disabled" in detail or "403" in str(resp.get("status_code", "")):
+                    return False, "agents_api disabled"
+                if resp.get("error"):
+                    return False, str(resp.get("error"))[:120]
+                return False, str(resp)[:120]
+            return False, "unexpected response"
+        except Exception as e:  # noqa: BLE001
+            return False, str(e)[:120]
+
     def register_subagent(self, name, description, **kwargs):
         name = self._normalize_subagent_name(name)
         if not name:
             raise ValueError("invalid subagent name")
-        reg = self._load_subagent_registry()
-        reg[name] = {
+        cfg = {
             "name": name,
             "description": description or "",
             "system_prompt": kwargs.get("system_prompt") or "",
@@ -474,9 +515,18 @@ class DeerFlowGatewayClient:
             "model": kwargs.get("model") or "inherit",
             "max_turns": kwargs.get("max_turns", 50),
             "timeout_seconds": kwargs.get("timeout_seconds", 900),
+            "backend_registered": False,
+            "backend_error": None,
         }
+        # 最佳努力: 真实注册到 DeerFlow 后端(需 agents_api.enabled=true), 否则本地兜底
+        ok, err = self._register_agent_in_deerflow(name, description, cfg)
+        cfg["backend_registered"] = ok
+        cfg["backend_error"] = err
+        reg = self._load_subagent_registry()
+        reg[name] = cfg
         self._save_subagent_registry(reg)
-        return {"name": name, "description": description, "status": "registered"}
+        return {"name": name, "description": description, "status": "registered",
+                "backend_registered": ok}
 
     def list_subagents(self):
         return list(self._load_subagent_registry().values())
@@ -486,24 +536,34 @@ class DeerFlowGatewayClient:
         name = self._normalize_subagent_name(name)
         reg = self._load_subagent_registry()
         cfg = reg.get(name)
-        # 把子智能体角色/系统提示前置到任务, 让后端真实 LLM 按该角色执行
-        message = task
-        if cfg and cfg.get("system_prompt"):
-            message = (
-                f"[角色设定] 你正在以子智能体「{name}」身份工作。\n"
-                f"职责: {cfg.get('description', '')}\n"
-                f"行为准则:\n{cfg['system_prompt']}\n\n"
-                f"[任务]\n{task}"
-            )
         model = None
         if cfg and cfg.get("model") and cfg.get("model") != "inherit":
             model = cfg["model"]
         thread_id = thread_id or f"aos-sa-{uuid.uuid4().hex[:10]}"
-        answer = self.run(message, thread_id=thread_id, model_name=model,
-                          timeout=(cfg or {}).get("timeout_seconds", 900))
+        # 真实路由: 若子智能体已在 DeerFlow 后端注册为自定义 agent, 走 assistant_id
+        # (后端按该 agent 的 SOUL.md 注入角色, 无需提示注入)。
+        if cfg and cfg.get("backend_registered"):
+            answer = self.run(task, thread_id=thread_id, model_name=model,
+                              assistant_id=name, timeout=cfg.get("timeout_seconds", 900))
+            routed_via = "assistant_id"
+        else:
+            # 兜底: 把角色/系统提示前置到任务, 让后端真实 LLM 按该角色执行
+            message = task
+            if cfg and cfg.get("system_prompt"):
+                message = (
+                    f"[角色设定] 你正在以子智能体「{name}」身份工作。\n"
+                    f"职责: {cfg.get('description', '')}\n"
+                    f"行为准则:\n{cfg['system_prompt']}\n\n"
+                    f"[任务]\n{task}"
+                )
+            answer = self.run(message, thread_id=thread_id, model_name=model,
+                              timeout=(cfg or {}).get("timeout_seconds", 900))
+            routed_via = "prompt_injection"
         if answer is None:
             raise RuntimeError("DeerFlow 后端未返回结果 (可能未运行 :2026 或无 LLM key)")
-        return {"success": True, "subagent": name, "result": answer, "backend": "deerflow:2026"}
+        return {"success": True, "subagent": name, "result": answer,
+                "backend": "deerflow:2026", "routed_via": routed_via,
+                "backend_registered": bool(cfg and cfg.get("backend_registered"))}
 
     def execute_subagent_async(self, name, task, thread_id=None, **kwargs):
         import threading

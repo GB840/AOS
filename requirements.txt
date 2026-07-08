@@ -28,3 +28,38 @@ jina>=3.26.0
 # 缺失会导致 `from run_agent import AIAgent` 实例化失败 -> AOS 回退到自带 HermesAgent.
 # hermes-agent 的 pyproject 将其列为 Windows 平台依赖, 这里显式固定以便复现.
 concurrent-log-handler==0.9.29
+
+# ============================================================
+# 生产必需依赖（AOS 启动 / 核心功能）—— 此前漏声明，2026-07-09 补全
+# 以下包被 src 顶层或核心生产路径 import，必须随 aos venv 安装，否则 AOS 启动即崩。
+# 来源：用户 8 条清单之「依赖声明 / mcp SDK 未声明」映射 + 实际 import 审计。
+# ============================================================
+
+# MCP: main.py 顶层 `from mcp import MCPMessage` 为硬依赖。
+# 此前仅靠 AOS_EXTRA_SITE 从 default venv 借入（脆弱耦合），现显式声明使 aos venv 自洽。
+mcp>=1.28.0
+
+# AG2 (AutoGen 社区分叉, MIT): /api/groupchat 生产路径驱动真实多智能体编排。
+ag2==0.14.0
+
+# LiteLLM: 推理平面 (inference.llm) 统一 LLM 网关，fabric 默认 live。
+litellm>=1.91.0
+
+# PyJWT: /api/auth/token 签发 JWT（安全层 Bearer 认证）。
+PyJWT==2.8.0
+
+# psycopg2: PostgresStateBackend 可插拔状态后端（STATE_BACKEND=postgres 时启用）。
+psycopg2-binary==2.9.12
+
+# 智谱 SDK: litellm 走 zhipu 时的 OpenAI 兼容透传（start_all.sh 已尝试安装）。
+zhipuai>=2.1.5
+
+# ============================================================
+# 可选基础设施平面（装到 AOS_EXTRA_SITE 指向的 venv，默认 default）
+# 均为懒导入：仅当对应能力被配置/启用才 import，缺失则 fabric 优雅降级。
+# 版本为当前已装实测值，供复现参考（注释掉表示不强制装进 aos venv）。
+# ============================================================
+# mem0ai>=2.0.0          # 语义记忆平面  src/core/memory/mem0_store.py
+# langfuse>=4.13.0       # 可观测/追踪平面 src/core/observability/langfuse_tracer.py
+# browser-use>=0.11.0    # ACI/动手平面   src/core/fabric/adapters/aci_browser_adapter.py
+# wasmtime>=<按需>        # Wasm 沙箱(可选) src/core/platform/sandbox.py 懒导入，缺失仅禁用 WasmSandbox
