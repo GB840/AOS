@@ -24,144 +24,252 @@ logger = logging.getLogger(__name__)
 
 
 class DeerFlowGatewayClient:
-    """DeerFlow Gateway API Client - connects to REAL DeerFlow gateway running on port 8080."""
-    
-    def __init__(self, base_url="http://localhost:8080"):
+    """DeerFlow Gateway API Client - REAL DeerFlow 2.x gateway (port 2026).
+
+    适配 ByteDance DeerFlow 2.x 的 LangGraph 风格 API:
+      - 跑任务: POST /api/runs/wait (阻塞) 或 /api/runs/stream (SSE)
+      - 模型:   GET /api/models        -> {"models": [...]}
+      - 技能:   GET /api/skills        -> {"skills": [...]}
+      - 线程:   GET /api/threads, GET /api/threads/{id}
+      - 记忆:   POST /api/memory/import, GET /api/memory/export
+    1.x 风格路径(/api/v1/*, CSRF)作为降级保留, 但 2.x 为本实现主路径。
+    """
+
+    def __init__(self, base_url="http://localhost:2026"):
         self.base_url = base_url
         self.real_deerflow = True
+        self.api_version = "2.x"
         self._handlers = {}
         self._session = None
         self._token = None
         self._connected = False
-    
+        self._default_model = "glm-4-flash"
+
     def _ensure_session(self):
         if self._session is None:
             import requests
             self._session = requests.Session()
+            self._session.headers["Accept"] = "application/json"
         return self._session
-    
+
     def _api_request(self, method, endpoint, **kwargs):
+        """Generic request with 2.x-friendly auth (Bearer only, no CSRF)."""
         session = self._ensure_session()
         url = f"{self.base_url}{endpoint}"
-        
+        kwargs.setdefault("timeout", 30)
         if self._token:
             session.headers["Authorization"] = f"Bearer {self._token}"
-        
         try:
             response = session.request(method, url, **kwargs)
-            
-            if response.status_code == 401:
-                self._login()
-                session.headers["Authorization"] = f"Bearer {self._token}"
-                response = session.request(method, url, **kwargs)
-            
-            if response.status_code == 403 and "CSRF" in response.text:
-                self._get_csrf_token()
-                response = session.request(method, url, **kwargs)
-            
-            return response.json()
+            if response.status_code == 401 and self._token is None:
+                # try once to authenticate (2.x local auth)
+                if self._login():
+                    session.headers["Authorization"] = f"Bearer {self._token}"
+                    response = session.request(method, url, **kwargs)
+            try:
+                return response.json()
+            except Exception:
+                return {"status_code": response.status_code, "text": response.text[:500]}
         except Exception as e:
             logger.warning(f"DeerFlow API request failed: {e}")
             return {"error": str(e)}
-    
-    def _get_csrf_token(self):
-        try:
-            session = self._ensure_session()
-            response = session.get(f"{self.base_url}/setup")
-            csrf_token = response.cookies.get("csrf_token")
-            if csrf_token:
-                session.headers["X-CSRF-Token"] = csrf_token
-                logger.info("CSRF token obtained")
-                return csrf_token
-        except Exception as e:
-            logger.warning(f"Failed to get CSRF token: {e}")
-        return None
-    
+
     def _login(self):
+        """Attempt 2.x local auth; returns True if a token was obtained."""
         try:
             session = self._ensure_session()
-            
-            self._get_csrf_token()
-            
-            response = session.post(f"{self.base_url}/api/v1/auth/login/local", 
-                json={"username": "admin", "password": "aos123456"})
-            
-            if response.status_code == 200:
-                data = response.json()
+            resp = session.post(
+                f"{self.base_url}/api/v1/auth/login/local",
+                json={"username": "admin", "password": "aos123456"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
                 self._token = data.get("access_token")
                 self._connected = True
-                logger.info("✅ DeerFlow gateway authenticated")
-            else:
-                logger.warning(f"DeerFlow login failed: {response.status_code} - {response.text}")
+                logger.info("✅ DeerFlow gateway authenticated (2.x)")
+                return True
         except Exception as e:
-            logger.warning(f"DeerFlow login failed: {e}")
-    
+            logger.debug(f"DeerFlow login skipped: {e}")
+        return False
+
+    # ------------------------------------------------------------------
+    #  Run / Chat (长时任务执行 — 2.x 主路径)
+    # ------------------------------------------------------------------
+    def _build_run_payload(self, message, thread_id=None, model_name=None, stream_mode=None):
+        import uuid
+        return {
+            "input": {"messages": [{"role": "user", "content": message}]},
+            "config": {"configurable": {"thread_id": thread_id or f"aos-{uuid.uuid4().hex[:12]}"}},
+            "context": {"model_name": model_name or self._default_model, "thinking_enabled": False},
+            "stream_mode": stream_mode or ["values"],
+            "on_disconnect": "continue",
+            "if_not_exists": "create",
+        }
+
+    @staticmethod
+    def _extract_answer(state):
+        """Extract the final assistant text from a 2.x run state dict."""
+        import json as _json
+        messages = (state or {}).get("messages") or []
+        # 优先取最后一条 AI 消息
+        for msg in reversed(messages):
+            if isinstance(msg, dict) and msg.get("type") in ("ai", "assistant"):
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content
+                if isinstance(content, list):  # content blocks
+                    txt = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
+                    if txt.strip():
+                        return txt
+        # 兜底: 任意有内容的消息
+        for msg in reversed(messages):
+            if isinstance(msg, dict) and msg.get("content"):
+                c = msg["content"]
+                return c if isinstance(c, str) else _json.dumps(c, ensure_ascii=False)
+        return (state or {}).get("title") or ""
+
+    def run(self, message, thread_id=None, model_name=None, timeout=240, **kwargs):
+        """Execute a long-running task (blocking). Returns final text answer."""
+        import json as _json
+        session = self._ensure_session()
+        payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"])
+        try:
+            resp = session.post(
+                f"{self.base_url}/api/runs/wait", json=payload, timeout=timeout,
+            )
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    return resp.text
+                return self._extract_answer(data)
+            logger.warning(f"DeerFlow /api/runs/wait -> {resp.status_code}; {resp.text[:200]}")
+        except Exception as e:
+            logger.warning(f"DeerFlow run failed: {e}")
+        # 降级: 1.x /api/runs/stream
+        return self._chat_legacy(message, thread_id)
+
     def chat(self, message, thread_id=None, **kwargs):
+        return self.run(message, thread_id=thread_id, **kwargs)
+
+    def stream(self, message, thread_id=None, model_name=None, timeout=240, **kwargs):
+        """Stream a conversation turn through DeerFlow 2.x (SSE, values mode)."""
+        import json as _json
+        session = self._ensure_session()
+        payload = self._build_run_payload(message, thread_id, model_name, stream_mode=["values"])
+        try:
+            resp = session.post(
+                f"{self.base_url}/api/runs/stream", json=payload, stream=True, timeout=timeout,
+            )
+            if resp.status_code != 200:
+                # SSE 不可用 -> 阻塞跑一次并返回答案
+                answer = self.run(message, thread_id=thread_id, model_name=model_name, timeout=timeout)
+                if answer:
+                    yield answer
+                return
+            last = ""
+            got_any = False
+            for raw in resp.iter_lines(decode_unicode=True):
+                if not raw:
+                    continue
+                if raw.startswith("event:"):
+                    continue
+                if not raw.startswith("data:"):
+                    continue
+                data_str = raw[len("data:"):].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
+                try:
+                    evt = _json.loads(data_str)
+                except Exception:
+                    continue
+                if not isinstance(evt, dict):
+                    continue
+                ans = self._extract_answer(evt)
+                if ans and ans != last:
+                    if ans.startswith(last) and len(ans) > len(last):
+                        delta = ans[len(last):]
+                    else:
+                        delta = ans
+                    last = ans
+                    got_any = True
+                    yield delta
+            if not got_any:
+                # SSE 未产出可用内容 -> 阻塞兜底
+                answer = self._extract_answer({})
+                if not answer:
+                    answer = self.run(message, thread_id=thread_id, model_name=model_name, timeout=timeout)
+                if answer:
+                    yield answer
+        except Exception as e:
+            logger.warning(f"DeerFlow stream failed: {e}")
+            yield f"Failed to get response from DeerFlow: {e}"
+
+    def _chat_legacy(self, message, thread_id=None):
+        """1.x 降级路径 (保留兼容): /api/runs/stream 旧式 content 帧。"""
+        import json as _json
+        session = self._ensure_session()
         payload = {
             "messages": [{"role": "user", "content": message}],
-            "config": {"configurable": {"thread_id": thread_id or "default-thread"}}
+            "config": {"configurable": {"thread_id": thread_id or "default-thread"}},
         }
-        
-        session = self._ensure_session()
-        url = f"{self.base_url}/api/runs/stream"
-        
         try:
-            response = session.post(url, json=payload, stream=True)
-            if response.status_code == 200:
-                for line in response.iter_lines():
+            resp = session.post(f"{self.base_url}/api/runs/stream", json=payload, stream=True, timeout=120)
+            if resp.status_code == 200:
+                for line in resp.iter_lines():
                     if line:
                         decoded = line.decode("utf-8")
                         if "event: message" in decoded or "event: completion" in decoded:
-                            import json
-                            data = decoded.split("data: ", 1)[1]
-                            parsed = json.loads(data)
-                            content = parsed.get("content", "")
-                            if content:
-                                return content
+                            try:
+                                data = decoded.split("data: ", 1)[1]
+                                parsed = _json.loads(data)
+                                content = parsed.get("content", "")
+                                if content:
+                                    return content
+                            except Exception:
+                                continue
                 return "DeerFlow responded"
         except Exception as e:
-            logger.warning(f"DeerFlow chat failed: {e}")
-        
+            logger.warning(f"DeerFlow legacy chat failed: {e}")
         return "Failed to get response from DeerFlow"
-    
-    def stream(self, message, thread_id=None, **kwargs):
-        payload = {"messages": [{"role": "user", "content": message}], "stream": True}
-        if thread_id:
-            payload["thread_id"] = thread_id
-        
-        session = self._ensure_session()
-        url = f"{self.base_url}/api/v1/chat/completions"
-        
-        try:
-            with session.post(url, json=payload, stream=True) as response:
-                for line in response.iter_lines():
-                    if line:
-                        yield line.decode("utf-8")
-        except Exception as e:
-            logger.warning(f"DeerFlow stream failed: {e}")
-            yield f'{{"error": "{e}"}}'
-    
+
+    # ------------------------------------------------------------------
+    #  Catalog / Memory (2.x 路径, 1.x 降级)
+    # ------------------------------------------------------------------
     def list_models(self):
         return self._api_request("GET", "/api/models")
-    
+
     def list_skills(self):
         return self._api_request("GET", "/api/skills")
-    
+
     def list_threads(self, limit=10):
-        return self._api_request("GET", f"/api/v1/threads?limit={limit}")
-    
+        return self._api_request("GET", f"/api/threads?limit={limit}")
+
     def get_thread(self, thread_id):
-        return self._api_request("GET", f"/api/v1/threads/{thread_id}")
-    
+        return self._api_request("GET", f"/api/threads/{thread_id}")
+
     def import_memory(self, data):
-        return self._api_request("POST", "/api/v1/memory/import", json=data)
-    
+        return self._api_request("POST", "/api/memory/import", json=data)
+
     def export_memory(self):
-        return self._api_request("GET", "/api/v1/memory/export")
-    
+        return self._api_request("GET", "/api/memory/export")
+
+    def get_stats(self):
+        models = self.list_models() or {}
+        skills = self.list_skills() or {}
+        m = models.get("models") or models.get("data") or []
+        s = skills.get("skills") or skills.get("data") or []
+        return {
+            "models": len(m) if isinstance(m, list) else 0,
+            "skills": len(s) if isinstance(s, list) else 0,
+            "handlers": len(self._handlers),
+            "api_version": self.api_version,
+        }
+
     def sync_aos_skills_to_deerflow(self, skill_registry):
         synced = 0
-        for skill_name, skill in skill_registry._skills.items():
+        for skill_name, skill in getattr(skill_registry, "_skills", {}).items():
             try:
                 self._handlers[skill_name] = skill
                 synced += 1
@@ -169,47 +277,38 @@ class DeerFlowGatewayClient:
             except Exception as e:
                 logger.warning(f"Failed to sync skill {skill_name}: {e}")
         return synced
-    
+
     def register_handler(self, name, handler):
         self._handlers[name] = handler
         logger.info(f"Registered task handler: {name}")
-    
+
     def create_memory_fact(self, content, category="context", confidence=0.5):
         try:
             self.import_memory({"facts": [{"content": content, "category": category, "confidence": confidence}]})
         except Exception as e:
             logger.debug(f"DeerFlow memory sync skipped: {e}")
-    
-    def get_stats(self):
-        models = self.list_models()
-        skills = self.list_skills()
-        return {
-            "models": len(models.get("data", [])),
-            "skills": len(skills.get("data", [])),
-            "handlers": len(self._handlers),
-        }
-    
+
     def shutdown(self, wait=True):
         if self._session:
             self._session.close()
         logger.info("DeerFlow gateway client shutdown")
-    
+
     @property
     def _sandbox_bridge(self):
         return None
-    
+
     @property
     def _guardrails_bridge(self):
         return None
-    
+
     @property
     def _agents_bridge(self):
         return None
-    
+
     @property
     def _subagent_bridge(self):
         return None
-    
+
     @property
     def deep_deerflow(self):
         return None
