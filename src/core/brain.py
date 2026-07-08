@@ -40,6 +40,9 @@ class DeerFlowGatewayClient:
         self.real_deerflow = True
         self.api_version = "2.x"
         self._handlers = {}
+        self._tasks = {}
+        import threading
+        self._task_lock = threading.Lock()
         self._session = None
         self._token = None
         self._connected = False
@@ -288,6 +291,75 @@ class DeerFlowGatewayClient:
         except Exception as e:
             logger.debug(f"DeerFlow memory sync skipped: {e}")
 
+    # ------------------------------------------------------------------
+    #  Async Task API (让 /api/tasks 在 REAL 2.x 模式可用)
+    # ------------------------------------------------------------------
+    def submit_task(self, task_type, input_data, thread_id=None, model_name=None, **kwargs):
+        """提交一个长时任务：后台线程跑 run()，任务池跟踪状态。"""
+        import threading, uuid, time
+        if self._task_lock is None:
+            self._task_lock = threading.Lock()
+        task_id = f"df-{uuid.uuid4().hex[:12]}"
+        # 从 input_data 抽取提示词
+        if isinstance(input_data, dict):
+            prompt = (input_data.get("message") or input_data.get("prompt")
+                      or input_data.get("content") or input_data.get("task") or "")
+        elif isinstance(input_data, str):
+            prompt = input_data
+        else:
+            prompt = str(input_data)
+        if not prompt:
+            prompt = f"执行任务: {task_type}"
+        rec = {
+            "task_id": task_id,
+            "task_type": task_type,
+            "status": "running",
+            "result": None,
+            "error": None,
+            "thread_id": thread_id or f"aos-{uuid.uuid4().hex[:12]}",
+            "created_at": time.time(),
+        }
+        with self._task_lock:
+            self._tasks[task_id] = rec
+
+        def _worker():
+            try:
+                out = self.run(prompt, thread_id=rec["thread_id"],
+                               model_name=model_name, **kwargs)
+                rec["result"] = out
+                rec["status"] = "completed"
+            except Exception as e:  # noqa: BLE001
+                rec["error"] = str(e)
+                rec["status"] = "failed"
+            finally:
+                rec["finished_at"] = time.time()
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return task_id
+
+    def list_tasks(self, status=None, limit=50):
+        with self._task_lock:
+            items = list(self._tasks.values())
+        items.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        if status:
+            items = [i for i in items if i.get("status") == status]
+        return items[:limit]
+
+    def get_task_status(self, task_id):
+        with self._task_lock:
+            return self._tasks.get(task_id)
+
+    def get_running_tasks(self):
+        return self.list_tasks(status="running")
+
+    def cancel_task(self, task_id):
+        with self._task_lock:
+            rec = self._tasks.get(task_id)
+            if rec and rec.get("status") == "running":
+                rec["status"] = "cancelled"
+                return True
+        return False
+
     def shutdown(self, wait=True):
         if self._session:
             self._session.close()
@@ -347,6 +419,8 @@ class UnifiedBrain:
             ("task_classifier", self._init_task_classifier),
             ("meta_debate", self._init_meta_debate),
             ("meta_orchestrator", self._init_meta_orchestrator),
+            ("mem0", self._init_mem0_store),
+            ("langfuse", self._init_langfuse_tracer),
             ("router", self._init_router),
             ("fabric", self._init_fabric),
         ]
@@ -584,6 +658,37 @@ class UnifiedBrain:
         from meta_orchestrator.engine import MetaOrchestratorEngine
         self.meta_orchestrator = MetaOrchestratorEngine()
         logger.info("Meta-orchestrator (L3.5 dispatch) ready")
+
+    def _init_mem0_store(self):
+        """步骤: 真实语义记忆层 (Mem0, 长期/Graph-RAG)。
+
+        四个行为引擎都缺的语义记忆层, 由真实 mem0.Memory 承担 (本地 chroma
+        向量库 + Zhipu OpenAI 兼容 LLM/embedder)。库未装/无密钥时优雅降级到
+        内存字典, 不阻断 AOS。
+        """
+        try:
+            from core.memory.mem0_store import Mem0Store
+            self.mem0_store = Mem0Store()
+            backend = "mem0(real)" if self.mem0_store.available else "fallback(dict)"
+            logger.info("Mem0 semantic memory ready (%s)", backend)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Mem0 store init failed (degraded): %s", e)
+            self.mem0_store = None
+
+    def _init_langfuse_tracer(self):
+        """步骤: 可观测层 (Langfuse 真实接入)。
+
+        在 chat/任务路径发 trace (input/output/metadata 含 meta 分层)。
+        未配置密钥时静默禁用, 不阻断主流程。
+        """
+        try:
+            from core.observability.langfuse_tracer import LangfuseTracer
+            self.langfuse_tracer = LangfuseTracer()
+            state = "enabled" if self.langfuse_tracer.enabled else "disabled(no-key)"
+            logger.info("Langfuse observability ready (%s)", state)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Langfuse tracer init failed (degraded): %s", e)
+            self.langfuse_tracer = None
     
     def get_init_status(self) -> dict:
         """获取初始化状态"""
@@ -1355,6 +1460,20 @@ class UnifiedBrain:
     def search_memory(self, query: str, search_type: str = "hybrid") -> Dict[str, Any]:
         """Search across unified memory."""
         return self.hermes.search_memory(query, search_type=search_type)
+
+    # ---- Mem0 语义记忆委托 (真实接入) ----
+    def semantic_memory_add(self, content: str, user_id: str = "aos", **kw) -> Dict[str, Any]:
+        store = getattr(self, "mem0_store", None)
+        if store is not None:
+            return store.add(content, user_id=user_id, **kw)
+        return {"ok": False, "backend": "none", "result": None}
+
+    def semantic_memory_search(self, query: str, user_id: str = "aos",
+                               limit: int = 5) -> Dict[str, Any]:
+        store = getattr(self, "mem0_store", None)
+        if store is not None:
+            return store.search(query, user_id=user_id, limit=limit)
+        return {"ok": False, "backend": "none", "results": []}
 
     def export_memory(self) -> Dict[str, Any]:
         """Export memory from both systems."""

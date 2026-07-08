@@ -139,6 +139,21 @@ class TaskRequest(BaseModel):
     task_type: str = Field(..., description="Task type")
     input_data: Dict[str, Any] = Field(default_factory=dict)
 
+class MetaRouteRequest(BaseModel):
+    intent: str = Field(..., description="用户/系统意图文本")
+    user_id: Optional[str] = Field(None, description="用户 ID")
+    project_id: Optional[str] = Field(None, description="项目 ID")
+    trace_id: Optional[str] = Field(None, description="追踪 ID")
+
+class MetaProposeRequest(BaseModel):
+    intent: str = Field(..., description="进化/自修改意图")
+    proposer: Optional[str] = Field(None, description="提案方")
+
+class SemanticMemoryRequest(BaseModel):
+    content: str = Field(..., description="要记住的语义内容")
+    user_id: Optional[str] = Field("aos", description="用户/项目 ID")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+
 class MCPRequest(BaseModel):
     jsonrpc: str = "2.0"
     id: Optional[str] = None
@@ -228,6 +243,12 @@ async def info():
             },
             "sandbox": "/api/sandbox",
             "subagents_deep": "/api/subagents/deep",
+            "meta_route": "/api/meta/route",
+            "meta_classify": "/api/meta/classify",
+            "meta_priority": "/api/meta/priority",
+            "meta_propose": "/api/meta/propose",
+            "semantic_memory_add": "/api/memory/semantic/add",
+            "semantic_memory_search": "/api/memory/semantic/search",
         },
     }
 
@@ -278,6 +299,33 @@ async def fabric_status():
 async def chat(request: ChatRequest):
     try:
         result = brain.chat(message=request.message, session_id=request.session_id)
+        # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策
+        # (best-effort, 失败不阻断；路由结果落 evolution_log)
+        try:
+            meta = brain.meta_orchestrator.route_intent(
+                intent=request.message, user_id="chat",
+                trace_id=request.session_id or "")
+            if isinstance(result, dict):
+                result["meta"] = {
+                    "layer": meta.get("layer"),
+                    "complexity": meta.get("complexity"),
+                    "workflow_id": meta.get("workflow_id"),
+                    "priority": meta.get("priority"),
+                }
+        except Exception as e:  # pragma: no cover - 治理钩子绝不阻断主流程
+            logger.debug("meta governance hook skipped: %s", e)
+        # 可观测钩子: 发 Langfuse trace (input/output/metadata 含 meta 分层)
+        try:
+            tracer = getattr(brain, "langfuse_tracer", None)
+            if tracer is not None and tracer.enabled:
+                tracer.trace(
+                    name="chat",
+                    input=request.message,
+                    output=result if isinstance(result, (str, dict)) else None,
+                    metadata={"layer": (result.get("meta", {}) if isinstance(result, dict) else {}).get("layer")},
+                )
+        except Exception as e:  # pragma: no cover - 可观测绝不阻断主流程
+            logger.debug("langfuse trace skipped: %s", e)
         return result
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
@@ -321,6 +369,20 @@ async def search_memory(request: SearchRequest):
 @app.get("/api/memory")
 async def memory_overview():
     return brain.export_memory()
+
+
+# ---- Mem0 语义记忆 (真实接入) ----
+
+@app.post("/api/memory/semantic/add")
+async def semantic_memory_add(request: SemanticMemoryRequest):
+    return brain.semantic_memory_add(
+        content=request.content, user_id=request.user_id or "aos",
+        metadata=request.metadata)
+
+
+@app.get("/api/memory/semantic/search")
+async def semantic_memory_search(query: str, user_id: str = "aos", limit: int = 5):
+    return brain.semantic_memory_search(query=query, user_id=user_id, limit=limit)
 
 
 # ---- Sessions ----
@@ -398,6 +460,47 @@ async def deerflow_memory():
 @app.get("/api/deerflow/mcp")
 async def deerflow_mcp_config():
     return brain.deerflow.get_mcp_config()
+
+
+# ---- Meta Orchestrator (L3.5 进化治理) ----
+
+@app.post("/api/meta/route")
+async def meta_route(request: MetaRouteRequest):
+    """意图分层路由：返回 layer / workflow_id / priority / persona_config。"""
+    try:
+        return brain.meta_orchestrator.route_intent(
+            intent=request.intent,
+            user_id=request.user_id or "system",
+            project_id=request.project_id or "",
+            trace_id=request.trace_id or "",
+        )
+    except Exception as e:
+        logger.error("meta route error: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/meta/classify")
+async def meta_classify(intent: str):
+    """纯函数意图分类（L1/L2/L3/L3.5）。"""
+    try:
+        from meta_orchestrator.engine import classify_intent
+        layer, complexity, wf = classify_intent(intent)
+        return {"layer": layer, "complexity": complexity, "workflow_id": wf}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/meta/priority")
+async def meta_priority(task_id: str):
+    """查询任务优先级（结合进化层与历史指纹）。"""
+    return {"task_id": task_id, "priority": brain.meta_orchestrator.query_priority(task_id)}
+
+
+@app.post("/api/meta/propose")
+async def meta_propose(request: MetaProposeRequest):
+    """捕获 L3.5 自修改意图，生成受人工门控的提案（绝不自动改代码）。"""
+    return brain.meta_orchestrator.propose_self_modification(
+        request.intent, proposer=request.proposer or "aos")
 
 
 # ---- MCP ----

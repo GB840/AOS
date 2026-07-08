@@ -25,6 +25,10 @@ export AOS_AUTH_JWT_SECRET="aos-jwt-secret-$( "$VENV_PY" -c 'import secrets;prin
 export PYTHONPATH="$AOS_DIR/src;$AOS_DIR"
 export AOS_API_BASE="http://127.0.0.1:8000"
 
+# mem0 / langfuse 装在 default venv (sandbox 禁止在 aos venv 落地 pip),
+# 低优先级追加其 site-packages, 让 aos 进程能 import 这两个真实 OSS。
+export AOS_EXTRA_SITE="$USERPROFILE/.workbuddy/binaries/python/envs/default/Lib/site-packages"
+
 # --- 0) 确保 litellm 推理平面依赖（缺失则最佳努力安装，失败不阻断）---
 if ! "$VENV_PY" -c "import litellm" >/dev/null 2>&1; then
   echo "[start_all] 安装 litellm (+zhipuai) 推理平面依赖..."
