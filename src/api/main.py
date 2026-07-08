@@ -29,6 +29,7 @@ from api.security import (
     authenticate_user,
 )
 from utils.exceptions import setup_exception_handlers
+from api.gateway import mount_gateway, close_gateway_session, probe_upstreams
 
 logging.basicConfig(
     level=logging.INFO if config.DEBUG else logging.WARNING,
@@ -171,10 +172,20 @@ async def startup_event():
 
     logger.info("=== AOS v5.0 ready ===")
 
+    # 统一网关上游可达性探测（仅日志，不阻断启动）
+    try:
+        await probe_upstreams()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("gateway probe skipped: %s", e)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     brain.shutdown()
+    try:
+        await close_gateway_session()
+    except Exception:
+        pass
     logger.info("=== AOS shutdown complete ===")
 
 
@@ -182,6 +193,13 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
+    # 统一前门：直接落进 Web 控制台 (/web/)，实现"圆润如一体"的单端口体验
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/web/", status_code=307)
+
+
+@app.get("/info")
+async def info():
     return {
         "name": config.APP_NAME,
         "version": config.APP_VERSION,
@@ -1331,6 +1349,13 @@ async def comfyui_generate(req: ComfyUIRequest):
 
 
 # ---- Main ----
+
+
+# 统一网关：把 /web、/openclaw、/deerflow 反向代理收编到 AOS 单端口下
+# （必须在所有 /api 路由注册之后挂载，避免被 catch-all 抢路径）
+mount_gateway(app)
+logger.info("=== AOS unified gateway mounted (single-port front door) ===")
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -179,6 +179,11 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
 
+        # 统一网关收编的子路径（/web、/openclaw、/deerflow）由各自上游自带鉴权，
+        # 不走 AOS 的 API-Key 校验，否则浏览器/Streamlit 会被 401 挡在门外。
+        if any(path == p or path.startswith(p + "/") for p in ("/web", "/openclaw", "/deerflow")):
+            return await call_next(request)
+
         if path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi.json"):
             return await call_next(request)
 

@@ -76,18 +76,19 @@ else
   done
 fi
 
-# --- 3) Web 控制台 (:8501) ---
-if curl -s -m 4 -o /dev/null http://127.0.0.1:8501/ 2>/dev/null; then
+# --- 3) Web 控制台 (:8501, 仅回环 + baseUrlPath=/web 收编进 AOS 单端口) ---
+if curl -s -m 4 -o /dev/null http://127.0.0.1:8501/web/ 2>/dev/null; then
   echo "[start_all] Web 控制台已在运行"
 else
-  echo "[start_all] 启动 Web 控制台 (:8501)..."
-  ( "$VENV_PY_DIR/streamlit" run web/console.py --server.port 8501 --server.headless true --browser.gatherUsageStats false > web_console.log 2>&1 & )
+  echo "[start_all] 启动 Web 控制台 (:8501, baseUrlPath=/web)..."
+  ( "$VENV_PY_DIR/streamlit" run web/console.py --server.port 8501 --server.headless true --browser.gatherUsageStats false --server.address 127.0.0.1 --server.baseUrlPath=/web > web_console.log 2>&1 & )
   sleep 8
 fi
 
 echo
-echo "[start_all] === 全部启动完成 ==="
-echo "  AOS API      : http://127.0.0.1:8000  (health: $(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health))"
-echo "  Web 控制台   : http://127.0.0.1:8501"
-echo "  OpenClaw 网关: http://127.0.0.1:18789"
-echo "  DeerFlow 网关: http://127.0.0.1:2026"
+echo "[start_all] === 全部启动完成 (统一单端口) ==="
+echo "  >>> 唯一对外入口: http://127.0.0.1:8000  (AOS 统一前门) <<<"
+echo "      Web 控制台  : http://127.0.0.1:8000/web/"
+echo "      OpenClaw 网关: http://127.0.0.1:8000/openclaw/   (内部 18789)"
+echo "      DeerFlow 网关: http://127.0.0.1:8000/deerflow/  (内部 2026)"
+echo "      AOS API     : http://127.0.0.1:8000/api/...      (health: $(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health))"
