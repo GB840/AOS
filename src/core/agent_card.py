@@ -345,8 +345,8 @@ class AgentCARD:
 
         if model.tier == ModelTier.LOCAL and self.brain:
             try:
-                result = self.brain.hermes.chat(prompt, session_id=f"card_{model.name}")
-                response = result.get("response", "")
+                result = self.brain.hermes.chat(prompt)
+                response = result if isinstance(result, str) else result.get("response", "")
                 return {
                     "content": response,
                     "cost": 0.0,

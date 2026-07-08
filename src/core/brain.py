@@ -1273,11 +1273,22 @@ class UnifiedBrain:
     def _route_l1(self, message: str, session_id: str = None, **kwargs) -> Dict[str, Any]:
         """L1 - 直通通道: 优先 Hermes 直接回复, 失败/返回错误则回落云端 LLM"""
         try:
-            result = self.hermes.chat(message, session_id=session_id, **kwargs)
+            raw = self.hermes.chat(message)
         except Exception as e:
             logger.warning("L1 Hermes 异常, 回落云端 LLM: %s", e)
             return self._llm_cloud_fallback(message, session_id, level="L1")
-        # Hermes 可能返回带 error 字段的 dict(即便 success=True), 或无内容 -> 回落云端
+        # 真实 Hermes AIAgent.chat() 返回 str; 兼容返回 dict 的封装层
+        if isinstance(raw, str):
+            if not raw.strip():
+                return self._llm_cloud_fallback(message, session_id, level="L1")
+            return {
+                "success": True,
+                "response": raw,
+                "level": "L1",
+                "channel": "Hermes直接对话",
+                "backend": "hermes",
+            }
+        result = raw
         if isinstance(result, dict) and (
             result.get("error") or not (result.get("response") or result.get("content"))
         ):
@@ -1491,9 +1502,9 @@ class UnifiedBrain:
 }}
 """
         try:
-            result = self.hermes.chat(prompt, session_id="project_decomposition")
+            result = self.hermes.chat(prompt)
             import json
-            response = result.get("response", "")
+            response = result if isinstance(result, str) else result.get("response", "")
             start = response.find("{")
             end = response.rfind("}") + 1
             if start >= 0 and end > start:

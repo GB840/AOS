@@ -201,6 +201,28 @@ class Config(BaseSettings):
         extra = "ignore"
 
 
+# P1-4 配置分裂修复: 启动期把 .env 键值注入 os.environ。
+# 双写「无前缀」(ZHIPU_API_KEY) 与「AOS_ 前缀」(AOS_ZHIPU_API_KEY) 两种形式,
+# 使 config 字段(env="AOS_xxx") 与下游模块(读无前缀 ZHIPU_API_KEY 等) 都能取到,
+# 不再依赖 start_all.sh 单独 export, 换启动方式不再静默降级。
+try:
+    _env_path = _BASE_DIR / ".env"
+    if _env_path.exists():
+        with open(_env_path, encoding="utf-8") as _ef:
+            for _line in _ef:
+                _line = _line.strip()
+                if not _line or _line.startswith("#") or "=" not in _line:
+                    continue
+                _k, _, _v = _line.partition("=")
+                _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+                if not _k:
+                    continue
+                os.environ.setdefault(_k, _v)
+                if not _k.startswith("AOS_"):
+                    os.environ.setdefault("AOS_" + _k, _v)
+except Exception:
+    pass
+
 config = Config()
 
 
