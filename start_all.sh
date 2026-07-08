@@ -42,6 +42,26 @@ else
   sleep 12
 fi
 
+# --- 1.5) DeerFlow Gateway (外部引擎, 真实接线 @2026) ---
+DF_DIR="$AOS_DIR/external/deer-flow"
+DF_BACKEND="$DF_DIR/backend"
+if curl -s -m 4 -o /dev/null http://127.0.0.1:2026/health 2>/dev/null; then
+  echo "[start_all] DeerFlow Gateway 已在运行"
+else
+  echo "[start_all] 启动 DeerFlow Gateway (:2026)..."
+  (
+    cd "$DF_DIR" || exit 1
+    set -a; [ -f .env ] && . ./.env; set +a
+    cd "$DF_BACKEND" || exit 1
+    if [ -x "$DF_BACKEND/.venv/Scripts/python.exe" ]; then
+      "$DF_BACKEND/.venv/Scripts/python.exe" -u -m uvicorn app.gateway.app:app --host 127.0.0.1 --port 2026 --log-level info > "$AOS_DIR/logs/deerflow_gateway.log" 2>&1 &
+    else
+      echo "[start_all] DeerFlow venv 缺失, 跳过 (AOS 将优雅降级到内置 DeerFlow)"
+    fi
+  )
+  sleep 15
+fi
+
 # --- 2) AOS API (:8000) ---
 if curl -s -m 4 -o /dev/null http://127.0.0.1:8000/health 2>/dev/null; then
   echo "[start_all] AOS API 已在运行"
@@ -70,3 +90,4 @@ echo "[start_all] === 全部启动完成 ==="
 echo "  AOS API      : http://127.0.0.1:8000  (health: $(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health))"
 echo "  Web 控制台   : http://127.0.0.1:8501"
 echo "  OpenClaw 网关: http://127.0.0.1:18789"
+echo "  DeerFlow 网关: http://127.0.0.1:2026"
