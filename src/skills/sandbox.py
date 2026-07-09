@@ -1,4 +1,5 @@
 from typing import Dict, List, Optional, Any
+import ast
 import subprocess
 import tempfile
 import os
@@ -7,6 +8,16 @@ import shutil
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# 传给沙箱子进程的"安全环境变量"白名单: 仅保留运行 python/node/bash 所需的最小系统变量,
+# 彻底剔除 AOS 自身密钥 (API_KEY / JWT 私钥 / 数据库口令 / *SECRET* / *TOKEN* 等),
+# 使沙箱内用户代码无法通过 os.environ 读取平台机密。
+_SANDBOX_SAFE_ENV_KEYS = {
+    "PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "TMPDIR",
+    "LANG", "LC_ALL", "PYTHONIOENCODING", "PYTHONUNBUFFERED",
+    "HOME", "USERPROFILE", "COMSPEC", "PATHEXT", "OS",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+}
 
 class SandboxConfig:
     def __init__(
@@ -77,6 +88,62 @@ class SkillSandbox:
                 shutil.rmtree(self.sandbox_dir)
             except Exception:
                 pass
+
+    def _safe_env(self) -> Dict[str, str]:
+        """构造不含任何 AOS 密钥的最小环境, 供沙箱子进程使用 (防机密泄露)。"""
+        env: Dict[str, str] = {}
+        for k in _SANDBOX_SAFE_ENV_KEYS:
+            if k in os.environ:
+                env[k] = os.environ[k]
+        # 仅把沙箱目录加入 PYTHONPATH, 不让子进程 import AOS 内部模块。
+        env["PYTHONPATH"] = str(self.sandbox_dir)
+        env["PYTHONIOENCODING"] = "utf-8"
+        return env
+
+    def _check_imports(self, code: str) -> Optional[str]:
+        """AST 静态校验 import, 落实 SandboxConfig 的 allow/deny。
+
+        阻断 os/subprocess/socket 等高危模块 (含 __import__ / importlib.import_module 动态导入),
+        防止沙箱内用户代码逃逸到宿主机。返回错误描述或 None。
+        """
+        allowed = set(self.config.allowed_modules or [])
+        denied = set(self.config.disallowed_modules or [])
+        if not allowed and not denied:
+            return None
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            return f"syntax error: {e}"
+        for node in ast.walk(tree):
+            mod: Optional[str] = None
+            if isinstance(node, ast.Import):
+                for n in node.names:
+                    mod = n.name.split(".")[0]
+                    if self._import_blocked(mod, allowed, denied):
+                        return f"import 被禁止: {mod}"
+            elif isinstance(node, ast.ImportFrom):
+                mod = (node.module or "").split(".")[0]
+                if mod and self._import_blocked(mod, allowed, denied):
+                    return f"import 被禁止: {mod}"
+            elif isinstance(node, ast.Call):
+                # 拦截 __import__('os') / importlib.import_module('os')
+                func = node.func
+                name = getattr(func, "attr", None) or getattr(func, "id", None)
+                if name in ("import_module", "import_", "__import__") and node.args:
+                    arg = node.args[0]
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        mod = arg.value.split(".")[0]
+                        if self._import_blocked(mod, allowed, denied):
+                            return f"动态导入被禁止: {mod}"
+        return None
+
+    @staticmethod
+    def _import_blocked(mod: str, allowed: set, denied: set) -> bool:
+        if denied and mod in denied:
+            return True
+        if allowed and mod not in allowed:
+            return True
+        return False
     
     def execute_code(self, code: str, language: str = "python") -> SandboxResult:
         if language == "python":
@@ -90,6 +157,11 @@ class SkillSandbox:
     
     def _execute_python(self, code: str) -> SandboxResult:
         import time
+        
+        # 静态校验 import: 命中禁止/白名单则直接拒绝, 不启动子进程 (fail-fast)。
+        bad = self._check_imports(code)
+        if bad:
+            return SandboxResult(success=False, error=f"security: {bad}")
         
         executor_path = self.sandbox_dir / "executor.py"
         user_code_path = self.sandbox_dir / "user_code.py"
@@ -106,8 +178,8 @@ class SkillSandbox:
         start_time = time.time()
         
         try:
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(self.sandbox_dir)
+            # 仅传不含密钥的最小安全环境, 防止沙箱读取平台机密。
+            env = self._safe_env()
             
             proc = subprocess.run(
                 ["python", str(executor_path)],
@@ -233,9 +305,12 @@ with open(result_path, "w", encoding="utf-8") as f:
         start_time = time.time()
         
         try:
+            # 仅传不含密钥的最小安全环境。
+            env = self._safe_env()
             proc = subprocess.run(
                 ["node", str(code_path)],
                 cwd=self.sandbox_dir,
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=self.config.max_cpu_time_seconds,
@@ -286,9 +361,12 @@ with open(result_path, "w", encoding="utf-8") as f:
         start_time = time.time()
         
         try:
+            # 仅传不含密钥的最小安全环境。
+            env = self._safe_env()
             proc = subprocess.run(
                 ["bash", str(code_path)],
                 cwd=self.sandbox_dir,
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=self.config.max_cpu_time_seconds,
