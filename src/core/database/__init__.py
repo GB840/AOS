@@ -10,16 +10,16 @@ AOS v5.0 — 数据库单一真相层 (Database)
 - models:         全部 ORM 表模型 (SQLModel.metadata 已注册)
 """
 
+from core.database import models
 from core.database.base import META_COLUMN, TimestampMixin
 from core.database.engine import get_engine, get_session, init_db, session_scope
-from core.database import models  # noqa: F401  确保 import 时即注册全部表
 
 __all__ = [
     "META_COLUMN",
     "TimestampMixin",
     "get_engine",
-    "init_db",
-    "session_scope",
     "get_session",
+    "init_db",
     "models",
+    "session_scope",
 ]

@@ -7,20 +7,12 @@ AOS v5.0 — ORM 模型聚合
   (基础设施新增: notifications / event_store / snapshots / cold_memories)
 """
 
-from core.database.models.infra import (
-    Agent,
-    AuditLog,
-    Checkpoint,
-    ColdMemory,
-    Conversation,
-    EventStore,
-    Knowledge,
-    Message,
-    Notification,
-    Snapshot,
-    Task,
-    Thread,
-    User,
+from core.database.models.economy import (
+    BudgetPool,
+    CostAccounting,
+    EconomicTransaction,
+    RewardEvent,
+    TokenLedger,
 )
 from core.database.models.ecosystem import (
     AgencyRole,
@@ -46,18 +38,26 @@ from core.database.models.evolution import (
     TaskFingerprint,
     WorkflowDefinition,
 )
-from core.database.models.economy import (
-    BudgetPool,
-    CostAccounting,
-    EconomicTransaction,
-    RewardEvent,
-    TokenLedger,
-)
 from core.database.models.immune import (
     ComplianceRecord,
     IdentityVault,
     SandboxPolicy,
     SemanticFirewallRule,
+)
+from core.database.models.infra import (
+    Agent,
+    AuditLog,
+    Checkpoint,
+    ColdMemory,
+    Conversation,
+    EventStore,
+    Knowledge,
+    Message,
+    Notification,
+    Snapshot,
+    Task,
+    Thread,
+    User,
 )
 
 # 全量表类清单 (供测试/迁移使用)

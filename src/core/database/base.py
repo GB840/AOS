@@ -13,10 +13,9 @@ AOS v5.0 — 数据库基础定义 (单一真相层)
 """
 
 from datetime import datetime
-from typing import Optional
 
 import sqlalchemy as sa
-from sqlmodel import SQLModel, Field
+from sqlmodel import Field, SQLModel
 
 # 物理列名为 "metadata" 的字段统一用此工厂: 每次调用返回新的 Column 实例，
 # 避免被多张表共享同一个 Column 对象 (会触发 "already assigned" 错误)。
