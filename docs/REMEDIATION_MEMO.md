@@ -9,16 +9,16 @@
 
 | 优先级 | 任务 | 内容 | 状态 |
 |---|---|---|---|
-| **P0** | #107 | 根除默认凭证 + 离线 JWT 伪造 | 🔲 待执行 |
-| **P0** | #108 | 收回/加固免认证端点（含 G2/G3/G4） | 🔲 待执行 |
-| **P0** | #109 | 治理 `/api/sandbox/exec` 任意命令 | 🔲 待执行 |
-| **P0** | #113 | Docker 弱口令+无隔离 + 默认不强制 HTTPS | 🔲 待执行 |
-| **P1** | #110 | shell=True 命令注入排查加固 | 🔲 待执行 |
-| **P1** | #111 | exec(user_code) RCE 隔离确认 | 🔲 待执行 |
-| **P1** | #112 | eval() 规则执行去危险 | 🔲 待执行 |
-| **P1** | #114 | 日志脱敏 + 恒定时间比较（G5/G7） | 🔲 待执行 |
-| **P1** | #115 | CI + 安全中间件单测（含 #15/#96） | 🔲 待执行 |
-| P1 | #95/#96 | 环境可复现 + 测试可收集 | 🔲 待执行 |
+| **P0** | #107 | 根除默认凭证 + 离线 JWT 伪造 (RS256+keystore) | ✅ `1b30e0c` |
+| **P0** | #108 | 收回/加固免认证端点（G2/G3/G4） | ✅ `54ca738` |
+| **P0** | #109 | 治理 `/api/sandbox/exec` 任意命令 | ✅ `0075c01` |
+| **P0** | #113 | Docker 弱口令+无隔离 + 默认不强制 HTTPS | ✅ `a1672ee` |
+| **P1** | #110 | shell=True 命令注入排查加固 | ✅ `9d5b18b` |
+| **P1** | #111 | exec(user_code) RCE 隔离确认 | ✅ `f9aa868` |
+| **P1** | #112 | eval() 规则执行去危险 | ✅ `6d5c8d6` |
+| **P1** | #114 | 日志脱敏 + 恒定时间比较（G5 已含于 #107/#108） | ✅ `4a29e3d` |
+| **P1** | #115 | CI + 安全中间件单测（含 #96） | ✅ `5546909` |
+| P1 | #95/#96 | 环境可复现 + 测试可收集 | 🟡 执行中（产物已就绪，待测试确认后提交） |
 | P1 | #98 | 删除自研 OpenClaw 废弃代码 | 🔲 待执行 |
 | P1 | #100/#101 | 路由收编 fabric + brain.py 拆分 | 🔲 待执行 |
 | P2 | #99/#102/#103 | 测试归位 / src/src 嵌套 / 运行时产物 | 🔲 待执行 |
@@ -80,3 +80,20 @@
 - #97(硬编码密钥) 已并入 #107。
 - 本轮 #107–#115 为攻击面维度，与可运行性(#95/#96)/铁律(#98)/架构(#100/#101)/卫生(#99/#102/#103)/文档(#105/#106) 互不覆盖、并行。
 - #100(路由收编) 修"绕过薄缝"架构违规；#108 修"绕过认证"安全违规，两件事。
+
+---
+
+## 六、#95/#96 环境可复现 + 测试可收集（执行记录）
+
+**问题定位**：
+- 运行时实际由 supervisor 经 `AOS_EXTRA_SITE`/`PYTHONPATH` 接入 `default` venv 的 site-packages，而非隔离 venv；`requirements.txt` 为人工精选清单，缺少全量锁定 → 可复现性缺口（#95 / #13）。
+- 测试套件在 `tests/` + `conftest.py` 下已可被 pytest 完整收集（48 项），但部分旧断言与「新安全契约 / 真实 42 表 schema」不一致 → #96。
+
+**已落地产物**（待独立提交）：
+1. `requirements.lock` — 由真实运行时 venv（`default`）`pip freeze` 生成的确定性快照（149 项全量锁定，含 ag2/mcp/fastapi/pydantic/langgraph/chromadb 等）。配合 `requirements.txt` 使用：`pip install -r requirements.lock`。
+2. `.env.example` — 补全缺失的运行时开关（AOS_ADMIN_PASSWORD / AOS_DEERFLOW_ADMIN_PASSWORD / OPENAI/DEEPSEEK/ZHIPU 网关 / QDRANT / CORS / 日志级别等），`cp .env.example .env` 即得可运行模板。
+3. `docs/REPRODUCE.md` — 可复现重建手册：venv 创建 → 依赖安装（requirements.lock）→ `.env` 生成 → supervisor 启动 → 冒烟验证。
+4. `tests/test_api.py` — `client` fixture 注入确定性 `API_KEY` + `X-API-Key` 头，使主链路在「已认证」前提下验证；`/health` 断言兼容新响应体 `{status,service,ts}`。对齐 #108 强制鉴权后的契约。
+5. `tests/test_database.py` — 表数断言 `38 → 42`（#11/#106 校正：真实 ORM 注册物理表数为 42）。
+
+**验证**：`test_security.py` 11 passed ✓；`test_database.py`(count/idempotent/seed/orm) 4 passed ✓；`test_api.py` 执行中。

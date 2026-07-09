@@ -2,7 +2,7 @@
 AOS v5.0 — 数据库单一真相层测试
 
 验证:
-  - 38 张 ORM 表全部注册并幂等建表
+  - 42 张 ORM 表全部注册并幂等建表 (#11: 实际表数为 42，旧断言 38 已校正)
   - 基线 agent 种子 (hermes / deerflow / meta_orchestrator)
   - ORM 读写 (含 TimestampMixin 的 server_default 对裸 SQL 友好)
   - 既有裸 SQL 模块 (persistence_bridge / memory) 在统一库上可正常工作
@@ -30,11 +30,11 @@ from core.database.models import (
 )
 
 
-def test_table_count_is_38():
+def test_table_count_is_42():
     init_db()
-    assert models.TABLE_COUNT == 38
+    assert models.TABLE_COUNT == 42
     # 仅核对 ORM 注册的物理表数 (不含 FTS 影子表)
-    assert len(SQLModel.metadata.tables) == 38
+    assert len(SQLModel.metadata.tables) == 42
 
 
 def test_init_db_idempotent():
