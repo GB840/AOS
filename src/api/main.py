@@ -39,6 +39,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _safe_detail(e: Exception) -> str:
+    """G7: 生产环境不向客户端泄露内部异常细节 (防信息泄漏/指纹搜集)。
+
+    仅当 APP_ENV == "production" 时返回通用文案, 真实异常始终服务端记录 (exc_info);
+    开发/调试环境保留原文便于排错。
+    """
+    from utils.sanitize import safe_error_detail
+    msg = safe_error_detail(e, config.APP_ENV)
+    if config.APP_ENV == "production":
+        logger.error("Unhandled server error: %s", e, exc_info=True)
+    return msg
+
 app = FastAPI(
     title=config.APP_NAME,
     version=config.APP_VERSION,
@@ -370,7 +383,7 @@ async def chat(request: ChatRequest):
         return result
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.post("/api/chat/stream")
 async def stream_chat(request: ChatRequest):
@@ -388,7 +401,7 @@ async def add_knowledge(request: KnowledgeRequest):
     try:
         return brain.add_memory(content=request.content, category="user")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.get("/api/knowledge")
 async def list_knowledge(limit: int = Query(50, ge=1, le=200)):
@@ -401,7 +414,7 @@ async def list_knowledge(limit: int = Query(50, ge=1, le=200)):
                 "created_at": r["created_at"]} for r in cursor.fetchall()],
                 "count": cursor.rowcount}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.post("/api/search")
 async def search_memory(request: SearchRequest):
@@ -517,7 +530,7 @@ async def meta_route(request: MetaRouteRequest):
         )
     except Exception as e:
         logger.error("meta route error: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/meta/classify")
@@ -528,7 +541,7 @@ async def meta_classify(intent: str):
         layer, complexity, wf = classify_intent(intent)
         return {"layer": layer, "complexity": complexity, "workflow_id": wf}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/meta/priority")
@@ -552,7 +565,7 @@ async def mcp_endpoint(request: MCPRequest):
         msg = MCPMessage(id=request.id, method=request.method, params=request.params or {})
         return brain.mcp.handle_message(msg).to_dict()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.get("/api/mcp/info")
 async def mcp_info():
@@ -724,7 +737,7 @@ async def sandbox_exec(req: SandboxExecRequest):
         result = sb.execute_command(command)
         return {"success": True, "output": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
     finally:
         if sb is not None:
             try:
@@ -839,7 +852,7 @@ async def vimax_workflows():
         from skills.vimax import VIMAX_WORKFLOWS
         return {"workflows": VIMAX_WORKFLOWS}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/vimax/generate")
@@ -856,7 +869,7 @@ async def vimax_generate(req: ViMaxRequest):
         else:
             raise HTTPException(status_code=400, detail=result.get("error", "生成失败"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/vimax/task/{task_id}")
@@ -868,7 +881,7 @@ async def vimax_task(task_id: str):
         status = skill.get_status(task_id)
         return {"task_id": task_id, **status}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/vimax/configure")
@@ -880,7 +893,7 @@ async def vimax_configure(api_keys: Dict[str, str]):
         agent.configure(api_keys)
         return {"success": True, "configured_keys": list(api_keys.keys())}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 # ---- RuFlo API ----
@@ -899,7 +912,7 @@ async def ruflo_agents():
         from skills.ruflo import RUFLO_AGENTS
         return {"agents": RUFLO_AGENTS}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/ruflo/tasks")
@@ -909,7 +922,7 @@ async def ruflo_tasks():
         from skills.ruflo import RUFLO_TASKS
         return {"tasks": RUFLO_TASKS}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/ruflo/execute")
@@ -927,7 +940,7 @@ async def ruflo_execute(req: RuFloRequest):
         else:
             raise HTTPException(status_code=400, detail=result.get("error", "执行失败"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/ruflo/task/{task_id}")
@@ -939,7 +952,7 @@ async def ruflo_task(task_id: str):
         status = skill.get_task_status(task_id)
         return {"task_id": task_id, **status}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/ruflo/configure")
@@ -951,7 +964,7 @@ async def ruflo_configure(api_key: str):
         agent.configure(api_key)
         return {"success": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 # ---- Ollama API ----
@@ -974,7 +987,7 @@ async def ollama_models():
         else:
             return {"models": [], "count": 0, "ollama_available": result.get("ollama_available", False)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/ollama/chat")
@@ -992,7 +1005,7 @@ async def ollama_chat(req: OllamaRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/ollama/generate")
@@ -1010,7 +1023,7 @@ async def ollama_generate(req: OllamaRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/ollama/embeddings")
@@ -1028,7 +1041,7 @@ async def ollama_embeddings(req: OllamaRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/ollama/pull")
@@ -1045,7 +1058,7 @@ async def ollama_pull(model: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/ollama/status")
@@ -1086,7 +1099,7 @@ async def uitars_features():
             "presets": UITARS_PRESETS,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/uitars/execute")
@@ -1105,7 +1118,7 @@ async def uitars_execute(req: UITARSRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/uitars/status")
@@ -1128,7 +1141,7 @@ async def uitars_status():
             ],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 # ---- Pixelle-Video API ----
@@ -1147,7 +1160,7 @@ async def pixelle_styles():
         from skills.pixelle_video import PIXELLE_STYLES
         return {"styles": PIXELLE_STYLES}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/pixelle/voices")
@@ -1157,7 +1170,7 @@ async def pixelle_voices():
         from skills.pixelle_video import PIXELLE_VOICES
         return {"voices": PIXELLE_VOICES}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/pixelle/generate")
@@ -1175,7 +1188,7 @@ async def pixelle_generate(req: PixelleRequest):
         else:
             raise HTTPException(status_code=400, detail=result.get("error", "生成失败"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/pixelle/task/{task_id}")
@@ -1187,7 +1200,7 @@ async def pixelle_task(task_id: str):
         status = skill.get_task_status(task_id)
         return {"task_id": task_id, **status}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 # ---- Loop Engineering API ----
@@ -1208,7 +1221,7 @@ async def loop_templates():
         from skills.loop_engineering import LOOP_TEMPLATES
         return {"templates": LOOP_TEMPLATES}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/loop/components")
@@ -1218,7 +1231,7 @@ async def loop_components():
         from skills.loop_engineering import LOOP_COMPONENTS
         return {"components": LOOP_COMPONENTS}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/loop/execute")
@@ -1238,7 +1251,7 @@ async def loop_execute(req: LoopRequest):
         else:
             raise HTTPException(status_code=400, detail=result.get("error", "执行失败"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/loop/status/{loop_id}")
@@ -1250,7 +1263,7 @@ async def loop_status(loop_id: str):
         status = skill._get_loop_status({"loop_id": loop_id})
         return status
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/loop/list")
@@ -1262,7 +1275,7 @@ async def loop_list():
         loops = skill._list_loops({})
         return loops
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 # ---- Manage Provider (for failover) ----
@@ -1298,7 +1311,7 @@ async def route_chat(req: RouteChatRequest):
         return result
     except Exception as e:
         logger.error(f"Route chat error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.get("/api/router/providers")
 async def router_providers():
@@ -1309,7 +1322,7 @@ async def router_providers():
         return {"providers": router.get_available_providers()}
     except Exception as e:
         logger.error(f"Router providers error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.get("/api/router/config")
 async def router_config():
@@ -1325,7 +1338,7 @@ async def router_config():
         }
     except Exception as e:
         logger.error(f"Router config error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 # ---- Voice API ----
 
@@ -1343,7 +1356,7 @@ async def voice_recognition(audio: bytes = File(...), format: str = "wav"):
         return result
     except Exception as e:
         logger.error(f"ASR error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.post("/api/voice/tts")
 async def voice_synthesis(text: str, voice: str = "zh", speed: float = 1.0, pitch: float = 0.0):
@@ -1354,7 +1367,7 @@ async def voice_synthesis(text: str, voice: str = "zh", speed: float = 1.0, pitc
         return Response(content=result["audio"], media_type=result["content_type"])
     except Exception as e:
         logger.error(f"TTS error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.post("/api/voice/chat")
 async def voice_chat(audio: bytes = File(...), format: str = "wav", session_id: str = None):
@@ -1383,7 +1396,7 @@ async def voice_chat(audio: bytes = File(...), format: str = "wav", session_id: 
         }
     except Exception as e:
         logger.error(f"Voice chat error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 # ---- Multimodal API ----
 
@@ -1410,7 +1423,7 @@ async def api_groupchat(message: str, agents: Optional[List[str]] = None):
         raise
     except Exception as e:
         logger.error(f"Group chat error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/capability/{capability}")
@@ -1433,7 +1446,7 @@ async def analyze_image(image: UploadFile = File(...), prompt: str = "分析这�
         }
     except Exception as e:
         logger.error(f"Image analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.post("/api/multimodal/chat")
 async def multimodal_chat(
@@ -1462,7 +1475,7 @@ async def multimodal_chat(
         }
     except Exception as e:
         logger.error(f"Multimodal chat error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 # ---- ComfyUI Visual Generation API ----
 
@@ -1487,7 +1500,7 @@ async def comfyui_status():
         result = brain.skill_registry.execute("comfyui", {"action": "status"})
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.get("/api/comfyui/workflows")
@@ -1497,7 +1510,7 @@ async def comfyui_workflows():
         result = brain.skill_registry.execute("comfyui", {"action": "list_workflows"})
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/comfyui/txt2img")
@@ -1517,7 +1530,7 @@ async def comfyui_txt2img(req: ComfyUIRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/comfyui/img2vid")
@@ -1536,7 +1549,7 @@ async def comfyui_img2vid(req: ComfyUIRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/comfyui/style_transfer")
@@ -1555,7 +1568,7 @@ async def comfyui_style_transfer(req: ComfyUIRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/comfyui/vid2vid")
@@ -1574,7 +1587,7 @@ async def comfyui_vid2vid(req: ComfyUIRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/comfyui/generate")
@@ -1602,7 +1615,7 @@ async def comfyui_generate(req: ComfyUIRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 # ---- Main ----

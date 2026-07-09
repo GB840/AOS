@@ -233,7 +233,12 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         if config.API_KEY:
             api_key = request.headers.get(API_KEY_NAME) or request.query_params.get(API_KEY_NAME)
             if not hmac.compare_digest(api_key or "", config.API_KEY or ""):
-                logger.warning(f"Unauthorized access attempt to {path} from {request.client.host}")
+                # 审计日志仅记录脱敏后的密钥前缀 (可溯源但不泄露), 不记录完整密钥。
+                from utils.sanitize import mask_secret
+                logger.warning(
+                    "Unauthorized access attempt to %s from %s key=%s",
+                    path, request.client.host, mask_secret(api_key or ""),
+                )
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={"error": "Unauthorized", "detail": "Invalid or missing API Key / Bearer token"},
