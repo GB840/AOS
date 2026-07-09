@@ -35,7 +35,7 @@ SKILLS_DIR = AOS_ROOT / "src" / "skills"
 ROLES_DIR = SKILLS_DIR / "agency_roles"
 
 # 不是真实桥接的 sub-agent（自管注册表 / 已废弃走真实 OpenClaw）
-SUBAGENT_EXCLUDE = {"__init__", "registry", "openclaw_agent"}
+SUBAGENT_EXCLUDE = {"__init__", "registry"}
 # skills 里的框架 / 元文件，不是领域技能
 SKILL_FRAMEWORK = {
     "__init__", "base", "adapter", "factory", "composition",

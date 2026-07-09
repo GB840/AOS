@@ -749,9 +749,9 @@ class UnifiedBrain:
     def _init_subagents_registry(self):
         """步骤8: 子智能体注册表"""
         from subagents import SubAgentRegistry
-        from subagents import OpenClawSubAgent, UITarsSubAgent, LobsterSubAgent
+        from subagents import UITarsSubAgent, LobsterSubAgent
         from utils.config import config as cfg
-        
+
         self.subagents = SubAgentRegistry()
         self._register_subagents(cfg)
         logger.info("Sub-agent registry ready")

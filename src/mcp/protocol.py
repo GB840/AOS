@@ -237,10 +237,33 @@ class MCPProtocol:
 
 
     def _openclaw_handler(self, params: Dict[str, Any]) -> Any:
-        """通过子智能体注册中心调用 OpenClaw."""
-        if self._subagent_registry:
-            return self._subagent_registry.invoke("openclaw", params)
-        return {"error": "子智能体注册中心未初始化"}
+        """通过真实部署的 OpenClaw Gateway 调用 OpenClaw (Fabric OpenClawAdapter)。
+
+        自研 OpenClawSubAgent 已于 #98 删除(违反"用真实开源"铁律); 此处改为
+        经真实 OpenClaw Gateway(:18789) 服务, 与 brain 的 fabric 收编保持一致。
+        若网关未启动, 优雅降级返回 error 而不崩溃。
+        """
+        try:
+            from core.fabric.adapters.openclaw_adapter import OpenClawAdapter
+            from core.fabric.capability import Capability
+            from core.fabric.adapter import InvokeRequest
+        except Exception as e:
+            return {"success": False, "error": f"OpenClawAdapter 不可用: {e}"}
+
+        try:
+            adapter = OpenClawAdapter()
+            if not adapter.health():
+                return {"success": False, "error": "OpenClaw Gateway 未连接 (127.0.0.1:18789)"}
+            req = InvokeRequest(
+                capability=Capability.CHANNEL_ACCESS,
+                payload={"text": params.get("message", "")},
+            )
+            res = adapter.invoke(req)
+            if res.ok:
+                return {"success": True, "reply": (res.data or {}).get("reply", "")}
+            return {"success": False, "error": res.error}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def _uitars_handler(self, params: Dict[str, Any]) -> Any:
         """通过子智能体注册中心调用 UI-TARS."""
