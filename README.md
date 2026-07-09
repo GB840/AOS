@@ -70,7 +70,7 @@ AOS/
 
 ## 🗄️ Database
 
-AOS 的全部结构化状态存于**单一 SQLite 数据库**（`config.SQLITE_DB_PATH`，WAL 模式 + 外键约束），由 `src/core/database/` 的 SQLModel ORM 定义作为唯一真相来源，分五层共 **38 张表**：基础设施 (infra) / 生态 (ecosystem) / 进化 (evolution) / 经济 (economy) / 免疫 (immune)。全文检索 (FTS5) 在 `memory` 层以虚拟表提供。
+AOS 的全部结构化状态存于**单一 SQLite 数据库**（`config.SQLITE_DB_PATH`，WAL 模式 + 外键约束），由 `src/core/database/` 的 SQLModel ORM 定义作为唯一真相来源，分五层共 **42 张表**：基础设施 (infra) / 生态 (ecosystem) / 进化 (evolution) / 经济 (economy) / 免疫 (immune)。全文检索 (FTS5) 在 `memory` 层以虚拟表提供。
 
 > 完整建表结构（逐表逐列）见 **[`docs/DATABASE_SCHEMA.md`](docs/DATABASE_SCHEMA.md)**，由 `scripts/gen_schema_doc.py` 从模型自动内省生成，与代码严格一致。
 
