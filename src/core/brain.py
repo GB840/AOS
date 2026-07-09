@@ -749,7 +749,6 @@ class UnifiedBrain:
     def _init_subagents_registry(self):
         """步骤8: 子智能体注册表"""
         from subagents import SubAgentRegistry
-        from subagents import UITarsSubAgent, LobsterSubAgent
         from utils.config import config as cfg
 
         self.subagents = SubAgentRegistry()
@@ -1262,100 +1261,15 @@ class UnifiedBrain:
         logger.info("✅ Execution layer tools registered to DeerFlow")
 
     def _register_subagents(self, cfg):
-        # OpenClaw 不再由自研 OpenClawSubAgent 注册 (DEPRECATED, 违反"用真实开源"
-        # 铁律, 且其 detect_openclaw_path 实际返回 None 桥接悬空)。OpenClaw 统一由
-        # Fabric OpenClawAdapter 经真实部署的 OpenClaw Gateway(:18789) 服务。
-        if getattr(cfg, 'OPENCLAW_ENABLED', False):
-            logger.info("OpenClaw 由 Fabric OpenClawAdapter (真实 Gateway) 提供服务, "
-                        "跳过自研 OpenClawSubAgent 注册")
-
-        try:
-            if getattr(cfg, 'UITARS_ENABLED', False):
-                ut = UITarsSubAgent(use_mcp=getattr(cfg, 'UITARS_USE_MCP', False),
-                                    mcp_port=getattr(cfg, 'UITARS_MCP_PORT', 8090))
-                self.subagents.register("uitars", ut.DESCRIPTION, ut.CAPABILITIES, ut.handle)
-                self.deerflow.register_handler("gui_automation", ut.handle)
-                logger.info("UI-TARS subagent registered")
-        except Exception as e:
-            logger.warning("UI-TARS subagent unavailable: %s", e)
-
-        try:
-            if getattr(cfg, 'UITARS_ENABLED', False):
-                ut = UITarsSubAgent(use_mcp=getattr(cfg, 'UITARS_USE_MCP', False),
-                                    mcp_port=getattr(cfg, 'UITARS_MCP_PORT', 8090))
-                self.subagents.register("uitars", ut.DESCRIPTION, ut.CAPABILITIES, ut.handle)
-                self.deerflow.register_handler("gui_automation", ut.handle)
-                logger.info("UI-TARS subagent registered")
-        except Exception as e:
-            logger.warning("UI-TARS subagent unavailable: %s", e)
-
-        try:
-            if getattr(cfg, 'LOBSTER_ENABLED', False):
-                lb = LobsterSubAgent(mode=getattr(cfg, 'LOBSTER_MODE', 'openclaw_bridge'),
-                                     openclaw_command=getattr(cfg, 'OPENCLAW_COMMAND', 'npx'),
-                                     lobster_port=getattr(cfg, 'LOBSTER_PORT', 8091))
-                self.subagents.register("lobster", lb.DESCRIPTION, lb.CAPABILITIES, lb.handle)
-                self.deerflow.register_handler("office_automation", lb.handle)
-                logger.info("Lobster subagent registered")
-        except Exception as e:
-            logger.warning("Lobster subagent unavailable: %s", e)
-
-        try:
-            from subagents.vimax_agent import ViMaxSubagent
-            vm = ViMaxSubagent()
-            self.subagents.register("vimax", vm.DESCRIPTION, vm.CAPABILITIES, vm.handle)
-            self.deerflow.register_handler("video_generation", vm.handle)
-            logger.info("ViMax subagent registered")
-        except Exception as e:
-            logger.warning("ViMax subagent unavailable: %s", e)
-
-        try:
-            from subagents.ruflo_agent import RuFloSubagent
-            rf = RuFloSubagent()
-            self.subagents.register("ruflo", rf.DESCRIPTION, rf.CAPABILITIES, rf.handle)
-            self.deerflow.register_handler("code_execution", rf.handle)
-            logger.info("RuFlo subagent registered")
-        except Exception as e:
-            logger.warning("RuFlo subagent unavailable: %s", e)
-
-        try:
-            from subagents.pixelle_agent import PixelleVideoSubagent
-            px = PixelleVideoSubagent()
-            self.subagents.register("pixelle_video", px.DESCRIPTION, px.CAPABILITIES, px.handle)
-            self.deerflow.register_handler("short_video_generation", px.handle)
-            logger.info("Pixelle-Video subagent registered")
-        except Exception as e:
-            logger.warning("Pixelle-Video subagent unavailable: %s", e)
-
-        try:
-            from subagents.loop_engineering_agent import LoopEngineeringSubagent
-            le = LoopEngineeringSubagent()
-            self.subagents.register("loop_engineering", le.DESCRIPTION, le.CAPABILITIES, le.handle)
-            self.deerflow.register_handler("loop_engineering", le.handle)
-            logger.info("Loop Engineering subagent registered")
-        except Exception as e:
-            logger.warning("Loop Engineering subagent unavailable: %s", e)
-
-        try:
-            from subagents.skill_agent import register_skill_as_subagent
-
-            skill_subagents = ["jina_reader", "codebase_memory", "codebase_memory_mcp", "searxng", "lightrag", "viitor_voice", "zvec", "llama_cpp", "comfyui", "agency_agents", "omni_route", "open_montage", "video_use", "cognee", "herdr", "design_md", "no_mistakes", "lingbot_map"]
-            for skill_name in skill_subagents:
-                register_skill_as_subagent(skill_name, self.skill_registry, self.subagents)
-            logger.info(f"技能子智能体注册完成: {skill_subagents}")
-        except Exception as e:
-            logger.warning(f"技能子智能体注册失败: {e}")
-
-        self.mcp.set_subagent_registry(self.subagents)
+        # 注册逻辑已抽到 core.brain_registration (见 #101 渐进式拆分);
+        # brain 保留薄委派包装, 仍是合法集成层总枢纽 (不强制退役)。
+        from core.brain_registration import register_subagents
+        register_subagents(self, cfg)
 
     def _register_agency_roles(self):
-        """注册部门角色技能"""
-        try:
-            from skills.agency_roles import register_agency_roles as _register
-            _register()
-            logger.info("Agency Roles skills registered")
-        except Exception as e:
-            logger.warning(f"Agency Roles registration failed: {e}")
+        """注册部门角色技能 (逻辑见 core.brain_registration)"""
+        from core.brain_registration import register_agency_roles
+        register_agency_roles(self)
 
     # ========================================================================
     #  Unified Chat API - Five-Channel Routing
