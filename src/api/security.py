@@ -1,5 +1,6 @@
 import logging
 import secrets
+import hmac
 import bcrypt
 from typing import Optional
 from fastapi import HTTPException, Security, status
@@ -195,25 +196,32 @@ async def get_api_key(
 
 
 class APISecurityMiddleware(BaseHTTPMiddleware):
+    # 统一网关收编的上游子路径：各自上游自带鉴权（/web=Streamlit 控制台、
+    # /openclaw=OpenClaw 网关、/deerflow=DeerFlow 网关），AOS 不二次校验。
+    _UPSTREAM_PREFIXES = ("/web", "/openclaw", "/deerflow")
+
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
 
-        # 统一网关收编的子路径（/web、/openclaw、/deerflow）由各自上游自带鉴权，
-        # 不走 AOS 的 API-Key 校验，否则浏览器/Streamlit 会被 401 挡在门外。
-        if any(path == p or path.startswith(p + "/") for p in ("/web", "/openclaw", "/deerflow")):
-            return await call_next(request)
-
-        if path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi.json"):
-            return await call_next(request)
-
+        # 1) 永远公开：根路径 + 健康探针（供 supervisor/负载均衡探活）
+        #    + 登录入口 /api/auth/token（换取 JWT，不可能要求先认证）。
         if path == "/" or path.endswith("/health") or path.endswith("/health/deep") or path == "/api/auth/token":
             return await call_next(request)
 
-        # 工具型只读/刷新端点（技能目录本就经 DeerFlow 网关公开，无敏感写操作）
-        if path == "/api/skills/deerflow" or path == "/api/skills/refresh":
+        # 2) 上游网关子路径：由各自上游鉴权（架构性豁免，非弱鉴权）。
+        if any(path == p or path.startswith(p + "/") for p in self._UPSTREAM_PREFIXES):
             return await call_next(request)
 
-        # 1) 团队级: OAuth2/JWT Bearer（与 API-Key 并存）
+        # 3) API 文档与 OpenAPI Schema：
+        #    开发环境放开便于本地调试；生产环境禁止匿名浏览接口面，必须走下方统一鉴权。
+        is_docs = path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi.json")
+        if is_docs and config.APP_ENV != "production":
+            return await call_next(request)
+
+        # 4) 技能目录/刷新端点（原 G4 免认证豁免已收回）：始终要求认证，
+        #    禁止匿名获取内部能力清单或触发服务端重索引。落入下方统一鉴权。
+
+        # 5) 统一鉴权：团队级 Bearer(JWT) 或个人级静态 API-Key
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             sub = decode_access_token(auth[7:].strip())
@@ -225,10 +233,10 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # 2) 个人级: 静态 API-Key
+        # 个人级: 静态 API-Key（恒定时间比较，避免计时侧信道）
         if config.API_KEY:
             api_key = request.headers.get(API_KEY_NAME) or request.query_params.get(API_KEY_NAME)
-            if api_key != config.API_KEY:
+            if not hmac.compare_digest(api_key or "", config.API_KEY or ""):
                 logger.warning(f"Unauthorized access attempt to {path} from {request.client.host}")
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
