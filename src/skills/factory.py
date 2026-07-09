@@ -123,26 +123,12 @@ class TemplateSkill(Skill):
         return True
     
     def _apply_validation_rule(self, rule: str, result: Dict[str, Any]) -> bool:
-        import re
-        
+        from .safe_eval import safe_eval_expr
+
         safe_vars = {"result": result}
-        allowed_patterns = [
-            r'^result\["[^"]+"\]\s*(==|!=|<|>|<=|>=)\s*["\w]+$',
-            r'^result\["[^"]+"\]\s*and\s*result\["[^"]+"\]$',
-            r'^result\["[^"]+"\]\s*or\s*result\["[^"]+"\]$',
-            r'^not\s+result\["[^"]+"\]$',
-            r'^len\(result\["[^"]+"\]\)\s*(==|!=|<|>|<=|>=)\s*\d+$',
-            r'^result\["[^"]+"\]\s*is\s+(None|not\s+None)$',
-        ]
-        
-        for pattern in allowed_patterns:
-            if re.match(pattern, rule):
-                try:
-                    return bool(eval(rule, {}, safe_vars))
-                except Exception:
-                    return False
-        
-        return False
+        # 用受限 AST 求值器替代 eval: 仅允许 result[...] 比较 / 布尔 / len() / None 判定,
+        # 杜绝 eval 代码注入 (无属性访问 / 无导入 / 无任意调用)。
+        return safe_eval_expr(rule, safe_vars)
 
 class SkillFactory:
     _instance = None

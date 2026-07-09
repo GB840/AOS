@@ -60,26 +60,12 @@ class SkillPipeline:
         }
 
 def _safe_eval_condition(condition: str, context: Dict[str, Any], results: Dict[str, Any]) -> bool:
+    from .safe_eval import safe_eval_expr
+
     safe_vars = {"context": context, "results": results}
-    allowed_patterns = [
-        r'^context\["[^"]+"\]\s*(==|!=|<|>|<=|>=)\s*["\w]+$',
-        r'^results\["[^"]+"\]\s*(==|!=|<|>|<=|>=)\s*["\w]+$',
-        r'^context\["[^"]+"\]\s*and\s*context\["[^"]+"\]$',
-        r'^context\["[^"]+"\]\s*or\s*context\["[^"]+"\]$',
-        r'^not\s+context\["[^"]+"\]$',
-        r'^len\(context\["[^"]+"\]\)\s*(==|!=|<|>|<=|>=)\s*\d+$',
-        r'^len\(results\["[^"]+"\]\)\s*(==|!=|<|>|<=|>=)\s*\d+$',
-    ]
-    
-    import re
-    for pattern in allowed_patterns:
-        if re.match(pattern, condition):
-            try:
-                return bool(eval(condition, {}, safe_vars))
-            except Exception:
-                return False
-    
-    return False
+    # 用受限 AST 求值器替代 eval: 仅允许 context/results[...] 比较 / 布尔 / len() / None 判定,
+    # 杜绝 eval 代码注入 (无属性访问 / 无导入 / 无任意调用)。
+    return safe_eval_expr(condition, safe_vars)
 
 class SkillCompositionEngine:
     def __init__(self, registry: Optional[SkillRegistry] = None):
