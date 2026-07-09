@@ -9,8 +9,21 @@ from starlette.requests import Request
 from starlette.responses import Response, JSONResponse
 
 from utils.config import config
+from utils.keystore import load_jwt_keys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# JWT 非对称密钥 (RS256) 缓存：首次使用时解析，避免每次请求重复读盘。
+_jwt_key_cache: tuple[str, str] | None = None
+
+
+def _get_jwt_keys() -> tuple[str, str]:
+    """返回 (private_pem, public_pem)，用于 RS256 签名/验签。"""
+    global _jwt_key_cache
+    if _jwt_key_cache is None:
+        _jwt_key_cache = load_jwt_keys(base_dir=Path(config.BASE_DIR), app_env=config.APP_ENV)
+    return _jwt_key_cache
 
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
@@ -121,27 +134,33 @@ def _import_jwt():
 
 
 def create_access_token(subject: str, expires_min: Optional[int] = None) -> str:
-    """签发 JWT (HS256). 团队级多用户/SSO 接入时换实现(如 RS256/OIDC)即可。"""
+    """签发 JWT (RS256, 私钥签名). 团队级多用户/SSO 接入时仅换密钥管理即可。"""
     jwt = _import_jwt()
+    private_pem, _public_pem = _get_jwt_keys()
     now = datetime.now()
     exp = now + timedelta(minutes=expires_min or config.AUTH_JWT_EXPIRE_MINUTES)
     payload = {"sub": subject, "iat": int(now.timestamp()), "exp": int(exp.timestamp())}
-    return jwt.encode(payload, config.AUTH_JWT_SECRET, algorithm=config.AUTH_JWT_ALGORITHM)
+    return jwt.encode(payload, private_pem, algorithm=config.AUTH_JWT_ALGORITHM)
 
 
 def decode_access_token(token: str) -> Optional[str]:
     """校验 JWT，返回 subject；无效/过期返回 None。"""
     try:
         jwt = _import_jwt()
-        payload = jwt.decode(token, config.AUTH_JWT_SECRET, algorithms=[config.AUTH_JWT_ALGORITHM])
+        _private_pem, public_pem = _get_jwt_keys()
+        payload = jwt.decode(token, public_pem, algorithms=[config.AUTH_JWT_ALGORITHM])
         return payload.get("sub")
     except Exception:
         return None
 
 
 def authenticate_user(username: str, password: str) -> bool:
-    """校验用户凭据（团队级可替换为 DB/OIDC/LDAP，接口不变）。"""
-    return username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD
+    """校验用户凭据（恒定时间比较，避免计时侧信道）。团队级可替换为 DB/OIDC/LDAP。"""
+    import hmac
+
+    user_ok = hmac.compare_digest(username or "", config.ADMIN_USERNAME or "")
+    pass_ok = hmac.compare_digest(password or "", config.ADMIN_PASSWORD or "")
+    return user_ok and pass_ok
 
 
 async def get_api_key(

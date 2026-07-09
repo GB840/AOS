@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import field_validator, Field
+from pydantic import field_validator, Field, model_validator
 from typing import Optional
 from pathlib import Path
 import os
@@ -22,12 +22,16 @@ class Config(BaseSettings):
     ALLOWED_ORIGINS: str = "http://localhost:8501,http://localhost:8000"
     MAX_REQUESTS_PER_MINUTE: int = 100
 
-    # ===== 团队级认证 (OAuth2/JWT) —— 与 API-Key 并存，升级换实现、接口不变 =====
-    AUTH_JWT_SECRET: str = Field(default="change-me-in-prod", env="AOS_AUTH_JWT_SECRET")
-    AUTH_JWT_ALGORITHM: str = "HS256"
+    # ===== 团队级认证 (OAuth2/JWT, RS256 非对称) —— 与 API-Key 并存 =====
+    # 私钥签名 / 公钥验签；密钥经 utils.keystore 解析 (env -> .secrets/jwt -> 开发期自动生成)。
+    # 不再使用 HS256 对称密钥（已知密钥可离线伪造令牌）。
+    AUTH_JWT_PRIVATE_KEY: Optional[str] = Field(default=None, env="AOS_JWT_PRIVATE_KEY")
+    AUTH_JWT_PUBLIC_KEY: Optional[str] = Field(default=None, env="AOS_JWT_PUBLIC_KEY")
+    AUTH_JWT_ALGORITHM: str = "RS256"
     AUTH_JWT_EXPIRE_MINUTES: int = 480  # 8h
     ADMIN_USERNAME: str = Field(default="admin", env="AOS_ADMIN_USERNAME")
-    ADMIN_PASSWORD: str = Field(default="admin", env="AOS_ADMIN_PASSWORD")
+    # 不再提供 "admin" 弱默认；生产环境必须设置，开发环境自动生成强随机口令落盘 .secrets/
+    ADMIN_PASSWORD: Optional[str] = Field(default=None, env="AOS_ADMIN_PASSWORD")
 
     # ===== 状态后端 (团队级可插拔 seam: sqlite(个人) -> postgres(团队/公司)) =====
     STATE_BACKEND: str = Field(default="sqlite", env="AOS_STATE_BACKEND")  # sqlite | postgres
@@ -142,9 +146,10 @@ class Config(BaseSettings):
     DEERFLOW_SOURCE_PATH: str = str(_BASE_DIR / "external" / "deer-flow" / "backend")
     DEERFLOW_CONFIG_PATH: str = str(_BASE_DIR / "external" / "deer-flow" / "config.example.yaml")
     DEERFLOW_HARNESS_PATH: str = str(_BASE_DIR / "external" / "deer-flow" / "backend" / "packages" / "harness")
-    # DeerFlow 网关管理员凭证: 从环境变量读取, 默认保留原本地值(不破坏现有行为)
+    # DeerFlow 网关管理员凭证: 从环境变量读取。
+    # 不再提供 "aos123456" 弱默认；生产环境必须设置，开发环境自动生成强随机口令。
     DEERFLOW_ADMIN_USER: str = Field(default="admin", env="AOS_DEERFLOW_ADMIN_USER")
-    DEERFLOW_ADMIN_PASSWORD: str = Field(default="aos123456", env="AOS_DEERFLOW_ADMIN_PASSWORD")
+    DEERFLOW_ADMIN_PASSWORD: Optional[str] = Field(default=None, env="AOS_DEERFLOW_ADMIN_PASSWORD")
 
     MAX_WORKERS: int = 4
     TASK_TIMEOUT: int = 300
@@ -193,6 +198,72 @@ class Config(BaseSettings):
         if not path.is_absolute():
             path = _BASE_DIR / path
         return str(path)
+
+    @model_validator(mode="after")
+    def _enforce_secret_policy(self):
+        """凭据安全策略：生产 fail-fast，开发自动生成强随机值并落盘 .secrets/。
+
+        彻底移除此前代码中的弱默认口令（admin/admin、aos123456、change-me-in-prod、
+        空 POSTGRES 密码）与 HS256 对称密钥。生产环境缺失任一敏感凭据即启动失败，
+        杜绝"弱默认悄悄上线"；开发环境自动生成并持久化，本地一键启动且不暴露弱口令。
+        """
+        import logging as _logging
+        from utils.keystore import (
+            load_jwt_keys,
+            generate_strong_password,
+            write_secret_file,
+        )
+
+        _log = _logging.getLogger(__name__)
+        _secrets = Path(self.BASE_DIR) / ".secrets"
+        _is_prod = self.APP_ENV == "production"
+
+        # --- JWT 非对称密钥 (RS256) ---
+        try:
+            load_jwt_keys(base_dir=Path(self.BASE_DIR), app_env=self.APP_ENV)
+        except Exception as exc:  # noqa: BLE001
+            if _is_prod:
+                raise ValueError(
+                    "生产环境缺少 JWT 密钥对：请设置 AOS_JWT_PRIVATE_KEY/AOS_JWT_PUBLIC_KEY，"
+                    "或在 .secrets/jwt/{private,public}.pem 放置 RSA 密钥。"
+                ) from exc
+            _log.warning("JWT 密钥自动准备失败（开发环境放宽）: %s", exc)
+
+        # --- 管理员口令 ---
+        if not self.ADMIN_PASSWORD:
+            if _is_prod:
+                raise ValueError("生产环境必须设置 AOS_ADMIN_PASSWORD，禁止弱默认口令。")
+            _pw = generate_strong_password(24)
+            self.ADMIN_PASSWORD = _pw
+            write_secret_file(_secrets / "admin_password", _pw)
+            _log.warning(
+                "⚠️ 未设置 AOS_ADMIN_PASSWORD，已自动生成随机口令并写入 .secrets/admin_password（请勿提交）。"
+            )
+
+        # --- DeerFlow 网关管理员口令 ---
+        if not self.DEERFLOW_ADMIN_PASSWORD:
+            if _is_prod:
+                raise ValueError("生产环境必须设置 AOS_DEERFLOW_ADMIN_PASSWORD，禁止弱默认口令。")
+            _pw = generate_strong_password(24)
+            self.DEERFLOW_ADMIN_PASSWORD = _pw
+            write_secret_file(_secrets / "deerflow_admin_password", _pw)
+            _log.warning(
+                "⚠️ 未设置 AOS_DEERFLOW_ADMIN_PASSWORD，已自动生成随机口令并写入 "
+                ".secrets/deerflow_admin_password。若 DeerFlow 网关开启了鉴权，请将其管理员口令设为此值。"
+            )
+
+        # --- Postgres 口令（仅团队/公司级 postgres 后端需要）---
+        if self.STATE_BACKEND == "postgres" and not self.POSTGRES_PASSWORD:
+            if _is_prod:
+                raise ValueError("生产环境使用 postgres 后端必须设置 AOS_POSTGRES_PASSWORD。")
+            _pw = generate_strong_password(24)
+            self.POSTGRES_PASSWORD = _pw
+            write_secret_file(_secrets / "postgres_password", _pw)
+            _log.warning(
+                "⚠️ 未设置 AOS_POSTGRES_PASSWORD，已自动生成随机口令并写入 .secrets/postgres_password。"
+            )
+
+        return self
 
     class Config:
         env_file = str(_BASE_DIR / ".env")

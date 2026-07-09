@@ -88,10 +88,17 @@ class DeerFlowGatewayClient:
         """
         try:
             from utils.config import config as _cfg
-            user = getattr(_cfg, "DEERFLOW_ADMIN_USER", "admin") or "admin"
-            pwd = getattr(_cfg, "DEERFLOW_ADMIN_PASSWORD", "aos123456") or "aos123456"
-        except Exception:
-            user, pwd = "admin", "aos123456"
+            user = getattr(_cfg, "DEERFLOW_ADMIN_USER", None) or "admin"
+            pwd = getattr(_cfg, "DEERFLOW_ADMIN_PASSWORD", None)
+            if not pwd:
+                logger.warning(
+                    "DEERFLOW_ADMIN_PASSWORD 未配置，跳过 DeerFlow 网关登录"
+                    "（依赖网关鉴权关闭，或将 AOS_DEERFLOW_ADMIN_PASSWORD 设为网关实际口令）。"
+                )
+                return False
+        except Exception as e:
+            logger.debug("读取 DeerFlow 凭证失败: %s", e)
+            return False
         try:
             session = self._ensure_session()
             resp = session.post(

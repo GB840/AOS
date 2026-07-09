@@ -69,6 +69,7 @@ coverage.xml
 .env.*
 !.env.example
 cookies.txt
+.secrets/
 
 # =============================================================================
 # Data & Generated Files
