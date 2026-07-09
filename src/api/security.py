@@ -187,7 +187,7 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         if path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi.json"):
             return await call_next(request)
 
-        if path == "/" or path.endswith("/health") or path == "/api/auth/token":
+        if path == "/" or path.endswith("/health") or path.endswith("/health/deep") or path == "/api/auth/token":
             return await call_next(request)
 
         # 1) 团队级: OAuth2/JWT Bearer（与 API-Key 并存）
@@ -277,37 +277,44 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 定期清理过期记录
         self._cleanup_expired_clients()
         
+        # ⚠️ 关键并发正确性: threading.Lock 只保护限流簿记 (deque 读写),
+        # 绝不能跨 `await call_next(request)` 持锁。此前把 await 放在 with 块内,
+        # 单 worker uvicorn 下会死锁: 请求A持锁 await 长耗时 brain.chat 期间,
+        # 请求B(如 /health 轮询)进入 dispatch 执行 `with self._lock` 会同步阻塞
+        # 事件循环线程 -> 事件循环无法回去跑A的续体释放锁 -> 全进程冻结。
+        # 修法: 锁内只做记账并算出 remaining, await 在锁外执行。
         with self._lock:
             client_requests = self._clients[client_ip]
-            
+
             # 移除超出时间窗口的旧请求
             while client_requests and now - client_requests[0] > timedelta(seconds=self.time_window):
                 client_requests.popleft()
-            
+
             # 检查是否超限
             if len(client_requests) >= self.max_requests:
                 logger.warning(f"速率限制超限: {client_ip} ({len(client_requests)}/{self.max_requests})")
+                reset = int((now - client_requests[0]).total_seconds()) if client_requests else self.time_window
                 return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     headers={
                         "Retry-After": str(self.time_window),
                         "X-RateLimit-Limit": str(self.max_requests),
                         "X-RateLimit-Remaining": "0",
-                        "X-RateLimit-Reset": str(int((now - client_requests[0]).total_seconds()))
+                        "X-RateLimit-Reset": str(reset),
                     },
                     content={
                         "error": "Too Many Requests",
                         "detail": f"Rate limit exceeded. Maximum {self.max_requests} requests per {self.time_window} seconds.",
-                        "retry_after": self.time_window
+                        "retry_after": self.time_window,
                     }
                 )
-            
+
             # 记录新请求
             client_requests.append(now)
-            
-            # 添加速率限制信息到响应头
-            response = await call_next(request)
-            response.headers["X-RateLimit-Limit"] = str(self.max_requests)
-            response.headers["X-RateLimit-Remaining"] = str(self.max_requests - len(client_requests))
-            
-            return response
+            remaining = self.max_requests - len(client_requests)
+
+        # await 必须在锁外, 避免跨 await 持锁导致事件循环死锁
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(self.max_requests)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        return response

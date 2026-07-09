@@ -37,7 +37,9 @@ concurrent-log-handler==0.9.29
 
 # MCP: main.py 顶层 `from mcp import MCPMessage` 为硬依赖。
 # 此前仅靠 AOS_EXTRA_SITE 从 default venv 借入（脆弱耦合），现显式声明使 aos venv 自洽。
-mcp>=1.28.0
+# 注意：必须与 ag2 的 mcp 引脚保持一致（ag2==0.14.0 锁 mcp==1.28.0），
+# 否则 `pip install -r requirements.txt` 因 mcp 版本冲突而 ResolutionImpossible 失败。
+mcp==1.28.0
 
 # AG2 (AutoGen 社区分叉, MIT): /api/groupchat 生产路径驱动真实多智能体编排。
 ag2==0.14.0
@@ -46,13 +48,18 @@ ag2==0.14.0
 litellm>=1.91.0
 
 # PyJWT: /api/auth/token 签发 JWT（安全层 Bearer 认证）。
-PyJWT==2.8.0
+# 下限由 mcp==1.28.0 决定：mcp 要求 pyjwt[crypto]>=2.10.1，故此处 >=2.10.1。
+# AOS 仅用 jwt.encode/decode（2.x API 稳定），取最新 2.x 即可。
+PyJWT>=2.10.1
 
 # psycopg2: PostgresStateBackend 可插拔状态后端（STATE_BACKEND=postgres 时启用）。
 psycopg2-binary==2.9.12
 
-# 智谱 SDK: litellm 走 zhipu 时的 OpenAI 兼容透传（start_all.sh 已尝试安装）。
-zhipuai>=2.1.5
+# 智谱 SDK：litellm 走 zhipu 时走 OpenAI 兼容透传，本身不需要 zhipuai 包
+# （AOS src 中无任何 `import zhipuai`）。且 zhipuai 元数据锁 pyjwt<2.9.0，
+# 与 mcp 要求的 pyjwt>=2.10.1 硬冲突，会令 `pip install -r` ResolutionImpossible。
+# 故不列入必需依赖；如需独立使用 zhipuai SDK，请单独 `pip install --no-deps zhipuai`。
+# zhipuai>=2.1.5  # 取消注释仅作版本参考，勿与 mcp 同装
 
 # ============================================================
 # 可选基础设施平面（装到 AOS_EXTRA_SITE 指向的 venv，默认 default）

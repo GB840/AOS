@@ -1082,39 +1082,66 @@ class UnifiedBrain:
     # ========================================================================
     #  REAL DeerFlow Integration (ByteDance v2.1.0)
     # ========================================================================
+    class _InertDeerFlow:
+        """Last-resort stub so UnifiedBrain always exposes a ``.deerflow`` with a
+        ``register_handler`` method. Only used when neither the REAL gateway nor
+        the local scheduler fallback can initialise -- keeps AOS from hard-crashing
+        at startup (main.py registers handlers on ``brain.deerflow``)."""
+        real_deerflow = False
+
+        def register_handler(self, name, handler):
+            logger.warning("DeerFlow inert stub: ignoring handler registration for %s", name)
+
+        def __getattr__(self, name):
+            def _noop(*_args, **_kwargs):
+                return None
+            return _noop
+
     def _init_real_deerflow(self):
-        """Initialize REAL DeerFlow by connecting to gateway on port 2026 (standard DeerFlow port)."""
+        """Initialize REAL DeerFlow by connecting to gateway on port 2026.
+
+        Guarantees ``self.deerflow`` is always assigned: REAL gateway client on
+        success, the local scheduler fallback on any connectivity/import error,
+        and an inert stub only as a last resort. This prevents a hard AttributeError
+        in app startup (main.py registers handlers on ``brain.deerflow``).
+        """
         import requests
-        
+
         try:
             response = requests.get("http://localhost:2026/health", timeout=3)
             if response.status_code == 200:
                 logger.info("✅ DeerFlow gateway detected at http://localhost:2026")
-                
-                self.deerflow = DeerFlowGatewayClient(base_url="http://localhost:2026")
-                logger.info(f"✅ REAL DeerFlow gateway client initialized")
-                
-                models = self.deerflow.list_models()
-                # 统一接口契约处理：支持列表和字典两种格式
-                if isinstance(models, dict):
-                    model_list = models.get("models", [])
-                elif isinstance(models, list):
-                    model_list = models
-                else:
-                    logger.warning(f"未知的models响应格式: {type(models)}")
-                    model_list = []
-                
-                model_names = [m.get("name", "") if isinstance(m, dict) else str(m) for m in model_list]
-                logger.info(f"   - Available models: {model_names}")
-                
-                return
+                try:
+                    self.deerflow = DeerFlowGatewayClient(base_url="http://localhost:2026")
+                    logger.info("✅ REAL DeerFlow gateway client initialized")
+                    models = self.deerflow.list_models()
+                    # 统一接口契约处理：支持列表和字典两种格式
+                    if isinstance(models, dict):
+                        model_list = models.get("models", [])
+                    elif isinstance(models, list):
+                        model_list = models
+                    else:
+                        logger.warning(f"未知的models响应格式: {type(models)}")
+                        model_list = []
+                    model_names = [m.get("name", "") if isinstance(m, dict) else str(m) for m in model_list]
+                    logger.info(f"   - Available models: {model_names}")
+                    return
+                except Exception as e:
+                    logger.warning(f"⚠️ REAL DeerFlow client init incomplete, will fall back: {e}")
         except Exception as e:
             logger.warning(f"⚠️ DeerFlow gateway not available: {e}")
-        
-        logger.info("⚠️ Falling back to AOS DeerFlow implementation")
-        from deerflow.scheduler import DeerFlowScheduler
-        self.deerflow = DeerFlowScheduler(memory=self.memory)
-        self.deerflow.real_deerflow = False
+
+        # FALLBACK -- guarded so a failure here can never leave self.deerflow unset.
+        try:
+            logger.info("⚠️ Falling back to AOS DeerFlow implementation")
+            from deerflow.scheduler import DeerFlowScheduler
+            self.deerflow = DeerFlowScheduler(memory=self.memory)
+            self.deerflow.real_deerflow = False
+            return
+        except Exception as e:
+            logger.error(f"❌ DeerFlow FALLBACK also failed: {e}; using inert stub to keep AOS alive")
+
+        self.deerflow = _InertDeerFlow()
 
     # ========================================================================
     #  Execution Layer (执行层)

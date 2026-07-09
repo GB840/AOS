@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import asyncio
 
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -178,13 +179,19 @@ async def startup_event():
     for name, info in h["components"].items():
         logger.info("  %s: %s", name, info.get("status") or info.get("type", "?"))
 
-    # Register chat handler
-    brain.deerflow.register_handler("chat",
-        lambda d: brain.hermes.chat(message=d.get("message", ""), session_id=d.get("session_id")))
+    # Register chat/skill handlers on the deerflow engine. Guarded: in a degraded
+    # start the engine may be the inert stub, in which case we skip silently rather
+    # than crash startup (brain._init_real_deerflow now always assigns .deerflow).
+    df_engine = getattr(brain, "deerflow", None)
+    if df_engine is not None and hasattr(df_engine, "register_handler"):
+        df_engine.register_handler("chat",
+            lambda d: brain.hermes.chat(message=d.get("message", ""), session_id=d.get("session_id")))
 
-    # Register skill handlers
-    for sn in ["skill-creator","find-skills","superpowers","j-stack","frontend-design","ui-ux-pro-max","duckduckgo-search"]:
-        brain.deerflow.register_handler("skill:"+sn, (lambda n: lambda d: brain.hermes.execute_skill(n, d))(sn))
+        # Register skill handlers
+        for sn in ["skill-creator","find-skills","superpowers","j-stack","frontend-design","ui-ux-pro-max","duckduckgo-search"]:
+            df_engine.register_handler("skill:"+sn, (lambda n: lambda d: brain.hermes.execute_skill(n, d))(sn))
+    else:
+        logger.warning("deerflow engine unavailable; chat/skill handlers not registered")
 
     logger.info("=== AOS v5.0 ready ===")
 
@@ -253,9 +260,32 @@ async def info():
         },
     }
 
+# 深检结果缓存 (避免 /health/deep 每次都对 fabric 各引擎做网络探测)
+_HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
+_HEALTH_TTL = 5.0
+
+
 @app.get("/health")
 async def health_check():
-    return brain.health_check()
+    """轻量存活探针 (liveness).
+
+    生产铁律: 此端点必须秒回, 绝不做组件深检 / 网络探测 / 同步阻塞调用。
+    supervisor 只凭本端点判断进程存活, 因此即便聊天占满 worker,
+    事件循环仍能瞬间应答, 不会被误杀。深度组件状态见 /health/deep。
+    """
+    return {"status": "alive", "service": "aos", "ts": time.time()}
+
+
+@app.get("/health/deep")
+async def health_check_deep():
+    """完整 9 组件健康 (readiness). 在线程池执行 + 短缓存, 不阻塞事件循环。"""
+    now = time.time()
+    if _HEALTH_CACHE["data"] is not None and (now - _HEALTH_CACHE["ts"]) < _HEALTH_TTL:
+        return _HEALTH_CACHE["data"]
+    data = await asyncio.to_thread(brain.health_check)
+    _HEALTH_CACHE["data"] = data
+    _HEALTH_CACHE["ts"] = now
+    return data
 
 
 # ---- 团队级认证 (OAuth2/JWT, 与 API-Key 并存) ----
@@ -304,13 +334,20 @@ async def chat(request: ChatRequest):
         # 导致 evolution_log 双写 (此前 /api/chat 与 brain.chat() 各调一次)。
         meta_decision = None
         try:
-            meta_decision = brain.meta_orchestrator.route_intent(
+            # Run the (synchronous, potentially long) governance + chat in a
+            # worker thread so the event loop stays free to serve /health.
+            # Without this, a single blocking chat would stall the only uvicorn
+            # worker, /health would time out, and the supervisor would kill AOS
+            # mid-request (taking the whole API down on one chat).
+            meta_decision = await asyncio.to_thread(
+                brain.meta_orchestrator.route_intent,
                 intent=request.message, user_id="chat",
                 trace_id=request.session_id or "")
         except Exception as e:  # pragma: no cover - 治理钩子绝不阻断主流程
             logger.debug("meta governance hook skipped: %s", e)
-        result = brain.chat(message=request.message, session_id=request.session_id,
-                            meta_decision=meta_decision)
+        result = await asyncio.to_thread(
+            brain.chat, message=request.message, session_id=request.session_id,
+            meta_decision=meta_decision)
         if isinstance(result, dict) and meta_decision:
             result["meta"] = {
                 "layer": meta_decision.get("layer"),
