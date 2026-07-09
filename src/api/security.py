@@ -32,36 +32,32 @@ api_key_query = APIKeyQuery(name=API_KEY_NAME, auto_error=False)
 
 
 class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
-    """
-    HTTPS强制重定向中间件
-    
-    在生产环境强制使用HTTPS，将HTTP请求重定向到HTTPS
-    """
-    
+    """生产环境强制 HTTPS（经反向代理终止 TLS 时也能正确判定）。"""
+
     def __init__(self, app, https_port: int = 443):
         super().__init__(app)
         self.https_port = https_port
-    
+
+    @staticmethod
+    def _is_https(request: Request) -> bool:
+        # 反向代理（nginx 等）终止 TLS 后，原始协议经 X-Forwarded-Proto/Scheme 透传；
+        # 否则 request.url.scheme 永远是 http，会导致误判/重定向环。
+        fwd = (request.headers.get("X-Forwarded-Proto") or request.headers.get("X-Forwarded-Scheme") or "").lower()
+        return fwd == "https" or request.url.scheme == "https"
+
     async def dispatch(self, request: Request, call_next) -> Response:
-        # 检查是否已经是HTTPS
-        if request.url.scheme == "https":
+        if self._is_https(request):
             return await call_next(request)
-        
-        # 在生产环境强制重定向到HTTPS
+
         if config.APP_ENV == "production":
-            # 构建HTTPS URL
             https_url = request.url.replace(
                 scheme="https",
-                netloc=f"{request.url.hostname}:{self.https_port}" if self.https_port != 443 else request.url.hostname
+                netloc=f"{request.url.hostname}:{self.https_port}" if self.https_port != 443 else request.url.hostname,
             )
-            
-            logger.warning(f"HTTP请求重定向到HTTPS: {request.url} -> {https_url}")
-            return Response(
-                status_code=301,
-                headers={"Location": str(https_url)}
-            )
-        
-        # 开发环境允许HTTP
+            logger.warning("HTTP 请求重定向到 HTTPS: %s -> %s", request.url, https_url)
+            return Response(status_code=301, headers={"Location": str(https_url)})
+
+        # 开发环境允许 HTTP
         return await call_next(request)
 
 
