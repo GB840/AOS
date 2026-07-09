@@ -8,10 +8,14 @@ AOS v5.0 — DevOps 流水线 (Pipeline)
   - 结果可经 on_result 回调持久化 (如写 DB/事件), 默认仅返回汇总。
 """
 
+import logging
+import shlex
 import subprocess
 import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class Pipeline:
@@ -21,8 +25,9 @@ class Pipeline:
         self.steps = steps or []
         self.on_result = on_result
 
-    def add(self, name: str, run: Any, on_fail: str = "abort") -> "Pipeline":
-        self.steps.append({"name": name, "run": run, "on_fail": on_fail})
+    def add(self, name: str, run: Any, on_fail: str = "abort", shell: bool = False) -> "Pipeline":
+        # shell=True 为高危显式 opt-in: 仅限可信静态命令 (禁止拼接不可信输入)。
+        self.steps.append({"name": name, "run": run, "on_fail": on_fail, "shell": shell})
         return self
 
     def _execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
@@ -30,7 +35,27 @@ class Pipeline:
         start = time.time()
         try:
             if isinstance(run, str):
-                proc = subprocess.run(run, shell=True, capture_output=True, text=True, timeout=300)
+                # 安全默认: 关闭 shell, 用 shlex 拆分为 argv, 消除命令注入
+                # (; | && $() `` 等元字符不再被 shell 解释)。
+                # 仅当 step 显式声明 shell=True (高信任、确需管道/重定向/环境变量展开)
+                # 才回退到 shell=True —— 这属于高危操作, 仅限可信静态命令。
+                use_shell = bool(step.get("shell", False))
+                if use_shell:
+                    argv: Any = run
+                    logger.warning(
+                        "Pipeline 步骤 %r 以 shell=True 运行命令, 属高危操作, "
+                        "仅限可信静态命令 (禁止拼接不可信输入)", step.get("name")
+                    )
+                else:
+                    try:
+                        argv = shlex.split(run)
+                    except ValueError as ve:
+                        return {
+                            "name": step["name"], "ok": False,
+                            "output": f"命令解析失败 (非法引号/语法): {ve}",
+                            "duration_ms": 0.0, "on_fail": step.get("on_fail", "abort"),
+                        }
+                proc = subprocess.run(argv, shell=use_shell, capture_output=True, text=True, timeout=300)
                 ok = proc.returncode == 0
                 output = proc.stdout + proc.stderr
             elif callable(run):
