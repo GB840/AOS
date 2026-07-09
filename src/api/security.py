@@ -190,6 +190,10 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         if path == "/" or path.endswith("/health") or path.endswith("/health/deep") or path == "/api/auth/token":
             return await call_next(request)
 
+        # 工具型只读/刷新端点（技能目录本就经 DeerFlow 网关公开，无敏感写操作）
+        if path == "/api/skills/deerflow" or path == "/api/skills/refresh":
+            return await call_next(request)
+
         # 1) 团队级: OAuth2/JWT Bearer（与 API-Key 并存）
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):

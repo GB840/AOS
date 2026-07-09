@@ -21,6 +21,8 @@ from typing import Dict, List, Optional, Any, Generator
 
 from utils.config import config
 
+from deerflow.skill_provider import DeerFlowSkillProvider
+
 logger = logging.getLogger(__name__)
 
 
@@ -1400,6 +1402,15 @@ class UnifiedBrain:
             except Exception as e:  # pragma: no cover - 元调度失败回退原有路由
                 logger.warning("meta_orchestrator 路由失败, 回退 task_classifier: %s", e)
 
+        # ---- 实时技能路由: DeerFlow 2.0 实时技能目录 (skills/public + 用户 custom) ----
+        # 仅在 DeerFlow 真实且匹配度足够时, 把 L1/L2 层(通用/角色)的技能型任务交给
+        # DeerFlow agent, 由其自主激活对应 skill (渐进式注入)。其余层与未命中均回落
+        # 原 L1-L5 路由, 不破坏现有行为。
+        if level.value in ("L1", "L2") and getattr(self.deerflow, "real_deerflow", False):
+            skill_hit = self._match_deerflow_skill(message)
+            if skill_hit:
+                return self._route_deerflow_skill(message, session_id, skill_name=skill_hit, **kwargs)
+
         logger.info(f"Task classified: {level.value} - {channel.value}")
 
         try:
@@ -1594,6 +1605,62 @@ class UnifiedBrain:
             "response": project_summary,
             "subtask_results": results,
         }
+
+    # ------------------------------------------------------------------
+    #  DeerFlow 2.0 实时技能路由 (thin-seam)
+    # ------------------------------------------------------------------
+    @property
+    def deerflow_skill_provider(self) -> DeerFlowSkillProvider:
+        """AOS 侧 DeerFlow 实时技能目录 (懒构建, 延迟解析 self.deerflow)。"""
+        prov = getattr(self, "_skill_provider", None)
+        if prov is None:
+            # 用 lambda 延迟解析, 避免捕获到初始化早期的 inert 客户端
+            prov = DeerFlowSkillProvider(fetch_skills=lambda: self.deerflow.list_skills())
+            self._skill_provider = prov
+        return prov
+
+    def _match_deerflow_skill(self, message: str) -> Optional[str]:
+        """匹配用户消息到 DeerFlow 实时技能名; 无匹配返回 None (调用方回落)。"""
+        try:
+            return self.deerflow_skill_provider.match(message)
+        except Exception as e:  # pragma: no cover - 匹配失败不影响主路由
+            logger.warning("DeerFlow 实时技能匹配失败, 回落: %s", e)
+            return None
+
+    def _route_deerflow_skill(self, message: str, session_id: str = None,
+                              skill_name: str = None, **kwargs) -> Dict[str, Any]:
+        """L6 - DeerFlow 技能通道: 把任务交给 DeerFlow agent 自主激活匹配到的 skill。
+
+        DeerFlow 2.0 的 agent 在收到任务时会从其实时技能目录 (<skill_index>) 中
+        自主发现并渐进式注入对应 skill, 因此只需把原始消息交给它即可。
+        任何异常/空返回都回落 L1, 保证不阻断服务。
+        """
+        try:
+            answer = self.deerflow.run(message, thread_id=session_id, **kwargs)
+        except Exception as e:
+            logger.warning("DeerFlow 技能执行失败, 回落 L1: %s", e)
+            return self._route_l1(message, session_id, **kwargs)
+        if not answer or not str(answer).strip():
+            logger.warning("DeerFlow 技能返回空, 回落 L1")
+            return self._route_l1(message, session_id, **kwargs)
+        return {
+            "success": True,
+            "response": answer,
+            "level": "L6",
+            "channel": "DeerFlow技能",
+            "backend": "deerflow",
+            "skill": skill_name,
+            "session_id": session_id,
+        }
+
+    def refresh_deerflow_skills(self) -> int:
+        """强制重拉 DeerFlow 实时技能目录 (热加载往 skills/custom 丢的自定义技能)。"""
+        try:
+            skills = self.deerflow_skill_provider.refresh()
+            return len(skills)
+        except Exception as e:  # pragma: no cover
+            logger.warning("refresh_deerflow_skills 失败: %s", e)
+            return 0
 
     def _route_l3_5(self, message: str, session_id: str = None,
                     meta_decision: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:

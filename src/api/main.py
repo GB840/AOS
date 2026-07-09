@@ -607,6 +607,21 @@ async def execute_skill_endpoint(name: str, request: SkillExecuteRequest):
         raise HTTPException(status_code=400, detail=result.get("error", "Skill execution failed"))
     return result
 
+# ---- DeerFlow 2.0 实时技能目录 (thin-seam) ----
+@app.get("/api/skills/deerflow")
+async def list_deerflow_skills():
+    """列出 DeerFlow 网关实时技能目录 (skills/public + 用户 custom)。"""
+    try:
+        return brain.deerflow_skill_provider.as_dict()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"DeerFlow skill catalog unavailable: {e}")
+
+@app.post("/api/skills/refresh")
+async def refresh_deerflow_skills():
+    """强制重拉 DeerFlow 实时技能目录 (热加载往 skills/custom 丢的自定义技能)。"""
+    n = await asyncio.to_thread(brain.refresh_deerflow_skills)
+    return {"refreshed": n, "status": "ok"}
+
 
 # ---- Providers & Stats ----
 

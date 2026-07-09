@@ -128,6 +128,42 @@ OpenAI 兼容透传），已将 `zhipuai` 移出必需依赖、`PyJWT` 升到 `>
 - `/api/chat` 的 `route_intent` 与 `brain.chat` 均用 `asyncio.to_thread` 包裹，
   把同步重活移出事件循环，聊天期间 `/health` 延迟稳定在 `~20ms`。
 
+### 4.5 DeerFlow 实时技能路由（L6 通道 + 热加载）
+
+**能力**：聊天中属于"技能型"的任务（L1/L2 层）会先过 DeerFlow 2.0 的**实时技能
+目录**做匹配——命中则进入新增的 **L6 通道**，把消息交给 DeerFlow agent，由其
+根据渐进式加载机制自主激活对应 skill（如"做个PPT"→`ppt-generation`、"深度研究"
+→`deep-research`）。未命中或执行异常则回落 L1（Hermes）。
+
+**薄缝原则**（遵守铁律：不重造核心能力）：AOS 不重写技能扫描逻辑，直接复用
+DeerFlow 网关已暴露的 `GET /api/skills` 实时端点（DeerFlow 自身负责递归扫描
+`skills/public` 与 `users/{uid}/skills/custom`）。AOS 侧只做 30s TTL 缓存 +
+纯字符串匹配（`src/deerflow/skill_provider.py`）。
+
+**关键端点**：
+- `GET /api/skills/deerflow` —— 返回当前技能目录（`count` + `skills[]`，含
+  `category`/`enabled`）。已加入 `security.py` 公开路径豁免（与 `/health` 同处理），
+  不挡 401。
+- `POST /api/skills/refresh` —— 强制重拉网关（热加载自定义技能后调用）。
+- 路由实现：`src/core/brain.py` 的 `chat()` 在 `meta_orchestrator` 之后插入 L1/L2
+  实时技能匹配 → `_route_deerflow_skill()`（L6 通道）。
+
+**中文自然语言路由**：`SKILL_ALIASES` 覆盖 22 个 public 技能的中/英别名（如
+"PPT/演示/幻灯片"→`ppt-generation`、"论文/审稿"→`academic-paper-review`），
+命中即路由，纯闲聊（无任何技能词命中）得分 0 → 不路由 → 回落 L1。
+
+**自定义技能热加载（无需重启）**：
+1. 往用户自定义目录丢一个 `SKILL.md`：
+   `external/deer-flow/.deer-flow/users/default/skills/custom/<skill-name>/SKILL.md`
+   （frontmatter 需含 `name` / `description`）；
+2. `POST /api/skills/refresh` → 目录数量 +1，新技能以 `category:"custom"` 出现；
+3. 聊天中消息含该技能名（或名称 token），即被 L6 通道命中并交 DeerFlow 执行。
+   实测：`aos-meeting-minutes` 自定义技能写入后 refresh(22→23) 即被聊天路由命中。
+
+> 验证脚本（一次性，已清理）：`POST /api/chat` 带"做个PPT/深度研究/前端界面/审论文"
+> 均返回 `level:"L6"` + `skill:<name>` + `backend:"deerflow"`，且 DeerFlow 真实产出；
+> 闲聊返回 `level:"L1"`（Hermes），证明回落正确。
+
 ---
 
 ## 5. 排障：进程活着但请求全卡
