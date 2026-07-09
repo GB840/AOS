@@ -685,23 +685,60 @@ async def compliance_trace_stats():
     return brain.tracer.get_stats()
 
 # ---- Sandbox Operations ----
+# ⚠️ 安全：/api/sandbox/* 属高危 RCE 面（经 DeerFlow 本地 provider 在宿主机执行任意命令）。
+# 默认关闭（config.SANDBOX_API_ENABLED=False），仅受信任环境显式开启。开启前请确保
+# 已配置真正的隔离 provider（容器/WASM），而非在宿主机直接执行。
+
+class SandboxExecRequest(BaseModel):
+    command: str
+    thread_id: str = ""
+
 
 @app.post("/api/sandbox/acquire")
 async def sandbox_acquire(thread_id: str = ""):
+    if not config.SANDBOX_API_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Sandbox API disabled (AOS_SANDBOX_API_ENABLED=false). "
+                   "It executes commands on the host via the local provider; enable only in trusted environments.",
+        )
     sb = brain.deerflow.sandbox
     sid = sb.acquire()
     return {"sandbox_id": sid, "provider": type(sb._provider).__name__}
 
 @app.post("/api/sandbox/exec")
-async def sandbox_exec(command: str, thread_id: str = ""):
+async def sandbox_exec(req: SandboxExecRequest):
+    if not config.SANDBOX_API_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Sandbox exec API disabled (AOS_SANDBOX_API_ENABLED=false). "
+                   "It executes commands on the host via the local provider; enable only in trusted environments.",
+        )
+    command = req.command
+    if not command or not command.strip():
+        raise HTTPException(status_code=400, detail="command must be a non-empty string")
+    sb = None
     try:
-        result = brain.deerflow.create_sandbox(thread_id=thread_id or None).execute_command(command)
+        # 创建即执行即释放，避免每次请求泄漏一个未释放的沙箱。
+        sb = brain.deerflow.create_sandbox(thread_id=req.thread_id or None)
+        result = sb.execute_command(command)
         return {"success": True, "output": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if sb is not None:
+            try:
+                sb.release()
+            except Exception:
+                pass
 
 @app.post("/api/sandbox/release")
 async def sandbox_release():
+    if not config.SANDBOX_API_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Sandbox API disabled (AOS_SANDBOX_API_ENABLED=false).",
+        )
     brain.deerflow.sandbox.release()
     return {"success": True}
 

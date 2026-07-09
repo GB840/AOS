@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import field_validator, Field, model_validator
+from pydantic import field_validator, Field, model_validator, AliasChoices
 from typing import Optional
 from pathlib import Path
 import os
@@ -32,6 +32,15 @@ class Config(BaseSettings):
     ADMIN_USERNAME: str = Field(default="admin", env="AOS_ADMIN_USERNAME")
     # 不再提供 "admin" 弱默认；生产环境必须设置，开发环境自动生成强随机口令落盘 .secrets/
     ADMIN_PASSWORD: Optional[str] = Field(default=None, env="AOS_ADMIN_PASSWORD")
+
+    # 沙箱执行 HTTP API（/api/sandbox/*）默认关闭：该端点经 DeerFlow 本地 provider
+    # 在宿主机直接执行任意命令，属高危 RCE 面；仅在受信任环境显式开启
+    # （AOS_SANDBOX_API_ENABLED=true 或 SANDBOX_API_ENABLED=true）。
+    # 注：本仓库 pydantic 版本中 Field(env=...) 已被忽略，故用 validation_alias 接收两种前缀。
+    SANDBOX_API_ENABLED: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("AOS_SANDBOX_API_ENABLED", "SANDBOX_API_ENABLED"),
+    )
 
     # ===== 状态后端 (团队级可插拔 seam: sqlite(个人) -> postgres(团队/公司)) =====
     STATE_BACKEND: str = Field(default="sqlite", env="AOS_STATE_BACKEND")  # sqlite | postgres
