@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .capability import Capability
 
@@ -20,15 +20,15 @@ from .capability import Capability
 @dataclass
 class InvokeRequest:
     capability: Capability
-    payload: Dict[str, Any]
-    trace_id: Optional[str] = None
+    payload: dict[str, Any]
+    trace_id: str | None = None
 
 
 @dataclass
 class InvokeResult:
     ok: bool
-    data: Dict[str, Any] = None
-    error: Optional[str] = None
+    data: dict[str, Any] = None
+    error: str | None = None
 
 
 class BaseAgentAdapter(ABC):
@@ -40,7 +40,7 @@ class BaseAgentAdapter(ABC):
         """Stable id, e.g. 'openclaw', 'hermes', 'deerflow', 'ag2'."""
 
     @abstractmethod
-    def advertise_capabilities(self) -> List[Capability]:
+    def advertise_capabilities(self) -> list[Capability]:
         """Declare which capabilities this engine provides."""
 
     @abstractmethod
@@ -52,7 +52,7 @@ class BaseAgentAdapter(ABC):
     def health(self) -> bool:
         """Liveness check so the fabric can route around dead engines."""
 
-    def supported_protocols(self) -> List[str]:
+    def supported_protocols(self) -> list[str]:
         """Optional: declare open protocols spoken (MCP / A2A / ACP).
 
         When both ends share a protocol, plumbing becomes standard rather

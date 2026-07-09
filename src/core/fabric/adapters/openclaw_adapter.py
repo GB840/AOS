@@ -18,7 +18,6 @@ import json
 import os
 import shutil
 import subprocess
-from typing import Any, List, Optional
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
@@ -43,9 +42,9 @@ class OpenClawAdapter(BaseAgentAdapter):
 
     def __init__(
         self,
-        gateway_token: Optional[str] = None,
+        gateway_token: str | None = None,
         agent_id: str = OPENCLAW_DEFAULT_AGENT,
-        cli: Optional[str] = None,
+        cli: str | None = None,
     ) -> None:
         # Token is read from env OPENCLAW_GATEWAY_TOKEN if not passed explicitly.
         self._token = gateway_token or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
@@ -56,14 +55,14 @@ class OpenClawAdapter(BaseAgentAdapter):
     def engine_id(self) -> str:
         return "openclaw"
 
-    def advertise_capabilities(self) -> List[Capability]:
+    def advertise_capabilities(self) -> list[Capability]:
         return [
             Capability.CHANNEL_ACCESS,
             Capability.TOOL_USE,
             Capability.MEMORY_PERSISTENT,
         ]
 
-    def _run(self, *args: str, timeout: int = 600) -> "subprocess.CompletedProcess[str]":
+    def _run(self, *args: str, timeout: int = 600) -> subprocess.CompletedProcess[str]:
         env = dict(os.environ)
         if self._token:
             env["OPENCLAW_GATEWAY_TOKEN"] = self._token
@@ -114,6 +113,6 @@ class OpenClawAdapter(BaseAgentAdapter):
         except Exception:
             return False
 
-    def supported_protocols(self) -> List[str]:
+    def supported_protocols(self) -> list[str]:
         # OpenClaw ships a native MCP bridge (stdio + HTTP).
         return ["MCP"]

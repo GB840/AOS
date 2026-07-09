@@ -12,7 +12,7 @@ real OSS.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
@@ -36,7 +36,7 @@ class BrowserUseAdapter(BaseAgentAdapter):
     def engine_id(self) -> str:
         return "browser-use"
 
-    def advertise_capabilities(self) -> List[Capability]:
+    def advertise_capabilities(self) -> list[Capability]:
         return [Capability.ACI, Capability.TOOL_USE]
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
@@ -58,5 +58,5 @@ class BrowserUseAdapter(BaseAgentAdapter):
         except Exception:
             return False
 
-    def supported_protocols(self) -> List[str]:
+    def supported_protocols(self) -> list[str]:
         return ["OpenAI"]

@@ -22,7 +22,7 @@ How the plane is "turned on" in production:
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
@@ -31,7 +31,7 @@ from ..capability import Capability
 # `litellm.completion()` directly; override per-call via payload["model"] /
 # payload["api_key"] / payload["api_base"]. The default model reuses the
 # Zhipu key already present in the process environment (see config.py).
-LITELLM_CONFIG: Dict[str, Any] = {
+LITELLM_CONFIG: dict[str, Any] = {
     "api_base": "https://open.bigmodel.cn/api/paas/v4",  # Zhipu OpenAI-compat
     "default_model": "zhipu/glm-4-flash",                # provider/model form
 }
@@ -43,7 +43,7 @@ def _import_litellm():
     return litellm
 
 
-def _resolve_key() -> Optional[str]:
+def _resolve_key() -> str | None:
     """Resolve the real API key from process env (set by start_all.sh / .env)."""
     # 1) explicit per-call payload
     # 2) env var named in config.LITELLM_API_KEY_ENV (e.g. ZHIPU_API_KEY)
@@ -55,7 +55,7 @@ def _resolve_key() -> Optional[str]:
     return None
 
 
-def _build_kwargs(req: "InvokeRequest") -> Dict[str, Any]:
+def _build_kwargs(req: InvokeRequest) -> dict[str, Any]:
     """Translate an AOS request into a real litellm.completion() call.
 
     UNIFIED routing (the inference plane):
@@ -71,7 +71,7 @@ def _build_kwargs(req: "InvokeRequest") -> Dict[str, Any]:
     messages = payload.get("messages") or [
         {"role": "user", "content": payload.get("prompt", "")}
     ]
-    kwargs: Dict[str, Any] = {"messages": messages}
+    kwargs: dict[str, Any] = {"messages": messages}
 
     if model.startswith("zhipu/"):
         kwargs["model"] = model.split("/", 1)[1]
@@ -103,7 +103,7 @@ class LiteLLMAdapter(BaseAgentAdapter):
     def engine_id(self) -> str:
         return "litellm"
 
-    def advertise_capabilities(self) -> List[Capability]:
+    def advertise_capabilities(self) -> list[Capability]:
         return [Capability.LLM_GATEWAY]
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
@@ -129,7 +129,7 @@ class LiteLLMAdapter(BaseAgentAdapter):
         except Exception:
             return False
 
-    def supported_protocols(self) -> List[str]:
+    def supported_protocols(self) -> list[str]:
         # LiteLLM is an OpenAI-compatible proxy; the four engines can point
         # their LLM base_url at it to share one inference plane.
         return ["OpenAI"]

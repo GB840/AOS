@@ -9,7 +9,6 @@ engine-agnostic and future-proof instead of welded to four projects.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List
 
 
 class Capability(str, Enum):
@@ -56,7 +55,7 @@ class Capability(str, Enum):
 # "ag2" (MIT, pip `ag2`) is the real-OSS group.orchestration engine AOS
 # actually runs (in-process group chat, no Docker needed). The registry is
 # health-gated, so only live engines are routed.
-ENGINE_CAPABILITY_MAP: Dict[str, List[Capability]] = {
+ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     "openclaw": [Capability.CHANNEL_ACCESS, Capability.TOOL_USE, Capability.MEMORY_PERSISTENT],
     "ag2": [Capability.GROUP_ORCHESTRATION, Capability.PLANNING],
     "hermes": [

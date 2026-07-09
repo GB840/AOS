@@ -9,20 +9,18 @@ is a thin seam, not a heavy OS substrate.
 """
 from __future__ import annotations
 
-from typing import Dict, List
-
 from .adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from .capability import Capability
 
 
 class FabricRegistry:
     def __init__(self) -> None:
-        self._adapters: Dict[str, BaseAgentAdapter] = {}
+        self._adapters: dict[str, BaseAgentAdapter] = {}
 
     def register(self, adapter: BaseAgentAdapter) -> None:
         self._adapters[adapter.engine_id] = adapter
 
-    def providers_for(self, cap: Capability) -> List[BaseAgentAdapter]:
+    def providers_for(self, cap: Capability) -> list[BaseAgentAdapter]:
         return [
             a
             for a in self._adapters.values()
@@ -39,7 +37,7 @@ class FabricRegistry:
         # scoring, or A2A negotiation between candidate engines.
         return providers[0].invoke(req)
 
-    def snapshot(self) -> Dict[str, List[str]]:
+    def snapshot(self) -> dict[str, list[str]]:
         return {
             eid: [c.value for c in a.advertise_capabilities()]
             for eid, a in self._adapters.items()

@@ -18,7 +18,7 @@ aggregated reply. LLM access goes through the same OpenAI-compatible provider
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - import guard
     _AG2_AVAILABLE = False
 
 
-def _llm_config() -> Dict[str, Any]:
+def _llm_config() -> dict[str, Any]:
     """OpenAI-compatible config.
 
     Defaults to Zhipu (glm-4-flash, free tier) because the repo's
@@ -61,9 +61,9 @@ class AG2Adapter(BaseAgentAdapter):
 
     def __init__(
         self,
-        agents: Optional[List[str]] = None,
+        agents: list[str] | None = None,
         max_round: int = 3,
-        llm_config: Optional[Dict[str, Any]] = None,
+        llm_config: dict[str, Any] | None = None,
     ) -> None:
         self._agents = agents or ["planner", "developer", "tester"]
         self._max_round = max_round
@@ -73,7 +73,7 @@ class AG2Adapter(BaseAgentAdapter):
     def engine_id(self) -> str:
         return "ag2"
 
-    def advertise_capabilities(self) -> List[Capability]:
+    def advertise_capabilities(self) -> list[Capability]:
         return [Capability.GROUP_ORCHESTRATION, Capability.PLANNING]
 
     def _run_group_chat(self, task: str) -> str:
@@ -139,6 +139,6 @@ class AG2Adapter(BaseAgentAdapter):
         except Exception:
             return False
 
-    def supported_protocols(self) -> List[str]:
+    def supported_protocols(self) -> list[str]:
         # AG2 is an in-process library; it speaks no external agent protocol here.
         return []

@@ -12,7 +12,7 @@ re-implement memory - it delegates to the real OSS.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
@@ -27,15 +27,15 @@ def _import_mem0():
 class Mem0Adapter(BaseAgentAdapter):
     """Thin wrapper over the real Mem0 agent-memory (the "memory" plane)."""
 
-    def __init__(self, config: Dict[str, Any] | None = None) -> None:
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
         # Mem0 needs an LLM + vector store; defaults pick sane env-based ones.
-        self._config: Dict[str, Any] = config or {}
+        self._config: dict[str, Any] = config or {}
 
     @property
     def engine_id(self) -> str:
         return "mem0"
 
-    def advertise_capabilities(self) -> List[Capability]:
+    def advertise_capabilities(self) -> list[Capability]:
         return [Capability.MEMORY_SEMANTIC, Capability.MEMORY_KNOWLEDGE]
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
@@ -65,7 +65,7 @@ class Mem0Adapter(BaseAgentAdapter):
         except Exception:
             return False
 
-    def supported_protocols(self) -> List[str]:
+    def supported_protocols(self) -> list[str]:
         # Mem0 runs an LLM under the hood (via LiteLLM) and exposes an
         # OpenAI-compatible client in recent versions.
         return ["OpenAI"]

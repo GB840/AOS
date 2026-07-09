@@ -5,18 +5,18 @@ by CAPABILITY, glues them with OPEN protocols, and improves on top
 (governance, memory, safety, observability, evolution). It never
 re-implements agent brains.
 """
-from .capability import Capability, ENGINE_CAPABILITY_MAP
 from .adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
-from .registry import FabricRegistry
+from .capability import ENGINE_CAPABILITY_MAP, Capability
 from .protocols import OPEN_PROTOCOLS, describe
+from .registry import FabricRegistry
 
 __all__ = [
-    "Capability",
     "ENGINE_CAPABILITY_MAP",
+    "OPEN_PROTOCOLS",
     "BaseAgentAdapter",
+    "Capability",
+    "FabricRegistry",
     "InvokeRequest",
     "InvokeResult",
-    "FabricRegistry",
-    "OPEN_PROTOCOLS",
     "describe",
 ]
