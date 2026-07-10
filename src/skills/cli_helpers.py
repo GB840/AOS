@@ -1,5 +1,9 @@
 """Skill CLI 共享工具：让核心 skill 可脱离 AOS 大脑独立运行。
 
+STATUS: dormant — 未被 __init__.py 导入，未被核心系统引用，
+kernel/skills_bridge.py 显式跳过。仅作为独立演示场景的预留工具。
+如需激活：在 __init__.py 中添加 import 并注册到 SkillRegistry。
+
 对应战略建议（消化 awesome-llm-apps）：每个核心 skill 都应能 `python -m skills.<name>` 独立跑，
 降低准入门槛。本模块只服务于该独立演示场景；AOS 运行时 skill 仍优先走 brain.chat。
 
