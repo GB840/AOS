@@ -43,7 +43,7 @@ import sys
 import time
 from pathlib import Path
 
-AOS_ROOT = Path(r"D:\AOS")
+AOS_ROOT = Path(__file__).resolve().parents[1]
 LOGS_DIR = AOS_ROOT / "logs"
 PID_FILE = LOGS_DIR / "aos_pids.json"
 

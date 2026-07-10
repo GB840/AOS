@@ -13,7 +13,7 @@
         build build-api build-web build-frontend build-no-cache \
         run run-api run-web run-full stop clean clean-data clean-all \
         install install-dev deps verify setup migrate health docker-build \
-        check-ast check smoke schema
+        check-ast check smoke schema coverage
 
 # ---- Variables ----
 IMAGE_NAME ?= aos
@@ -148,6 +148,10 @@ test-integration:
 test-all:
 	@echo "Running all tests with coverage..."
 	@$(PY) -m pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=html --tb=short
+
+coverage:
+	@echo "Running tests with coverage report (terminal summary)..."
+	@$(PY) -m pytest tests/ --cov=src --cov-report=term-missing --tb=short -q
 
 test-watch:
 	@echo "Running tests in watch mode..."

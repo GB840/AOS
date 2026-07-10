@@ -65,6 +65,35 @@ bcrypt>=4.1.0
 # 统一网关：src/api/gateway.py 顶层 `import aiohttp`，反向代理 /web /openclaw /deerflow。
 aiohttp>=3.9.0
 
+# ============================================================
+# 2026-07-11 依赖审计补齐（诊断 Phase 0.5）
+# 以下 6 个包在 src/ 中被顶层 import，但此前未声明。
+# 全新环境 pip install -r requirements.txt 后缺失即崩。
+# 来源：全量 import 扫描交叉比对 requirements.txt。
+# ============================================================
+
+# SQLModel: src/core/database/base.py + engine.py + 7 个模型文件顶层 `from sqlmodel import ...`。
+# 缺失 = AOS 启动即 ImportError。10 个文件依赖。
+sqlmodel>=0.0.14
+
+# Temporal: src/deerflow/echo_workflow.py 顶层 `from temporalio import workflow, activity`。
+# 缺失 = DeerFlow 工作流模块无法加载。
+temporalio>=1.4.0
+
+# cachetools: src/utils/cache_manager.py 顶层 `from cachetools import TTLCache, LRUCache`。
+# 缺失 = 缓存管理模块无法导入。
+cachetools>=5.3.0
+
+# pandas: src/web/app.py 顶层 `import pandas as pd`。
+# 缺失 = Streamlit UI 启动即崩（streamlit 已在依赖中，pandas 是其隐含前提）。
+pandas>=2.0.0
+
+# protobuf + grpcio: src/common/*_pb2.py 顶层 `from google.protobuf import ...`，
+# src/common/*_pb2_grpc.py + src/meta_orchestrator/server.py 顶层 `import grpc`。
+# 此前靠 chromadb / mcp 传递安装，但传递依赖不保证版本稳定，显式声明防断裂。
+protobuf>=4.25.0
+grpcio>=1.60.0
+
 # 智谱 SDK：litellm 走 zhipu 时走 OpenAI 兼容透传，本身不需要 zhipuai 包
 # （AOS src 中无任何 `import zhipuai`）。且 zhipuai 元数据锁 pyjwt<2.9.0，
 # 与 mcp 要求的 pyjwt>=2.10.1 硬冲突，会令 `pip install -r` ResolutionImpossible。
