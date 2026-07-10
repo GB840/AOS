@@ -4,11 +4,10 @@ Skill Creator — AOS 元技能。
 对应 Hermes 的 skill_manager_tool.py, 但集成到 AOS 的 SkillRegistry 中。
 """
 
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from .base import Skill, SkillMeta, SkillRegistry
 

@@ -1,7 +1,7 @@
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 from enum import Enum
 import logging
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

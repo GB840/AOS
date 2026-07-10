@@ -8,6 +8,36 @@ _BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 class Config(BaseSettings):
+    model_config = {
+        "extra": "allow",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": True
+    }
+    
+    def __init__(self, *args, **kwargs):
+        """后处理验证：确保关键安全配置存在"""
+        super().__init__(*args, **kwargs)
+        
+        # API密钥验证：生产环境必须配置哈希密钥
+        if self.APP_ENV == "production":
+            if not self.API_KEY_HASH:
+                raise ValueError(
+                    "生产环境必须配置API_KEY_HASH环境变量！"
+                    "请运行: python -c 'import bcrypt; print(bcrypt.hashpw(b\"your_secret_key\", bcrypt.gensalt()).decode())'"
+                )
+        elif not self.API_KEY_HASH and not self.API_KEY:
+            # 开发环境至少需要一个密钥配置
+            logger = __import__('logging').getLogger(__name__)
+            logger.warning("未配置API密钥，将在首次访问时自动生成开发密钥...")
+            
+        # 管理员账户验证
+        if not self.ADMIN_USERNAME:
+            raise ValueError("必须配置AOS_ADMIN_USERNAME环境变量")
+        
+        # PostgreSQL生产环境密码验证
+        if self.APP_ENV == "production" and self.STATE_BACKEND == "postgres" and not self.POSTGRES_PASSWORD:
+            raise ValueError("生产环境PostgreSQL必须配置AOS_POSTGRES_PASSWORD")
     BASE_DIR: str = str(_BASE_DIR)
     APP_NAME: str = "能体操作系统v5.0零成本版"
     APP_VERSION: str = "5.0.0"
@@ -16,9 +46,10 @@ class Config(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
-    # API安全 - 支持环境变量 AOS_API_KEY
-    API_KEY: str = Field(default="", env="AOS_API_KEY")
-    API_KEY_HASH: str = Field(default="", env="AOS_API_KEY_HASH")  # 可选：哈希版本的API密钥
+    # API安全 - 支持环境变量 AOS_API_KEY  
+    # 安全加固：移除默认值，强制环境变量配置
+    API_KEY: Optional[str] = Field(default=None, validation_alias="AOS_API_KEY")
+    API_KEY_HASH: Optional[str] = Field(default=None, validation_alias="AOS_API_KEY_HASH")  # 强制哈希验证
     ALLOWED_ORIGINS: str = "http://localhost:8501,http://localhost:8000"
     MAX_REQUESTS_PER_MINUTE: int = 100
 
@@ -29,9 +60,10 @@ class Config(BaseSettings):
     AUTH_JWT_PUBLIC_KEY: Optional[str] = Field(default=None, env="AOS_JWT_PUBLIC_KEY")
     AUTH_JWT_ALGORITHM: str = "RS256"
     AUTH_JWT_EXPIRE_MINUTES: int = 480  # 8h
-    ADMIN_USERNAME: str = Field(default="admin", env="AOS_ADMIN_USERNAME")
-    # 不再提供 "admin" 弱默认；生产环境必须设置，开发环境自动生成强随机口令落盘 .secrets/
-    ADMIN_PASSWORD: Optional[str] = Field(default=None, env="AOS_ADMIN_PASSWORD")
+    # 安全加固：移除admin用户默认值 
+    ADMIN_USERNAME: Optional[str] = Field(default=None, validation_alias="AOS_ADMIN_USERNAME")
+    # 不再提供任何默认值；生产环境必须设置，开发环境自动生成强随机口令落盘 .secrets/
+    ADMIN_PASSWORD: Optional[str] = Field(default=None, validation_alias="AOS_ADMIN_PASSWORD")
 
     # 沙箱执行 HTTP API（/api/sandbox/*）默认关闭：该端点经 DeerFlow 本地 provider
     # 在宿主机直接执行任意命令，属高危 RCE 面；仅在受信任环境显式开启
@@ -47,7 +79,7 @@ class Config(BaseSettings):
     POSTGRES_HOST: str = Field(default="localhost", env="AOS_POSTGRES_HOST")
     POSTGRES_PORT: int = Field(default=5432, env="AOS_POSTGRES_PORT")
     POSTGRES_USER: str = Field(default="aos", env="AOS_POSTGRES_USER")
-    POSTGRES_PASSWORD: str = Field(default="", env="AOS_POSTGRES_PASSWORD")
+    POSTGRES_PASSWORD: Optional[str] = Field(default=None, validation_alias="AOS_POSTGRES_PASSWORD")  # 安全加固：移除默认空密码
     POSTGRES_DB: str = Field(default="aos", env="AOS_POSTGRES_DB")
 
     # 统一API - 支持环境变量 AOS_UNIFIED_API_KEY
@@ -100,6 +132,30 @@ class Config(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
     OLLAMA_ENABLED: bool = True
+    # Ollama 在此架构中作为【备选/兜底】本地运行时（MiniCPM 等已导入其中）。
+
+    # ===== MistralRS：主本地推理运行时（原生吃 GGUF / safetensors + 就地量化 ISQ）=====
+    # 主用 mistralrs 跑用户下好的三个本地模型；单实例只能绑一个端口，故三模型起三个独立服务。
+    #   端口 1234 = MiniCPM5-1B     (轻量全能)   -> GENERAL / HIGH_CONCURRENCY
+    #   端口 1235 = Qwen2.5-Coder-3B(写代码)      -> CODING
+    #   端口 1236 = DeepSeek-R1-1.5B (推理/逻辑)  -> LONG_CONTEXT / EXPERIMENT
+    MISTRALRS_ENABLED: bool = True
+    MISTRALRS_HOST: str = "http://localhost"
+    MISTRALRS_PORT_GENERAL: int = 1234
+    MISTRALRS_PORT_CODING: int = 1235
+    MISTRALRS_PORT_REASONING: int = 1236
+    # 注意：mistralrs `serve` 会严格校验 model 字段，必须用其 /v1/models 实际报告的 id
+    # （即模型目录路径），不能用简短别名，否则返回 500 "model not available"。
+    MISTRALRS_MODEL_GENERAL: str = "C:\\Users\\Administrator\\MiniCPM5-1B-GGUF"
+    MISTRALRS_MODEL_CODING: str = "D:\\models\\Qwen2.5-Coder-3B-Instruct"
+    MISTRALRS_MODEL_REASONING: str = "D:\\models\\DeepSeek-R1-1.5B"
+
+    # ---- 本地小模型（Ollama 备选，按任务类型自动选型）----
+    OLLAMA_MODEL_GENERAL: str = "minicpm5-1b"
+    OLLAMA_MODEL_CODING: str = "qwen2.5-coder:3b"
+    OLLAMA_MODEL_REASONING: str = "deepseek-r1:1.5b"
+    # 优先使用本地模型（True 时同类任务先走本地 MistralRS，Ollama 备选，云端作兜底）
+    ROUTER_PREFER_LOCAL: bool = True
 
     SQLITE_DB_PATH: str = str(_BASE_DIR / "data" / "sqlite" / "aos.db")
     CHROMADB_PERSIST_DIR: str = str(_BASE_DIR / "data" / "chroma")
@@ -119,11 +175,11 @@ class Config(BaseSettings):
     VECTOR_COLLECTION_NAME: str = "aos_memory"
     VECTOR_ENABLED: bool = True
 
-    ROUTER_CODING_PRIMARY: str = "zhipu"
-    ROUTER_HIGH_CONCURRENCY_PRIMARY: str = "baidu"
-    ROUTER_LONG_CONTEXT_PRIMARY: str = "zhipu"
+    ROUTER_CODING_PRIMARY: str = "mistralrs_coding"
+    ROUTER_HIGH_CONCURRENCY_PRIMARY: str = "mistralrs_general"
+    ROUTER_LONG_CONTEXT_PRIMARY: str = "mistralrs_reasoning"
     ROUTER_VOICE_PRIMARY: str = "xfyun"
-    ROUTER_EXPERIMENT_PRIMARY: str = "siliconflow"
+    ROUTER_EXPERIMENT_PRIMARY: str = "mistralrs_reasoning"
     ROUTER_FALLBACK: str = "ollama"
 
     MCP_ENABLED: bool = True
@@ -274,11 +330,7 @@ class Config(BaseSettings):
 
         return self
 
-    class Config:
-        env_file = str(_BASE_DIR / ".env")
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-        extra = "ignore"
+    # 环境配置已在model_config中设置
 
 
 # P1-4 配置分裂修复: 启动期把 .env 键值注入 os.environ。

@@ -18,16 +18,14 @@ Zvec 是阿里巴巴通义实验室开源的嵌入式向量数据库，核心设
 """
 
 import os
-import sys
 import json
 import logging
 import uuid
-import time
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Any
 from datetime import datetime
 from pathlib import Path
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 
@@ -119,15 +117,11 @@ class ZvecSkill(Skill):
         """初始化 Zvec 客户端"""
         try:
             from zvec import (
-                Collection, 
                 CollectionSchema, 
                 FieldSchema, 
                 VectorSchema, 
                 DataType,
-                MetricType,
-                HnswIndexParam,
-                create_and_open,
-                init
+                create_and_open
             )
             
             self._zvec_client = {}
@@ -153,7 +147,7 @@ class ZvecSkill(Skill):
                     )
                     
                     try:
-                        collection = zvec.open(coll_path)
+                        collection = self._zvec_module.open(coll_path)
                         logger.info(f"Zvec 集合打开成功: {collection_name}")
                     except Exception as e_open:
                         logger.debug(f"打开集合失败，尝试创建: {e_open}")

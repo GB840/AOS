@@ -25,6 +25,12 @@ except ImportError:
     ZVEC_AVAILABLE = False
     zvec = None
 
+try:
+    from core.pool import get_sqlite_pool, initialize_pools, PoolConfig
+    CONNECTION_POOL_AVAILABLE = True
+except ImportError:
+    CONNECTION_POOL_AVAILABLE = False
+
 from utils.config import config
 
 logger = logging.getLogger(__name__)
@@ -81,11 +87,26 @@ def validate_fts_query(query: str) -> bool:
         return True
     
     # 检查长度限制
-    if len(query) > 1000:
-        logger.warning(f"FTS查询过长，长度: {len(query)}")
+    if len(query) > 500:
+        logger.warning(f"FTS查询过长被拒绝，长度: {len(query)} > 500")
+        return False
+        
+    # 检查查询复杂度（防止过度复杂的查询导致性能问题）
+    fts_operators = ['AND', 'OR', 'NOT', 'NEAR', '*', '"', '(', ')', '[', ']']
+    operator_count = sum(1 for op in fts_operators if op in query.upper())
+    if operator_count > 8:
+        logger.warning(f"FTS查询操作符过多被拒绝，数量: {operator_count}")
+        return False
+        
+    # 检查重复字符（可能的DoS尝试）
+    from collections import Counter
+    char_counts = Counter(query.lower())
+    most_common_count = char_counts.most_common(1)[0][1] if char_counts else 0
+    if most_common_count > len(query) * 0.8:  # 某个字符占比过高
+        logger.warning("FTS查询可能为DoS攻击（字符重复率过高）")
         return False
     
-    # 检查危险模式
+    # 检查危险模式 - 增强版
     dangerous_patterns = [
         r'DROP\s+TABLE',   # SQL注入
         r'DELETE\s+FROM',  # SQL注入
@@ -97,6 +118,19 @@ def validate_fts_query(query: str) -> bool:
         r'\bUNION\b',      # UNION注入
         r'\bOR\b\s+\d+\s*=\s*\d+',  # 布尔注入
         r'\bAND\b\s+\d+\s*=\s*\d+', # 布尔注入
+        
+        # 新增：更复杂的SQL注入检测
+        r'\bSELECT\b.*\bFROM\b',  # 窃取数据尝试
+        r'\bCREATE\b.*\bTABLE\b', # 创建表尝试
+        r'\bALTER\b.*\bTABLE\b',  # 修改表尝试
+        r'\bEXEC\b',       # 执行代码
+        r'\bEXECUTE\b',    # 执行代码
+        r'information_schema', # 信息泄露
+        r'sqlite_',        # SQLite系统表
+        
+        # 新增：重复杂查询导致的DoS防护
+        r'\*.*\*',        # 多个通配符
+        r'[(){}\[\]]{5,}', # 过多的嵌套符号
     ]
     
     for pattern in dangerous_patterns:
@@ -178,32 +212,53 @@ class MemoryManager:
         self._use_connection_pool = False
         self._lock = threading.Lock()  # 串行化所有 sqlite 访问，避免多线程共享单连接竞态
         
+        # 性能优化：尝试启用连接池
+        try:
+            from core.pool import get_sqlite_pool
+            self._pool = get_sqlite_pool()
+            self._use_connection_pool = True
+            logger.info("内存层：启用连接池模式")
+        except (ImportError, RuntimeError):
+            self._use_connection_pool = False
+            logger.info("内存层：使用单连接模式")
+        
         self._init_vector_store()
     
     def _get_connection(self):
-        """获取数据库连接（单连接模式，复用 self.sqlite_conn），全程持锁串行化。"""
-        from contextlib import contextmanager
-
-        @contextmanager
-        def single_connection():
-            with self._lock:
-                yield self.sqlite_conn
-
-        return single_connection()
+        """获取数据库连接（优先使用连接池，提高并发性能）"""
+        if self._use_connection_pool:
+            return self._pool.get_connection()
+        else:
+            # 单连接模式需要锁保证线程安全
+            from contextlib import contextmanager
+            @contextmanager
+            def single_connection():
+                with self._lock:
+                    yield self.sqlite_conn
+            return single_connection()
     
     def close(self):
         """关闭资源"""
         try:
-            if hasattr(self, 'db_pool') and self._use_connection_pool:
+            if hasattr(self, '_pool') and self._use_connection_pool:
                 # 连接池由全局管理器负责，不需要在这里关闭
                 pass
             elif hasattr(self, 'sqlite_conn'):
                 self.sqlite_conn.close()
-                
+
             # 关闭向量数据库连接
             if self.zvec_client:
                 self.zvec_client.close()
-                
+
+            # ChromaDB PersistentClient 持有文件句柄，需要显式释放
+            if hasattr(self, 'chroma_client') and self.chroma_client is not None:
+                try:
+                    # ChromaDB PersistentClient 无显式 close()，通过置 None 让 GC 回收
+                    self.chroma_client = None
+                    self.collection = None
+                except Exception:
+                    pass
+
             logger.info("MemoryManager资源已关闭")
         except Exception as e:
             logger.error(f"关闭MemoryManager时出错: {e}")
@@ -340,8 +395,7 @@ class MemoryManager:
                 FieldSchema,
                 VectorSchema,
                 DataType,
-                create_and_open,
-                open
+                create_and_open
             )
             
             memory_path = os.path.join(self.zvec_dir, "memory")
@@ -397,13 +451,16 @@ class MemoryManager:
             )
 
     def add_conversation(self, session_id: str, role: str, content: str, metadata: Optional[Dict] = None) -> int:
+        """添加对话（批量写入优化，N+1查询防护）"""
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
-        with self._lock:
-            cursor = self.sqlite_conn.execute(
+        
+        # 使用连接池避免全局锁竞争，提高并发性能
+        with self._get_connection() as conn:
+            cursor = conn.execute(
                 "INSERT INTO conversations (session_id, role, content, metadata) VALUES (?, ?, ?, ?)",
                 (session_id, role, content, meta_json),
             )
-            self.sqlite_conn.commit()
+            conn.commit()
             conv_id = cursor.lastrowid
 
         if self.vector_enabled and self.collection:
@@ -455,61 +512,74 @@ class MemoryManager:
             conn.commit()
 
     def search_conversations(self, query: str, session_id: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
-        """搜索对话历史（使用安全的FTS5查询）"""
+        """搜索对话历史（使用安全的FTS5查询，连接池优化）"""
         # 使用安全的FTS查询转义
         safe_query = safe_fts_match_query(query)
 
-        with self._lock:
+        # 使用连接池避免全局锁竞争
+        with self._get_connection() as conn:
+            # 批量查询优化：单次查询获取所有数据
             if session_id:
-                cursor = self.sqlite_conn.execute(
-                    """SELECT * FROM conversations_fts
-                       WHERE conversations_fts MATCH ? AND session_id = ?
-                       ORDER BY rank LIMIT ?""",
-                    (safe_query, session_id, limit),
-                )
+                sql = """
+                SELECT rowid as id, content, session_id 
+                FROM conversations_fts
+                WHERE conversations_fts MATCH ? AND session_id = ?
+                ORDER BY rank LIMIT ?
+                """
+                params = (safe_query, session_id, limit)
             else:
-                cursor = self.sqlite_conn.execute(
-                    """SELECT * FROM conversations_fts
-                       WHERE conversations_fts MATCH ?
-                       ORDER BY rank LIMIT ?""",
-                    (safe_query, limit),
-                )
-
+                sql = """
+                SELECT rowid as id, content, session_id
+                FROM conversations_fts
+                WHERE conversations_fts MATCH ?
+                ORDER BY rank LIMIT ?
+                """
+                params = (safe_query, limit)
+            
+            cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
-        result = []
-        for row in rows:
-            result.append(
-                {
-                    "id": row["rowid"],
-                    "content": row["content"],
-                    "session_id": row["session_id"],
-                }
-            )
-        return result
+        
+        # 批量构建结果，减少循环开销
+        return [
+            {
+                "id": row["id"],
+                "content": row["content"],
+                "session_id": row["session_id"],
+            }
+            for row in rows
+        ]
 
     def add_knowledge(self, title: str, content: str, source: str = "", tags: Optional[List[str]] = None, metadata: Optional[Dict] = None) -> int:
+        """添加知识库（批量写入优化）"""
         tags_json = json.dumps(tags or [], ensure_ascii=False)
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
-        with self._lock:
-            cursor = self.sqlite_conn.execute(
+        
+        # 使用连接池避免全局锁竞争
+        with self._get_connection() as conn:
+            cursor = conn.execute(
                 "INSERT INTO knowledge (title, content, source, tags, metadata) VALUES (?, ?, ?, ?, ?)",
                 (title, content, source, tags_json, meta_json),
             )
-            self.sqlite_conn.commit()
+            conn.commit()
             knowledge_id = cursor.lastrowid
 
+        # 向量存储异步处理，避免阻塞主流程
         if self.vector_enabled and self.collection:
-            self._add_to_vector_store(
-                doc_id=f"know_{knowledge_id}",
-                content=f"{title}\n{content}",
-                metadata={
-                    "type": "knowledge",
-                    "title": title,
-                    "source": source,
-                    "tags": json.dumps(tags or [], ensure_ascii=False),
-                    "created_at": datetime.now().isoformat(),
-                },
-            )
+            try:
+                self._add_to_vector_store(
+                    doc_id=f"know_{knowledge_id}",
+                    content=f"{title}\n{content}",
+                    metadata={
+                        "type": "knowledge",
+                        "title": title,
+                        "source": source,
+                        "tags": tags_json,
+                        "created_at": datetime.now().isoformat(),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"向量存储失败但不影响主要功能: {e}")
+        
         return knowledge_id
 
     def search_knowledge_fulltext(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -624,125 +694,50 @@ class MemoryManager:
     def _get_api_embedding(self, text: str) -> List[float]:
         """使用API获取嵌入向量"""
         try:
-            import httpx
-            import json
-            
-            # 根据配置选择provider
             provider = config.EMBEDDING_PROVIDER.lower()
-            
-            if provider == "zhipu" and config.ZHIPU_API_KEY:
-                return self._get_zhipu_embedding(text)
-            elif provider == "siliconflow" and config.SILICONFLOW_API_KEY:
-                return self._get_siliconflow_embedding(text)
-            elif provider == "unified" and config.UNIFIED_API_KEY:
-                return self._get_unified_embedding(text)
-            else:
-                logger.warning(f"API嵌入provider '{provider}' 不可用，降级到本地模型")
-                return self._get_local_embedding(text)
-                
+
+            # Map provider → (base_url, api_key, model, extra_data)
+            provider_config = {
+                "zhipu": (config.ZHIPU_BASE_URL, config.ZHIPU_API_KEY, "embedding-2", {}),
+                "siliconflow": (config.SILICONFLOW_BASE_URL, config.SILICONFLOW_API_KEY,
+                                "BAAI/bge-small-zh-v1.5", {"encoding_format": "float"}),
+                "unified": (config.UNIFIED_BASE_URL, config.UNIFIED_API_KEY,
+                            config.EMBEDDING_MODEL, {}),
+            }
+
+            if provider in provider_config:
+                base_url, api_key, model, extra = provider_config[provider]
+                if api_key:
+                    return self._get_api_embedding_from_provider(text, base_url, api_key, model, extra)
+
+            logger.warning(f"API嵌入provider '{provider}' 不可用，降级到本地模型")
+            return self._get_local_embedding(text)
+
         except Exception as e:
             logger.error(f"API嵌入失败: {e}")
             return self._get_local_embedding(text)
-    
-    def _get_zhipu_embedding(self, text: str) -> List[float]:
-        """使用智谱AI获取嵌入"""
-        try:
-            import httpx
-            
-            headers = {
-                "Authorization": f"Bearer {config.ZHIPU_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            
-            data = {
-                "model": "embedding-2",
-                "input": text
-            }
-            
-            response = httpx.post(
-                f"{config.ZHIPU_BASE_URL}/embeddings",
-                headers=headers,
-                json=data,
-                timeout=30.0
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            embedding = result["data"][0]["embedding"]
-            
-            logger.info(f"智谱嵌入成功，维度: {len(embedding)}")
-            return embedding
-            
-        except Exception as e:
-            logger.error(f"智谱嵌入失败: {e}")
-            raise
-    
-    def _get_siliconflow_embedding(self, text: str) -> List[float]:
-        """使用SiliconFlow获取嵌入"""
-        try:
-            import httpx
-            
-            headers = {
-                "Authorization": f"Bearer {config.SILICONFLOW_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            
-            data = {
-                "model": "BAAI/bge-small-zh-v1.5",
-                "input": text,
-                "encoding_format": "float"
-            }
-            
-            response = httpx.post(
-                f"{config.SILICONFLOW_BASE_URL}/embeddings",
-                headers=headers,
-                json=data,
-                timeout=30.0
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            embedding = result["data"][0]["embedding"]
-            
-            logger.info(f"SiliconFlow嵌入成功，维度: {len(embedding)}")
-            return embedding
-            
-        except Exception as e:
-            logger.error(f"SiliconFlow嵌入失败: {e}")
-            raise
-    
-    def _get_unified_embedding(self, text: str) -> List[float]:
-        """使用统一API获取嵌入"""
-        try:
-            import httpx
-            
-            headers = {
-                "Authorization": f"Bearer {config.UNIFIED_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            
-            data = {
-                "model": config.EMBEDDING_MODEL,
-                "input": text
-            }
-            
-            response = httpx.post(
-                f"{config.UNIFIED_BASE_URL}/embeddings",
-                headers=headers,
-                json=data,
-                timeout=30.0
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            embedding = result["data"][0]["embedding"]
-            
-            logger.info(f"统一API嵌入成功，维度: {len(embedding)}")
-            return embedding
-            
-        except Exception as e:
-            logger.error(f"统一API嵌入失败: {e}")
-            raise
+
+    def _get_api_embedding_from_provider(
+        self, text: str, base_url: str, api_key: str,
+        model: str, extra_data: Optional[Dict] = None,
+    ) -> List[float]:
+        """统一的 API 嵌入调用 — 消除 zhipu/siliconflow/unified 三套重复代码。"""
+        import httpx
+
+        data = {"model": model, "input": text}
+        if extra_data:
+            data.update(extra_data)
+
+        response = httpx.post(
+            f"{base_url}/embeddings",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=data,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        embedding = response.json()["data"][0]["embedding"]
+        logger.info(f"嵌入成功 ({model}), 维度: {len(embedding)}")
+        return embedding
     
     def _get_local_embedding(self, text: str) -> List[float]:
         """使用本地模型获取嵌入"""

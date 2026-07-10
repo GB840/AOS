@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 from pathlib import Path
-import json
 import yaml
 import logging
 
@@ -120,11 +119,11 @@ class SkillTemplate:
         
         for stage in self.stages:
             if not stage.name:
-                errors.append(f"stage has no name")
+                errors.append("stage has no name")
         
         for tc in self.test_cases:
             if not tc.name:
-                errors.append(f"test case has no name")
+                errors.append("test case has no name")
         
         if len(self.stages) == 0:
             warnings.append("no stages defined - skill will be simple execute-only")

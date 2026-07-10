@@ -83,7 +83,7 @@ if not _HERMES_AVAILABLE:
             return {"content": f"[降级模式] 已处理: {prompt[:50]}..."}
 
 # ---- Deep Hermes Integration (self-evolving skills + nudge + memory lifecycle + context) ----
-from hermes.deep_hermes import DeepHermesIntegration, create_deep_hermes
+from hermes.deep_hermes import create_deep_hermes
 
 
 class HermesAgent:

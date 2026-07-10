@@ -13,7 +13,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse, Response
+from fastapi.responses import StreamingResponse, Response
 import base64
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -21,7 +21,7 @@ from datetime import datetime
 from utils.config import config
 from core import get_brain
 from mcp import MCPMessage
-from router import TaskType
+from core.pool import initialize_pools, close_pools
 from api.security import (
     APISecurityMiddleware,
     RateLimitMiddleware,
@@ -92,10 +92,19 @@ else:
     if "*" in allowed_origins:
         logger.warning("开发环境使用了CORS通配符，生产环境请明确指定域名")
 
+# O10: 带凭据的跨域禁止通配符（避免"带凭据的通配符跨域" -> 凭据泄露）。
+# 生产环境已在上方 fail-fast 拒绝 '*'；此处对开发环境做降级：出现 '*' 则关闭凭据。
+allow_credentials = True
+if "*" in allowed_origins:
+    if config.APP_ENV == "production":
+        raise ValueError("生产环境CORS配置不安全：不允许通配符 + 凭据（ALLOWED_ORIGINS 请勿含 *）")
+    allow_credentials = False
+    logger.warning("CORS 含通配符且 allow_credentials=True，已强制关闭凭据以避免跨站凭据泄露")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-API-Key"],
     max_age=600,  # 预检请求缓存10分钟
@@ -129,7 +138,26 @@ setup_exception_handlers(app)
 logger.info("统一异常处理器已注册")
 
 # ---- Unified Brain (singleton: Hermes + DeerFlow + Memory + Skills + SubAgents) ----
-brain = get_brain()
+# 延迟代理：UnifiedBrain() 构造极重（~2min，加载 mem0/ChromaDB/Hermes/AG2 等），
+# 用代理把构造推迟到首次真实访问，避免 import/启动期阻塞事件循环导致 /health 超时误杀。
+# 启动期依赖（health_check / handlers 注册）改由 startup_event 内的后台任务完成（见 _deferred_brain_init）。
+class _BrainProxy:
+    _obj = None
+
+    def _resolve(self):
+        if self._obj is None:
+            self._obj = get_brain()
+        return self._obj
+
+    def __getattr__(self, name):
+        return getattr(self._resolve(), name)
+
+    def shutdown(self):
+        if self._obj is not None:
+            self._obj.shutdown()
+
+
+brain = _BrainProxy()
 
 
 # ---- Pydantic Models ----
@@ -184,29 +212,62 @@ class SubAgentInvokeRequest(BaseModel):
 
 # ---- Startup / Shutdown ----
 
+async def _deferred_brain_init(app):
+    """后台初始化 brain（重型，~2min）：不阻塞启动事件，避免 /health 超时误杀。
+
+    把原先在 startup_event 里同步触发的 brain.health_check() 与 deerflow handlers 注册
+    移到后台任务；期间 /health 立即可用，首个真实 chat 请求才触发构造。降级运行亦可。
+    """
+    try:
+        h = brain.health_check()
+        logger.info("Health: %s", h["status"])
+        for name, info in h["components"].items():
+            logger.info("  %s: %s", name, info.get("status") or info.get("type", "?"))
+
+        # Register chat/skill handlers on the deerflow engine. Guarded: in a degraded
+        # start the engine may be the inert stub, in which case we skip silently rather
+        # than crash startup (brain._init_real_deerflow now always assigns .deerflow).
+        df_engine = getattr(brain, "deerflow", None)
+        if df_engine is not None and hasattr(df_engine, "register_handler"):
+            df_engine.register_handler("chat",
+                lambda d: brain.hermes.chat(message=d.get("message", ""), session_id=d.get("session_id")))
+
+            # Register skill handlers
+            for sn in ["skill-creator","find-skills","superpowers","j-stack","frontend-design","ui-ux-pro-max","duckduckgo-search"]:
+                df_engine.register_handler("skill:"+sn, (lambda n: lambda d: brain.hermes.execute_skill(n, d))(sn))
+        else:
+            logger.warning("deerflow engine unavailable; chat/skill handlers not registered")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("brain 后台初始化未完成（降级运行）: %s", e)
+
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("=== %s v%s ===", config.APP_NAME, config.APP_VERSION)
-    h = brain.health_check()
-    logger.info("Health: %s", h["status"])
-    for name, info in h["components"].items():
-        logger.info("  %s: %s", name, info.get("status") or info.get("type", "?"))
 
-    # Register chat/skill handlers on the deerflow engine. Guarded: in a degraded
-    # start the engine may be the inert stub, in which case we skip silently rather
-    # than crash startup (brain._init_real_deerflow now always assigns .deerflow).
-    df_engine = getattr(brain, "deerflow", None)
-    if df_engine is not None and hasattr(df_engine, "register_handler"):
-        df_engine.register_handler("chat",
-            lambda d: brain.hermes.chat(message=d.get("message", ""), session_id=d.get("session_id")))
-
-        # Register skill handlers
-        for sn in ["skill-creator","find-skills","superpowers","j-stack","frontend-design","ui-ux-pro-max","duckduckgo-search"]:
-            df_engine.register_handler("skill:"+sn, (lambda n: lambda d: brain.hermes.execute_skill(n, d))(sn))
-    else:
-        logger.warning("deerflow engine unavailable; chat/skill handlers not registered")
+    # 初始化连接池
+    try:
+        await initialize_pools()
+        logger.info("数据库连接池初始化完成")
+    except Exception as e:
+        logger.error(f"连接池初始化失败: {e}")
+        # 不阻断启动，降级运行
 
     logger.info("=== AOS v5.0 ready ===")
+
+    # ---- v1.0 内核接管（双轨并存）----
+    # 把极简内核挂到 app.state，供 /api/v1/* 使用。brain.py 完全不动，
+    # 旧 /api/chat 仍走 brain；新 /api/v1/chat 走内核 → mistralrs。
+    # 铁律：内核挂载失败绝不阻断启动（try/except 包裹，降级为无内核）。
+    try:
+        from kernel.v5_bridge import V5Bridge
+        bridge = await asyncio.to_thread(lambda: V5Bridge().mount(app))
+        logger.info("v1.0 kernel mounted: skills=%s, gateway ready",
+                    getattr(app.state, "skills_registered", 0))
+    except Exception as e:  # noqa: BLE001
+        app.state.kernel = None
+        app.state.bridge = None
+        logger.warning("v1.0 kernel mount skipped: %s", e)
 
     # 统一网关上游可达性探测（仅日志，不阻断启动）
     try:
@@ -214,9 +275,26 @@ async def startup_event():
     except Exception as e:  # noqa: BLE001
         logger.warning("gateway probe skipped: %s", e)
 
+    # 网关上游周期探活（更新存活缓存，用于友好 502 降级），后台运行不阻塞启动。
+    try:
+        from api.gateway import _liveness_loop
+        asyncio.create_task(_liveness_loop())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("gateway liveness loop skipped: %s", e)
+
+    # brain 重型初始化移到后台任务（见 _deferred_brain_init），不阻塞 /health。
+    asyncio.create_task(_deferred_brain_init(app))
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    # 关闭连接池
+    try:
+        await close_pools()
+        logger.info("数据库连接池已关闭")
+    except Exception as e:
+        logger.error(f"关闭连接池时出错: {e}")
+    
     brain.shutdown()
     try:
         await close_gateway_session()
@@ -384,6 +462,62 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+# ---- v1.0 内核路由（双轨并存，走 mistralrs 本地推理）----
+
+class KernelChatRequest(BaseModel):
+    message: str = Field(..., description="User message")
+    session_id: Optional[str] = Field(None, description="Session ID")
+    engine: str = Field("litellm", description="AgentRuntime 引擎")
+    model: str = Field("mistralrs_general",
+                       description="内核 ModelGateway 模型 id")
+
+
+@app.post("/api/v1/chat")
+async def kernel_chat(request: KernelChatRequest):
+    """v1.0 内核路由：/api/v1/chat → AOSKernel.send_message → mistralrs。
+
+    与旧 /api/chat（brain.py）双轨并存，不改 brain。内核消息路由默认经
+    AgentRuntime 插件；此处直接经 ModelGateway 调本地 mistralrs 三端点，
+    避免绕行。阻塞 HTTP 调用放线程池，事件循环不被占满（守稳定性铁律）。
+    """
+    bridge = getattr(app.state, "bridge", None)
+    if bridge is None:
+        raise HTTPException(status_code=503, detail="kernel not mounted")
+    try:
+        from kernel.types import Message as KMessage
+
+        def _run():
+            gw = bridge.kernel._model_gateway
+            resp = gw.chat(
+                request.model,
+                [KMessage(sender="user", recipient="kernel",
+                          payload={"prompt": request.message})],
+                max_tokens=2048,
+            )
+            return resp
+
+        resp = await asyncio.to_thread(_run)
+        return {
+            "ok": bool(resp.content),
+            "content": resp.content,
+            "model": resp.model,
+            "backend": resp.raw.get("backend") or resp.raw.get("error"),
+            "route": "kernel/v1",
+        }
+    except Exception as e:
+        logger.error("Kernel chat error: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/v1/health")
+async def kernel_health():
+    """v1.0 内核健康报告（轻量，不阻塞）。"""
+    bridge = getattr(app.state, "bridge", None)
+    if bridge is None:
+        return {"status": "not_mounted"}
+    return await asyncio.to_thread(bridge.health)
+
 
 @app.post("/api/chat/stream")
 async def stream_chat(request: ChatRequest):

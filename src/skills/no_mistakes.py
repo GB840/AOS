@@ -3,12 +3,11 @@ No-Mistakes — AI驱动的代码质量自动把关。
 在代码推送前自动运行AI验证流程，确保代码质量。
 """
 
-import json
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .base import Skill, SkillMeta
 

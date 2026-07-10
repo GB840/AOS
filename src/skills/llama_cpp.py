@@ -21,17 +21,16 @@ Llama.cpp 是一个高性能的 LLM 推理引擎，提供最快的 CPU 推理速
 """
 
 import os
-import sys
-import json
 import logging
 import uuid
 import time
 import subprocess
 import requests
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 
@@ -563,7 +562,7 @@ class LlamaCppSkill(Skill):
                     "result": {
                         "mode": "fallback",
                         "prompt": prompt,
-                        "response": f"[模拟响应] 基于本地模型生成的回复（需要安装 Llama.cpp）",
+                        "response": "[模拟响应] 基于本地模型生成的回复（需要安装 Llama.cpp）",
                         "instructions": self._get_install_instructions(),
                     },
                 }
@@ -596,7 +595,7 @@ class LlamaCppSkill(Skill):
         
         return [
             f"1. 下载模型: {url}",
-            f"2. 选择 Q4_K_M 量化版本（8GB内存最优）",
+            "2. 选择 Q4_K_M 量化版本（8GB内存最优）",
             f"3. 下载 .gguf 文件到 {LLAMA_MODELS_PATH}",
         ]
     

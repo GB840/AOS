@@ -23,7 +23,7 @@ AOS 开源资产归位目录 (Asset Placement Catalog)
 
 import ast
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 

@@ -16,17 +16,13 @@ SearXNG 是一个自托管的元搜索引擎，聚合70+个搜索引擎结果。
 - 源码部署: git clone https://github.com/searxng/searxng.git
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
-import time
 import requests
-from typing import Dict, List, Optional, Any
+from typing import Dict, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,6 @@ Integrates with:
 
 import uuid
 import time
-import json
 import logging
 import threading
 from datetime import datetime

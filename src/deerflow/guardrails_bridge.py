@@ -9,7 +9,6 @@ Wraps:
 Provides AOS with tool-level safety gating, integrated with config.
 """
 
-import sys
 import logging
 from typing import Optional, List, Set
 

@@ -18,6 +18,7 @@
 这是 AOS "集成层" 的合法职责（胶水/提升层），不是重造四个核心能力本身。
 """
 import os
+import time
 import asyncio
 import logging
 from urllib.parse import urlparse, urlunparse
@@ -43,6 +44,56 @@ _DEFAULTS = {
 }
 
 _session: aiohttp.ClientSession | None = None
+
+# 上游存活缓存：label -> 最近一次成功探测的 monotonic 时间；用于快速 fail-fast / 友好降级，
+# 避免上游未启动时请求挂起等待。仅缓存、不泄露内部地址。
+_liveness: dict[str, float] = {}
+
+
+def _upstream_label(target: str) -> str:
+    """把内部 target（含 host:port）映射为对外安全的公共标签，避免泄露内部地址。"""
+    t = (target or "").lower()
+    if "8501" in t or "/web" in t:
+        return "web"
+    if "18789" in t or "openclaw" in t:
+        return "openclaw"
+    if "2026" in t or "deerflow" in t:
+        return "deerflow"
+    return "upstream"
+
+
+def _upstream_down(target: str) -> bool:
+    """该上游近期从未探活成功 -> 判定为未启动。"""
+    last = _liveness.get(_upstream_label(target))
+    return last is None or (time.monotonic() - last) > 60
+
+
+def _friendly_down_msg(label: str) -> str:
+    return {
+        "web": "Web 控制台未运行，请先启动 web 服务（如 aos_supervisor --only web）。",
+        "openclaw": "OpenClaw 网关未运行。",
+        "deerflow": "DeerFlow 网关未运行。",
+    }.get(label, "上游服务未启动。")
+
+
+async def _liveness_loop(interval: float = 15.0) -> None:
+    """周期性探活三个上游，更新 _liveness 缓存；异常静默，不拖累主进程。"""
+    while True:
+        try:
+            session = get_session()
+            for name, cfg in _DEFAULTS.items():
+                try:
+                    async with session.get(
+                        cfg["target"].rstrip("/") + "/",
+                        timeout=aiohttp.ClientTimeout(total=3),
+                    ) as r:
+                        if r.status < 500:
+                            _liveness[name] = time.monotonic()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        await asyncio.sleep(interval)
 
 
 def get_session() -> aiohttp.ClientSession:
@@ -88,8 +139,6 @@ def _rewrite_location(loc: str, request: Request, cfg: dict) -> str:
         new = p._replace(scheme=request.url.scheme, netloc=request.url.netloc)
         if cfg.get("strip"):
             # 上游不含代理前缀，需要补回
-            if not new.path.startswith(request.url.path.split("/")[1:2] and "/"):
-                pass
             prefix = _prefix_of(request.url.path)
             if prefix and not new.path.startswith(prefix + "/"):
                 new = new._replace(path=prefix + (new.path if new.path.startswith("/") else "/" + new.path))
@@ -128,22 +177,34 @@ async def _proxy_http(request: Request, prefix: str, cfg: dict):
         body = await request.body()
 
     session = get_session()
-    try:
-        # 注意：不能在 `async with session.request(...) as resp:` 内部 return StreamingResponse——
-        # 那样 with 块退出会先关闭上游连接, 导致下游还没开始读就 "Connection closed"。
-        # 正确做法：保持 resp 打开, 在 stream 生成器的 finally 中释放连接。
-        resp = await session.request(
-            method=request.method,
-            url=target,
-            headers=headers,
-            data=body,
-            allow_redirects=False,
-            timeout=aiohttp.ClientTimeout(total=600),
-        )
-    except aiohttp.ClientError as e:
-        logger.error("[gateway] upstream %s error: %s", target, e)
+    last_err: Exception | None = None
+    # 瞬时抖动重试一次（短超时即退），避免一抖即 502。
+    for attempt in range(2):
+        try:
+            # 注意：不能在 `async with session.request(...) as resp:` 内部 return StreamingResponse——
+            # 那样 with 块退出会先关闭上游连接, 导致下游还没开始读就 "Connection closed"。
+            # 正确做法：保持 resp 打开, 在 stream 生成器的 finally 中释放连接。
+            resp = await session.request(
+                method=request.method,
+                url=target,
+                headers=headers,
+                data=body,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=600),
+            )
+            break
+        except aiohttp.ClientError as e:
+            last_err = e
+            if attempt == 0:
+                logger.warning("[gateway] upstream %s 第1次失败，重试: %s", target, e)
+                continue
+    else:
+        # 两次均失败：返回 sanitized 502——内部 host:port/异常细节仅入日志，不泄露给客户端。
+        logger.error("[gateway] upstream %s 不可用: %s", target, last_err)
+        label = _upstream_label(target)
+        detail = "上游服务不可用" if not _upstream_down(target) else _friendly_down_msg(label)
         return JSONResponse(
-            {"error": "bad_gateway", "detail": str(e), "upstream": target},
+            {"error": "bad_gateway", "detail": detail, "upstream": label},
             status_code=502,
         )
 

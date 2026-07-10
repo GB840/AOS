@@ -23,18 +23,14 @@ Ollama 是一个运行本地大模型的工具，支持 Qwen、DeepSeek 等多�
 - 创建自定义模型：ollama create qwen2.5-1.5b -f Modelfile
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
 import time
 import requests
-import subprocess
-from typing import Dict, List, Optional, Any
+from typing import Dict, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

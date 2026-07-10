@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 from .base import Skill, SkillMeta
-import json, logging
+import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 try:
     from ddgs import DDGS

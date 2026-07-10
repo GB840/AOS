@@ -10,12 +10,8 @@ toast notifications, component patterns, and anti-patterns.
 Rated as the best tool for quickly producing presentable design mockups.
 """
 
-import json
 import logging
-import re
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 from .base import Skill, SkillMeta
 
 logger = logging.getLogger(__name__)

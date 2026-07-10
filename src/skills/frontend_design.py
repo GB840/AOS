@@ -9,11 +9,9 @@ Zero external dependencies - pure HTML/CSS/JavaScript inline.
 This is the #1 ranked skill on ByteDance's internal leaderboard.
 """
 
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 from .base import Skill, SkillMeta
 
 logger = logging.getLogger(__name__)

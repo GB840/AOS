@@ -14,7 +14,7 @@ LEMON 学习型编排器 - 自动生成可执行编排说明书
 
 import logging
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)

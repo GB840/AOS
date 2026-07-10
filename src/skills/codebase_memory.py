@@ -23,17 +23,12 @@ Codebase Memory MCP 是 DeusData 团队开发的高性能代码智能 MCP 服务
 """
 
 import os
-import sys
-import json
 import logging
 import uuid
-import subprocess
-import time
-from typing import Dict, List, Optional, Any
-from pathlib import Path
+from typing import Dict, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

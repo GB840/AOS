@@ -1,7 +1,7 @@
 """技能子智能体包装器 - 将任意技能自动转换为子智能体."""
 
 import logging
-from typing import Dict, Any, Callable
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 

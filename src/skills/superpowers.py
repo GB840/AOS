@@ -6,7 +6,7 @@ Think → Plan → Code → Test → Review 五步门控流程。
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from .base import Skill, SkillMeta
 

@@ -12,16 +12,13 @@ ViMax 是香港大学数据科学实验室（HKUDS）开源的多智能体视频
 """
 
 import os
-import sys
 import json
 import logging
-import time
 import uuid
-from typing import Dict, List, Optional, Any
-from pathlib import Path
+from typing import Dict, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 
@@ -238,12 +235,12 @@ class ViMaxSkill(Skill):
         """执行视频生成工作流（使用AI生成故事板和图片）"""
         from core import get_brain
         brain = get_brain()
-        
+
         if workflow == "idea2video":
             duration = params.get("duration", 30)
             resolution = params.get("resolution", "1080p")
             style = params.get("style", "cinematic")
-            
+
             prompt = f"""基于以下创意，生成一个详细的视频故事板：
 创意：{input_content}
 时长：{duration}秒
@@ -251,12 +248,16 @@ class ViMaxSkill(Skill):
 分辨率：{resolution}
 
 请生成4个场景的详细描述，包括每个场景的画面内容、镜头角度、背景音乐建议。"""
-            
-            storyboard = brain.chat(message=prompt)
-            if isinstance(storyboard, str):
-                storyboard_text = storyboard
+
+            if brain is not None and not os.getenv("AOS_CLI_STANDALONE"):
+                storyboard = brain.chat(message=prompt)
+                if isinstance(storyboard, str):
+                    storyboard_text = storyboard
+                else:
+                    storyboard_text = storyboard.get("response", "")
             else:
-                storyboard_text = storyboard.get("response", "")
+                # brain-less 回退：直接走 litellm，证明 skill 脱离 AOS 大脑也能跑
+                storyboard_text = _standalone_chat(prompt, params.get("model"))
             
             return {
                 "success": True,
@@ -449,3 +450,37 @@ def register_vimax_skill(registry=None):
     registry.register(skill)
     logger.info("ViMax 技能已注册")
     return skill
+
+
+# brain-less 回退统一走共享 helper（避免各 skill 重复定义）
+from .cli_helpers import _standalone_chat
+
+
+def _cli_main() -> int:
+    """`python -m skills.vimax` 入口：脱离 AOS 大脑独立演示（对应战略建议：每个核心 skill 可独立跑）。"""
+    import argparse
+    import logging
+    import os
+
+    # 独立演示：强制 brain-less 回退，并静音 AOS 启动日志噪音
+    os.environ.setdefault("AOS_CLI_STANDALONE", "1")
+    logging.disable(logging.CRITICAL)
+
+    ap = argparse.ArgumentParser(description="ViMax 技能独立演示（可脱离 AOS 大脑运行）")
+    ap.add_argument("--task", "-t", default="一个勇敢的宇航员在火星上发现古老文明的遗迹", help="视频创意")
+    ap.add_argument("--workflow", "-w", default="idea2video", choices=list(VIMAX_WORKFLOWS.keys()))
+    ap.add_argument("--model", default=None, help="模型名（litellm 支持；默认 zhipu/glm-4-flash）")
+    args = ap.parse_args()
+
+    skill = ViMaxSkill()
+    result = skill.execute({
+        "workflow": args.workflow,
+        "input": args.task,
+        "params": {"model": args.model} if args.model else {},
+    })
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    return 0 if result.get("success") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

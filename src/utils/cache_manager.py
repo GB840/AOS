@@ -8,9 +8,8 @@ import hashlib
 import json
 import logging
 import threading
-import time
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Optional
 from cachetools import TTLCache, LRUCache
 
 logger = logging.getLogger(__name__)

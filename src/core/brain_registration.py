@@ -10,7 +10,6 @@ mcp) 与 config, 不触碰内部私有方法, 故可安全外移且不破冷启�
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

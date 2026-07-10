@@ -1,8 +1,8 @@
 import logging
 import json
 import base64
-from typing import Optional, Dict, Any
-from pathlib import Path
+import threading
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 

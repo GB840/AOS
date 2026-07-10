@@ -1,13 +1,29 @@
-# AOS v5.0 —— 你的资料与代码总地图（STATUS）
+# AOS v5.0 → v1.0 — 你的资料与代码总地图（STATUS）
 
-> 这是一份**导航索引**，不是技术文档。你说过"不知道弄哪去了"——这份文件把所有东西摆在一张表上。
-> 每次状态变动都会更新这里。最后更新：**2026-07-08**。
+> 这是一份**导航索引**，不是技术文档。
+> 每次状态变动都会更新这里。最后更新：**2026-07-10**。
 
 ---
 
-## 0. 一句话定位
+## 0. 重大更新：v1.0 物种内核已落地 (2026-07-10)
 
-AOS = **开放 Agent 能力市场（fabric）**。四个你指定的真实开源 + 四个基础设施平面，都通过"薄适配"插进 AOS；AOS 自己**只做提升层（统一状态/治理/平台/控制台），绝不重造 agent 大脑**。
+AOS 从 v5.0（单体 brain.py + 插件架构）演进到 v1.0（极简内核 + 6 层物种生态 + 可信记忆）。
+
+**28 模块，全零依赖，全栈集成验证通过 (10/10)。**
+
+| 层 | 模块数 | 做什么 |
+|---|---|---|
+| 极简内核 | 1 | `AOSKernel` 三职责恒不变 (register/send_message/check_permission) |
+| 四层骨架 | 6 | ModelGateway / MCPBus / AgentRuntime / UI + FallbackChain + plugins |
+| 横切补完 | 6 | versioning / events / auth_bridge / hotswap / skills_bridge / future |
+| 物种动能 | 4 | immunity (检测/熔断/自愈) / evolution (DNA/变异/育种) / ecology (资源/选择/共生) / live (活体循环) |
+| 认知基座 | 1 | Hippo-Scroll 双轨可信记忆 (物证锚点/共识分歧/金字塔检索/巡检闭环) |
+| 合规安全 | 1 | AuditTrail / ContentGuard / PolicyEngine / ComplianceLayer |
+| 接入层 | 2+ | v5_bridge (mount(app) 7 缺口全接) / CLI (aos.py chat/evolve/demo) |
+
+**v5.0 基础设施全保留：** brain.py 不改、FastAPI 不改、JWT RS256 不变。通过 `v5_bridge.mount(app)` 一键注入。
+
+**验证：** 21 单元测试 + 3 次真实 Zhipu LLM 调用 + 10 步集成测试，全栈 5.9s 跑通。
 
 ---
 

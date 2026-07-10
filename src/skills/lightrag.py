@@ -16,16 +16,12 @@ LightRAG 是香港大学开发的轻量级RAG框架，适合构建知识图谱�
 - 完全本地运行，无需云端API
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
-import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

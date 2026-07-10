@@ -24,18 +24,16 @@ ComfyUI 是一个强大的可视化节点编辑器，用于生成图像和视频
 """
 
 import os
-import sys
 import json
 import logging
 import uuid
 import time
 import requests
-import websocket
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
 
-from .base import Skill, SkillMeta
+from .base import Skill
 from utils.config import config
 
 logger = logging.getLogger(__name__)
@@ -214,8 +212,8 @@ class ComfyUISkill(Skill):
                 f.write(f"任务类型: {action}\n")
                 f.write(f"提示词: {context.get('prompt', '')}\n")
                 f.write(f"时间: {datetime.now().isoformat()}\n")
-                f.write(f"模式: 降级模式 (ComfyUI 不可用)\n")
-                f.write(f"说明: 需要启动 ComfyUI 服务才能生成真实图像/视频\n")
+                f.write("模式: 降级模式 (ComfyUI 不可用)\n")
+                f.write("说明: 需要启动 ComfyUI 服务才能生成真实图像/视频\n")
             
             return {
                 "success": True,
@@ -430,7 +428,6 @@ class ComfyUISkill(Skill):
     
     def _inject_params(self, workflow: Dict, params: Dict) -> Dict:
         """注入参数到工作流模板"""
-        import re
         
         workflow_str = json.dumps(workflow)
         

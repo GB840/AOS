@@ -1,8 +1,7 @@
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 from enum import Enum
 import logging
-from .base import Skill, SkillRegistry
-from .template import SkillTemplate
+from .base import SkillRegistry
 
 logger = logging.getLogger(__name__)
 

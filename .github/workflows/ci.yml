@@ -30,3 +30,8 @@ jobs:
 
       - name: Unit tests
         run: make test
+
+      - name: Kernel integration test (zero-dependency, no API keys needed)
+        run: |
+          python -c "import sys; sys.path.insert(0,'src'); from kernel.system import build_default_system; s=build_default_system(); print('kernel OK')"
+          python -m pytest tests/test_kernel.py -v --tb=short

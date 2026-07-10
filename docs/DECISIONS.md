@@ -16,7 +16,7 @@
 ## 1. 根本诊断:灵魂与肉体不对齐
 
 - **灵魂**(STATUS.md 宣称):开放能力总线,AOS 不重造大脑,只做接线板。
-- **肉体**(实际代码):`brain.py` 1841 行 + 7 个大脑子模块 1850 行 = **~3700 行自研编排决策逻辑**,且 fabric 是"嫁接"进 brain 而非取代它,**新旧两套架构并存**。
+- **肉体**(实际代码):`brain.py` 1965 行 + 7 个大脑子模块 2237 行 ≈ **~4200 行自研编排决策逻辑**(07-10 二期核验实测；原 1841/1850 为过期快照),且 fabric 是"嫁接"进 brain 而非取代它,**新旧两套架构并存**。
 - **代价**:每加一个功能都要同时喂两套架构;提交历史里大量"死锁/撞包/三重失效"就是两套架构在同一进程里打架的症状(如 commit deb5082 跨-await 持锁死锁)。
 - **结论**:收敛只有一条路——砍 brain.py 成纯胶水,让 fabric 当主干。详见 `docs/BRAIN_TRIAGE.md`。
 
@@ -24,7 +24,7 @@
 
 ## 2. 能不能打?
 
-- **作为想法/技术探索:能打,高分。** fabric 能力总线、38 表五层数据库、统一网关、GB/Z 185 合规——这些选择说明做的人在想问题。
+- **作为想法/技术探索:能打,高分。** fabric 能力总线、42 表五层数据库、统一网关、GB/Z 185 合规——这些选择说明做的人在想问题。
 - **作为竞争/交付物:现在不能打。** 不是功能不够,是**自己还没决定好自己是谁**。
 
 ---
@@ -35,9 +35,9 @@
 |---|---|---|---|
 | 1 | 环境跑不起来:Python 3.14 但声明 3.10/3.11;sqlmodel/ag2/mem0 未装;pytest 无法 collect | 🔴 P0 | 所有讨论的共同前提 |
 | 2 | 新旧架构未收敛(brain.py 自研大脑 vs fabric) | 🔴 P0 | 根因,见 §1 |
-| 3 | git 仅 23 提交、5 万行代码,版本保护几乎为零 | 🔴 P0 | 高危 |
+| 3 | git 已 40 提交(原 23 为过期快照)、版本保护改善中 | 🔴 P0 | 高危(历史不足,继续补提交) |
 | 4 | 硬编码密钥残留(brain.py:91-94 明文 admin/aos123456) | 🟠 P1 | 隐患 |
-| 5 | 巨型文件违反自家规范(web/app.py 211KB,brain.py 95KB) | 🟠 P1 | AGENTS.md 定 max 500 行 |
+| 5 | 巨型文件违反自家规范(brain.py 实测 1965 行远超 AGENTS.md max 500 行;原写 web/app.py 211KB 系误指,真实入口为 web/console.py) | 🟠 P1 | AGENTS.md 定 max 500 行 |
 | 6 | 重复/死代码:UITARS 注册块复制两遍、日期硬编码、死属性 | 🟡 P2 | 零风险可删 |
 | 7 | 自研 OpenClaw 违反铁律(已标 DEPRECATED 但代码仍在) | 🟡 P2 | |
 | 8 | fabric 6 adapter 仅 2 个 live(LiteLLM/Mem0/browser-use/Langfuse 均 health()=False) | 🟠 P1 | 不是缺能力,是没通电 |
@@ -112,31 +112,53 @@
 
 ---
 
-## 8. "LLM 缺失症"自查(经第三方分析交叉验证)
+## 8. "智能接线缺口"自查(2026-07-10 二次校正版)
 
-> 第三方代码级分析(2026-07-10)独立得出与 §1 相同结论,并补挖出 AOS 的系统性病灶:**"名字骗人"——函数名宣称智能/并行,实则关键字匹配/串行。** 已逐条代码验证属实。
+> ⚠️ **本节为校正版。** 初版(07-10 早些时候)误将 `classify_with_llm` 描述为"内部直接
+> return 本地、从不调 LLM",经用户复核 + 代码实测(task_classifier.py:124-139)证伪。
+> 初版同时存在过期指标与误报,已在此整体重写。校正动因见 §8.4。
 
-### 8.1 已坐实的"假函数/假智能"
+### 8.1 核实结论:缺陷是"接线缺口",不是"函数造假"
+
+经逐行复核 `src/core/task_classifier.py`:
+
+- `classify_with_llm()`(:124-139)**确实调用 LLM**——构建 `TASK_CLASSIFICATION_PROMPT`,
+  调 `self.brain._route_l1(prompt)`(→ Hermes),仅在 `brain is None` / `confidence < 0.5` /
+  `异常` 三种情况回退到 `_local_classify()`。**它是可用的 LLM 分类器,不是假函数。**
+- 真实缺陷是**接线缺口**:路由入口 `classify()`(:103)在 :118 直接调 `_local_classify()`
+  (关键字匹配),`classify_with_llm` 写好了但**从未被任何路由路径调用**,是死代码。
+
+**正确的修法**:把已有的 `classify_with_llm` 接进 `classify()` 的主路径(本地规则降级为兜底),
+而不是"删掉整个分类器、换外部引擎"。工作量从"重写"降到"接线"。
+
+### 8.2 仍属实的"名实不符"项
 
 | 位置 | 名字宣称 | 实际 | 严重度 |
 |---|---|---|---|
-| `task_classifier.classify_with_llm` | LLM 分类 | 内部直接 `return self._local_classify()`,**从不调 LLM** | 🔴 死代码+误导 |
-| `task_classifier._local_classify` | 任务分级 | `simple_patterns` 关键字包含匹配("是什么/什么是") | 🔴 关键词伪装语义 |
-| `meta_debate.run_self_pitch` | 元辩论 | 注释原文"使用本地规则避免递归",`_calculate_match_score` 是关键字累加 | 🔴 关键词伪装智能 |
-| `swarm_flow.execute_parallel` | 并行执行 | `for step_id in group` 串行循环,无 ThreadPool/asyncio | 🟠 名实不符 |
-| `chat()` 日期硬编码 | —— | 8 个模式 if 命中直接返回,绕过整个分类链 | 🟡 已在处置表标删 |
+| `task_classifier._local_classify` (:141) | 任务分级 | `simple_patterns` 关键字包含匹配 | 🟠 本地兜底,合理但被当主路径 |
+| `task_classifier.classify_with_llm` (:124) | —— | **写了 LLM 分类却没接进路由**(死代码) | 🟠 接线缺口,非造假 |
+| `meta_debate.run_self_pitch` (:148) | 元辩论 | 注释"使用本地规则避免递归",`_calculate_match_score` 关键字累加 | 🟠 真关键字模拟 |
+| `swarm_flow.execute_parallel` (:254) | 并行执行 | `for step_id in group` 串行,无 ThreadPool/asyncio | 🟠 名实不符 |
 
-### 8.2 这意味着什么
+### 8.3 已澄清的误报(初版制造的不必要恐慌)
 
-- AOS 的 L1-L5 分级、角色匹配、元辩论——**整条"智能路由"链路实际是关键字匹配驱动的**,和宣称的"语义理解/多智能体协作"有本质差距。
-- 这正好印证 §1:brain.py 的 ~3700 行决策逻辑不仅违反铁律,而且**其"决策"本身多是关键词模拟**,迁给真实引擎(LiteLLM/AG2/DeerFlow)后会真正变智能。
-- **处置优先级微调**:收敛 brain.py 时,这些"假智能"模块**优先用真实引擎替换**,而非简单删除——删了就真没智能了,换成引擎才是升级。
+- **`exec`/`eval` 执行用户代码:误报。** grep `src/core` 的 `exec(` 命中全部是
+  SQLAlchemy `Session.exec()`(engine.py:88 / cold.py:68 / eventstore.py:38,72,97,127),
+  无任何执行用户代码的 `exec()`/`eval()`。此担忧在 src/core 范围内可关闭。
+- **明文口令 admin/aos123456:已治理。** brain.py:91-92 已改为从 config 读取,
+  :86-87 仅存注释说明历史。不再是存活隐患。
 
-### 8.3 待验证项(用那份分析的尺子继续量)
+### 8.4 初版为何出错(教训)
 
-- [ ] `execution/sandbox.py` 与技能热加载路径**是否有 exec/eval 执行用户代码**(AGENTS.md 明令禁止)
-- [ ] router/角色匹配是否真用 embedding,还是 Jaccard/子串
-- [ ] 同步(requests)与异步(FastAPI)混用点全量排查(死锁温床)
+- 初版对 `classify_with_llm` **只看了方法签名和几行,没读全 :131 的 `brain._route_l1` 调用**,
+  就下了"假函数"结论。这与上一轮"看路径就判错靶子"同病:**验证不充分就定性。**
+- 已纳入铁律 §4.3,作为反复出现的反面案例。
+
+### 8.5 仍待验证项
+
+- [ ] router/角色匹配(`skill_registry.search`)是否真用 embedding,还是 Jaccard/子串
+- [ ] 同步(requests)与异步(FastAPI)混用点全量排查(死锁温床,commit deb5082 已修一处)
+- [ ] fabric 各 adapter 实时 health() 复测(OpenClaw 已真实部署 @18789,其余待验)
 
 ---
 

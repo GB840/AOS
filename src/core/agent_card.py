@@ -13,8 +13,7 @@ AgentCARD 策略模块 - 成本-精度优化策略
 """
 
 import logging
-import json
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 

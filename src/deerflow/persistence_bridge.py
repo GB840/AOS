@@ -31,10 +31,8 @@ _os.environ.setdefault('FEISHU_WEBHOOK', 'https://dummy.example.com')
 
 logger = logging.getLogger(__name__)
 
-import os
 import sqlite3
 import json
-from datetime import datetime
 from pathlib import Path
 
 

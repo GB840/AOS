@@ -18,18 +18,13 @@ Loop Engineering（循环工程）：通过设计闭环机制，让AI在设定�
 - Prompt Engineering → Context Engineering → Harness Engineering → Loop Engineering
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
-import time
 import asyncio
-from typing import Dict, List, Optional, Any, Callable
-from pathlib import Path
+from typing import Dict, List, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

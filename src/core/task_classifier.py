@@ -16,6 +16,7 @@ L5 复杂项目: 多模块、多阶段、跨领域 → 项目拆解+分层执行
 
 import logging
 import json
+import os
 from enum import Enum
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -115,7 +116,14 @@ class TaskClassifier:
         if cached:
             return cached
 
-        classification = self._local_classify(task)
+        # 语义分类（升华2 前提）：优先用 LLM 从 prompt 推断任务级别/通道(TaskType)；
+        # 失败 / 低置信 / 未启用 时回落本地关键词规则。可用 AOS_SEMANTIC_ROUTING=0 关闭
+        # （关闭后纯本地，省一次 LLM 调用，保留旧行为）。classify_with_llm 内部已自带
+        # 低置信与异常回落，不会因 LLM 失败而中断路由。
+        if os.getenv("AOS_SEMANTIC_ROUTING", "1") != "0" and self.brain is not None:
+            classification = self.classify_with_llm(task)
+        else:
+            classification = self._local_classify(task)
         self._cache_result(task, classification)
 
         logger.info(f"任务分级完成: {classification.level.value} - {task[:50]}...")
@@ -244,12 +252,12 @@ class TaskClassifier:
         )
 
     def _check_cache(self, task: str) -> Optional[TaskClassification]:
-        """检查缓存"""
-        return None
+        """检查缓存（进程内，按任务文本命中，避免重复 LLM 分类调用）"""
+        return self._cache.get(task)
 
     def _cache_result(self, task: str, classification: TaskClassification):
         """缓存结果"""
-        pass
+        self._cache[task] = classification
 
     def get_channel_for_level(self, level: TaskLevel) -> TaskChannel:
         """根据级别获取处理通道"""

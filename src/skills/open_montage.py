@@ -24,17 +24,13 @@ OpenMontage Skill Module - 视频生产流水线
 - search_tools: 搜索工具
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
-import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
 
-from .base import Skill, SkillMeta
+from .base import Skill
 from utils.config import config
 
 logger = logging.getLogger(__name__)
@@ -56,7 +52,7 @@ def load_real_open_montage_pipelines() -> Dict[str, Dict]:
             with open(skills_file, "r", encoding="utf-8") as f:
                 content = f.read()
             
-            logger.info(f"已加载 OpenMontage 技能索引")
+            logger.info("已加载 OpenMontage 技能索引")
         except Exception as e:
             logger.error(f"读取 OpenMontage 技能索引失败: {e}")
     

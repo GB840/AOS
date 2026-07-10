@@ -11,6 +11,8 @@ architecture" - it is speaking the common tongue.
 """
 from __future__ import annotations
 
+from typing import Dict
+
 OPEN_PROTOCOLS: Dict[str, str] = {
     "MCP": "Model Context Protocol (Anthropic) - tool / resource calling.",
     "A2A": "Agent2Agent (Google) - cross-agent collaboration.",

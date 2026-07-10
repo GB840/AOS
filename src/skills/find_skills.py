@@ -5,7 +5,7 @@ Find Skills — 技能搜索引擎。
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .base import Skill, SkillMeta, SkillRegistry
 

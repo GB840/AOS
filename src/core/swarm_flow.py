@@ -14,11 +14,13 @@ SwarmFlow 可控工作流编排 - 蜂群协作执行引擎
 """
 
 import logging
-import json
 import uuid
-from typing import Dict, List, Optional, Any, Callable
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from dataclasses import dataclass
 from enum import Enum
+
+if TYPE_CHECKING:
+    from core.lemon_orchestrator import OrchestrationSpec, OrchestrationStep
 
 logger = logging.getLogger(__name__)
 

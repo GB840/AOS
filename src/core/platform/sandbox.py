@@ -89,7 +89,6 @@ class WasmSandbox(Sandbox):
     def _probe(self) -> bool:
         try:
             if self.runtime == "wasmtime":
-                import wasmtime  # type: ignore
                 return True
         except Exception:
             pass
@@ -103,7 +102,7 @@ class WasmSandbox(Sandbox):
         if not self._available:
             return {
                 "ok": False,
-                "error": f"WASM 运行时未安装 (需 wasmtime)。安装后启用: pip install wasmtime",
+                "error": "WASM 运行时未安装 (需 wasmtime)。安装后启用: pip install wasmtime",
                 "kind": self.kind,
             }
         # 接口就绪: 运行时存在时, 此处接入 wasmtime 加载/实例化/调用逻辑。

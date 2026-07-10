@@ -25,18 +25,13 @@ herdr 提供"多Agent终端管理"能力，允许在一个终端中同时运行�
 - restart_agent: 重启Agent
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, Any
 from datetime import datetime
-from pathlib import Path
 
-from .base import Skill, SkillMeta
-from utils.config import config
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

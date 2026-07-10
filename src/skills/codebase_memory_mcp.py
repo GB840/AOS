@@ -25,17 +25,15 @@ codebase-memory-mcp 是一个强大的代码库记忆系统，将代码库解析
 """
 
 import os
-import sys
 import json
 import logging
 import uuid
-import time
 import re
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 from datetime import datetime
 from pathlib import Path
 
-from .base import Skill, SkillMeta
+from .base import Skill
 from utils.config import config
 
 logger = logging.getLogger(__name__)

@@ -25,16 +25,14 @@ Cognee Skill Module - 知识图谱记忆层
 """
 
 import os
-import sys
 import json
 import logging
 import uuid
-import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 from datetime import datetime
 from pathlib import Path
 
-from .base import Skill, SkillMeta
+from .base import Skill
 from utils.config import config
 
 logger = logging.getLogger(__name__)

@@ -19,7 +19,6 @@ Usage:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
 from .base import Skill, SkillMeta
 
 logger = logging.getLogger(__name__)

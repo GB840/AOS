@@ -19,7 +19,6 @@ This gives AOS access to DeerFlow's full subagent system:
 
 from __future__ import annotations
 
-import sys
 import os
 import logging
 import threading

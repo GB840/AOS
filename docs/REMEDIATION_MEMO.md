@@ -97,3 +97,17 @@
 5. `tests/test_database.py` — 表数断言 `38 → 42`（#11/#106 校正：真实 ORM 注册物理表数为 42）。
 
 **验证**：`test_security.py` 11 passed ✓；`test_database.py`(count/idempotent/seed/orm) 4 passed ✓；`test_api.py` 执行中。
+
+---
+
+## 七、后续收尾提交（非安全整改，但含 #11 索引修复）
+
+用户「把剩下的都做了」指令下，将此前刻意排除在整改提交之外的 database/fabric 工作流一并提交（分支 `feature/infra-setup`）：
+
+- `3d4945f` **数据库现代化 + #11 索引落地**：模型字段 `Optional[X]`→`X | None`；为 `task_fingerprint_id`/`selected_model`/`agent_id` 等 FK/查询列补 `index=True`（#11「缺索引」的实际修复，经 SQLModel metadata 注册，新库/迁移即生效）；`engine.py` docstring 38→42。
+- `f2d827d` **fabric 适配器类型现代化**：`Optional/Dict/List`→`| None/dict/list`（PEP 585/604），纯类型层，无逻辑变更。
+- `57396cb` + `14db645` **规划文档**：`BRAIN_TRIAGE.md`/`DECISIONS.md`/`MASTER_PLAN.md`（brain.py 逐方法处置 + 架构决策 + 总纲）。
+
+验证：热重载后 `import core.database.models`→42 表；live server `/health`=200、`/api/chat` 无 key=401/有 key=200。
+
+> 运维提示：Git Bash 的 `ps`/`netstat` 在 Windows 上不总能看到本机原生 socket/进程；端口存活以 `curl` 为准，进程归属用 PowerShell `Get-NetTCPConnection` 查。

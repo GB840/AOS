@@ -3,9 +3,8 @@ from datetime import datetime
 from pathlib import Path
 import json
 import logging
-from .base import Skill, SkillMeta
+from .base import Skill
 from .template import SkillTemplate
-from .versioning import get_version_manager, get_snapshot_manager
 
 logger = logging.getLogger(__name__)
 

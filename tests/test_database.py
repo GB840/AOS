@@ -14,19 +14,14 @@ import sys
 import tempfile
 
 import pytest
+sqlmodel = pytest.importorskip("sqlmodel")
 from sqlmodel import SQLModel, select
 
 from core.database import init_db, models, session_scope
 from core.database.models import (
     Agent,
     AuditLog,
-    Conversation,
     EvolutionLog,
-    Knowledge,
-    Message,
-    Skill,
-    Task,
-    Thread,
 )
 
 

@@ -28,18 +28,12 @@ video-use 允许AI通过自然语言指令自动完成视频剪辑，
 - reverse_video: 反转视频
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
-import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, Any
 from datetime import datetime
-from pathlib import Path
 
-from .base import Skill, SkillMeta
-from utils.config import config
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

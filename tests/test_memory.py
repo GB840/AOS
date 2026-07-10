@@ -2,9 +2,7 @@
 Unit tests for AOS memory system.
 """
 
-import pytest
 import time
-from pathlib import Path
 
 
 class TestMemoryManager:

@@ -12,13 +12,11 @@ Audit entries are JSON-structured, timestamped, and queryable.
 """
 
 import logging
-import json
 import uuid
 import threading
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Dict, Any, List
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

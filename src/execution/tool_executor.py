@@ -11,13 +11,9 @@ Tool Executor - 工具执行器
 标准：OpenAI Function Calling 标准
 """
 
-import os
-import sys
-import json
 import logging
-import uuid
 import asyncio
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Any, Callable
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

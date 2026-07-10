@@ -5,10 +5,9 @@ Design.md — UI/UX设计标准化规范知识库。
 
 import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .base import Skill, SkillMeta
 

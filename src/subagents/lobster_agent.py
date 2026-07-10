@@ -1,10 +1,8 @@
 """LobsterAI 子智能体 — 通过 OpenClaw ACP 桥接网易有道 LobsterAI 的办公自动化能力."""
 
-import json
 import logging
-import subprocess
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -138,7 +136,6 @@ class LobsterSubAgent:
     def close(self) -> None:
         if self._acp_client is not None and self._loop is not None:
             try:
-                import asyncio
                 self._loop.run_until_complete(self._acp_client.close())
             except Exception as exc:
                 logger.warning("LobsterAI 关闭时出错: %s", exc)

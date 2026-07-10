@@ -18,6 +18,7 @@ import time
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Generator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.config import config
 
@@ -346,7 +347,8 @@ class DeerFlowGatewayClient:
     # ------------------------------------------------------------------
     def submit_task(self, task_type, input_data, thread_id=None, model_name=None, **kwargs):
         """提交一个长时任务：后台线程跑 run()，任务池跟踪状态。"""
-        import threading, uuid, time
+        import threading
+        import uuid
         if self._task_lock is None:
             self._task_lock = threading.Lock()
         task_id = f"df-{uuid.uuid4().hex[:12]}"
@@ -607,53 +609,104 @@ class UnifiedBrain:
     All AOS modules should route through this class.
     """
 
+    # ---- Dependency-ordered parallel initialization ----
+    # Each batch is a list of (name, init_func) tuples.
+    # Batches run sequentially; within each batch, components run in parallel.
+    _INIT_BATCHES = [
+        # Batch 0: foundation (everything else may depend on SQLite)
+        [("persistence", "_init_persistence")],
+        # Batch 1: Hermes MUST run alone — it manipulates sys.modules
+        # (temporarily removes AOS utils* namespace to avoid shadowing hermes-agent's utils).
+        # Running it in parallel with other components would break their `from utils.config` imports.
+        [("hermes", "_init_hermes_brain")],
+        # Batch 2: independent leaf components (no cross-dependencies, utils.config safe)
+        [
+            ("memory", "_init_memory"),
+            ("mcp", "_init_mcp_protocol"),
+            ("compliance", "_init_compliance"),
+            ("skills", "_init_skills_registry"),
+            ("router", "_init_router"),
+            ("fabric", "_init_fabric"),
+            ("langfuse", "_init_langfuse_tracer"),
+            ("mem0", "_init_mem0_store"),
+            ("meta_orchestrator", "_init_meta_orchestrator"),
+        ],
+        # Batch 3: depend on batch-2 components
+        [
+            ("deerflow", "_init_deerflow_scheduler"),       # ← memory
+            ("subagents", "_init_subagents_registry"),       # ← config
+            ("identity", "_init_identity"),                  # ← compliance
+            ("task_classifier", "_init_task_classifier"),    # ← brain=self
+            ("meta_debate", "_init_meta_debate"),            # ← skills
+            ("task_fingerprint", "_init_task_fingerprint"),  # ← memory
+        ],
+        # Batch 4: depend on batch-3 components
+        [
+            ("execution", "_init_execution_layer"),          # ← deerflow (registers handlers on self.deerflow)
+            ("skill_sync", "_init_skill_sync"),              # ← skills + deerflow
+            ("audit_startup", "_init_audit_startup"),        # ← identity + compliance
+            ("lemon", "_init_lemon"),                        # ← brain=self
+            ("swarm_flow", "_init_swarm_flow"),              # ← skills
+        ],
+        # Batch 5: depend on batch-4 components
+        [
+            ("agent_card", "_init_agent_card"),                  # ← brain=self
+            ("light_negotiation", "_init_light_negotiation"),    # ← skills + fingerprint
+            ("final_delivery", "_init_final_delivery"),          # ← fingerprint + memory
+            ("agency_roles", "_init_agency_roles"),              # ← skills
+        ],
+    ]
+
     def __init__(self):
-        """初始化UnifiedBrain，带错误边界和状态管理"""
-        # 初始化状态管理
+        """初始化UnifiedBrain — 依赖拓扑排序 + 批次内并行。
+
+        每个 batch 内的组件互不依赖, 用 ThreadPoolExecutor 并行执行;
+        batch 之间严格按依赖顺序串行。任何组件失败不阻断其他组件(降级运行)。
+        """
         self.init_status = {}
         self._initialization_errors = []
-        
-        # 定义初始化步骤
-        init_steps = [
-            ("persistence", self._init_persistence),
-            ("memory", self._init_memory),
-            ("hermes", self._init_hermes_brain),
-            ("deerflow", self._init_deerflow_scheduler),
-            ("execution", self._init_execution_layer),
-            ("skills", self._init_skills_registry),
-            ("skill_sync", self._init_skill_sync),
-            ("mcp", self._init_mcp_protocol),
-            ("subagents", self._init_subagents_registry),
-            ("compliance", self._init_compliance),
-            ("identity", self._init_identity),
-            ("audit_startup", self._init_audit_startup),
-            ("deep_hermes", self._init_deep_hermes),
-            ("deep_deerflow", self._init_deep_deerflow),
-            ("task_classifier", self._init_task_classifier),
-            ("meta_debate", self._init_meta_debate),
-            ("meta_orchestrator", self._init_meta_orchestrator),
-            ("mem0", self._init_mem0_store),
-            ("langfuse", self._init_langfuse_tracer),
-            ("router", self._init_router),
-            ("fabric", self._init_fabric),
-        ]
-        
-        # 逐步初始化，每步都有错误恢复
-        for step_name, init_func in init_steps:
-            try:
-                init_func()
-                self.init_status[step_name] = "success"
-                logger.info(f"✅ 组件 {step_name} 初始化成功")
-            except Exception as e:
-                error_msg = f"{type(e).__name__}: {str(e)}"
-                self.init_status[step_name] = error_msg
-                self._initialization_errors.append((step_name, error_msg))
-                logger.error(f"❌ 组件 {step_name} 初始化失败: {error_msg}")
-                # 继续初始化其他组件，不中断
-                logger.warning(f"⚠️ 继续初始化其他组件...")
-        
-        # 最终状态检查
-        self._final_initialization_check()
+
+        for batch in self._INIT_BATCHES:
+            if len(batch) == 1:
+                # 单组件批次: 直接执行, 避免线程开销
+                name, method_name = batch[0]
+                self._run_init_step(name, method_name)
+            else:
+                # 多组件批次: 并行执行
+                with ThreadPoolExecutor(max_workers=len(batch), thread_name_prefix="aos-init") as pool:
+                    futures = {
+                        pool.submit(self._run_init_step, name, method_name): name
+                        for name, method_name in batch
+                    }
+                    for future in as_completed(futures):
+                        name = futures[future]
+                        try:
+                            future.result()  # 异常已在 _run_init_step 内捕获
+                        except Exception as e:  # pragma: no cover - 双重保险
+                            logger.error("组件 %s 并行初始化异常逃逸: %s", name, e)
+
+        # 汇总日志
+        ok = sum(1 for s in self.init_status.values() if s == "success")
+        fail = sum(1 for s in self.init_status.values() if s != "success")
+        if fail:
+            logger.warning("初始化完成: %d 成功, %d 失败", ok, fail)
+            for comp, err in self._initialization_errors:
+                logger.warning("  失败组件 %s: %s", comp, err)
+        else:
+            logger.info("所有 %d 个组件初始化成功", ok)
+
+    def _run_init_step(self, name: str, method_name: str):
+        """执行单个初始化步骤, 带错误边界。"""
+        try:
+            method = getattr(self, method_name)
+            method()
+            self.init_status[name] = "success"
+            logger.info("组件 %s 初始化成功", name)
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}"
+            self.init_status[name] = error_msg
+            self._initialization_errors.append((name, error_msg))
+            logger.error("组件 %s 初始化失败: %s", name, error_msg)
     
     def _init_persistence(self):
         """步骤0: 持久化层 (SQLite foundation)"""
@@ -733,10 +786,10 @@ class UnifiedBrain:
                 logger.warning(f"技能注册失败 {skill_cls.__name__}: {e}")
     
     def _init_skill_sync(self):
-        """步骤6: 技能同步到DeerFlow"""
+        """步骤: 技能同步到DeerFlow"""
         if hasattr(self, 'skill_registry') and hasattr(self, 'deerflow'):
             synced = self.deerflow.sync_aos_skills_to_deerflow(self.skill_registry)
-            logger.info("Skill sync: %d AOS skills -> DeerFlow", synced)
+            logger.info("Skill sync: %s AOS skills -> DeerFlow", synced or 0)
         else:
             raise Exception("skill_registry或deerflow未初始化")
     
@@ -768,7 +821,6 @@ class UnifiedBrain:
     
     def _init_identity(self):
         """步骤10: 身份创建"""
-        from utils.config import config as cfg
         
         # Create root AOS identity
         self.identity = self.aid_gen.create_identity(
@@ -785,16 +837,6 @@ class UnifiedBrain:
         self.audit.log("system.startup", agent_id=self.identity.aid,
                        details={"version": cfg.APP_VERSION, "components": ["hermes","deerflow","mcp","compliance"]})
         logger.info("Startup audit logged")
-    
-    def _init_deep_hermes(self):
-        """步骤12: 深度Hermes集成"""
-        self._deep_hermes_enabled = True
-        logger.info("Deep Hermes integration enabled")
-    
-    def _init_deep_deerflow(self):
-        """步骤13: 深度DeerFlow集成"""
-        self._deep_deerflow_enabled = True
-        logger.info("Deep DeerFlow integration enabled")
     
     def _init_task_classifier(self):
         """步骤14: 任务分类器"""
@@ -945,79 +987,52 @@ class UnifiedBrain:
         """检查组件是否就绪"""
         return self.init_status.get(component) == "success"
     
-    def _final_initialization_check(self):
-        """最终初始化检查"""
-        init_status = self.get_init_status()
-        
-        if init_status["failed_components"] > 0:
-            logger.warning(f"⚠️ 初始化完成，但有 {init_status['failed_components']} 个组件失败:")
-            for component, error in self._initialization_errors:
-                logger.warning(f"  - {component}: {error}")
-        else:
-            logger.info("🎉 所有组件初始化成功！")
+    # ---- Former _final_initialization_check components, now tracked individually ----
+    # Error handling is done by _run_init_step; these methods can raise freely.
 
-        # 12. LEMON Orchestrator - 学习型编排器
-        try:
-            from core.lemon_orchestrator import LEMONOrchestrator
-            self.lemon_orchestrator = LEMONOrchestrator(brain=self)
-            logger.info("LEMON Orchestrator ready (auto-generated orchestration specs)")
-        except Exception as e:
-            logger.warning("LEMON Orchestrator init failed: %s", e)
+    def _init_lemon(self):
+        """LEMON Orchestrator — 学习型编排器"""
+        from core.lemon_orchestrator import LEMONOrchestrator
+        self.lemon_orchestrator = LEMONOrchestrator(brain=self)
+        logger.info("LEMON Orchestrator ready")
 
-        # 13. SwarmFlow - 可控工作流编排引擎
-        try:
-            from core.swarm_flow import SwarmFlow
-            self.swarm_flow = SwarmFlow(skill_registry=self.skill_registry, brain=self)
-            logger.info("SwarmFlow ready (controllable workflow orchestration)")
-        except Exception as e:
-            logger.warning("SwarmFlow init failed: %s", e)
+    def _init_swarm_flow(self):
+        """SwarmFlow — 可控工作流编排引擎"""
+        from core.swarm_flow import SwarmFlow
+        self.swarm_flow = SwarmFlow(skill_registry=self.skill_registry, brain=self)
+        logger.info("SwarmFlow ready")
 
-        # 14. Task Fingerprint - 记忆沉淀与复用系统
-        try:
-            from core.task_fingerprint import TaskFingerprint
-            self.task_fingerprint = TaskFingerprint(memory_manager=self.memory)
-            logger.info("Task Fingerprint ready (memory reuse + template matching)")
-        except Exception as e:
-            logger.warning("Task Fingerprint init failed: %s", e)
+    def _init_task_fingerprint(self):
+        """TaskFingerprint — 记忆沉淀与复用系统"""
+        from core.task_fingerprint import TaskFingerprint
+        self.task_fingerprint = TaskFingerprint(memory_manager=self.memory)
+        logger.info("Task Fingerprint ready")
 
-        # OpenClaw 接入已收敛到网关反向代理 (src/api/gateway.py -> :18789)
-        # + Fabric OpenClawAdapter。不再在 brain 内自研实例化 core.open_claw
-        # (违反铁律: 接入层须用真实开源 OpenClaw, 非自己写)。
+    def _init_agent_card(self):
+        """AgentCARD — 成本-精度优化策略"""
+        from core.agent_card import AgentCARD
+        self.agent_card = AgentCARD(brain=self)
+        logger.info("AgentCARD ready")
 
-        # 16. AgentCARD - 成本-精度优化策略 (初稿小模型→定稿大模型)
-        try:
-            from core.agent_card import AgentCARD
-            self.agent_card = AgentCARD(brain=self)
-            logger.info("AgentCARD ready (cost-precision optimization)")
-        except Exception as e:
-            logger.warning("AgentCARD init failed: %s", e)
+    def _init_light_negotiation(self):
+        """LightNegotiation — L3 轻量协商机制"""
+        from core.negotiation import LightNegotiation
+        self.light_negotiation = LightNegotiation(skill_registry=self.skill_registry, brain=self)
+        logger.info("LightNegotiation ready")
 
-        # 17. LightNegotiation - L3轻量协商机制 (主辅角色协作)
-        try:
-            from core.negotiation import LightNegotiation
-            self.light_negotiation = LightNegotiation(skill_registry=self.skill_registry, brain=self)
-            logger.info("LightNegotiation ready (L3 lightweight negotiation)")
-        except Exception as e:
-            logger.warning("LightNegotiation init failed: %s", e)
+    def _init_final_delivery(self):
+        """FinalDeliverySystem — L4 终审交付系统"""
+        from core.negotiation import FinalDeliverySystem
+        self.final_delivery = FinalDeliverySystem(
+            task_fingerprint=self.task_fingerprint,
+            memory_manager=self.memory,
+        )
+        logger.info("FinalDeliverySystem ready")
 
-        # 18. FinalDeliverySystem - L4终审交付系统 (质量审核→打包→交付→存入记忆库)
-        try:
-            from core.negotiation import FinalDeliverySystem
-            self.final_delivery = FinalDeliverySystem(
-                task_fingerprint=self.task_fingerprint,
-                memory_manager=self.memory,
-            )
-            logger.info("FinalDeliverySystem ready (L4 quality audit + packaging + delivery)")
-        except Exception as e:
-            logger.warning("FinalDeliverySystem init failed: %s", e)
-
-        # 19. Register Agency Roles skills
-        try:
-            self._register_agency_roles()
-        except Exception as e:
-            logger.warning("Agency Roles registration failed: %s", e)
-
-        logger.info("=== UnifiedBrain v5.0 FULLY initialized (L1-L5 routing + OpenClaw + MetaDebate + AgentCARD + LEMON + SwarmFlow + LightNegotiation + FinalDelivery + TaskFingerprint) ===")
+    def _init_agency_roles(self):
+        """注册部门角色技能"""
+        self._register_agency_roles()
+        logger.info("Agency Roles registered")
 
     # ========================================================================
     #  REAL Hermes-Agent Integration (Nous Research v0.18.0)
@@ -1033,7 +1048,6 @@ class UnifiedBrain:
         完成后再还原 AOS 的 `utils`, 两者互不污染 (符合"薄缝集成"原则, 不改
         hermes-agent 内部).
         """
-        import sys
         hermes_path = config.HERMES_SOURCE_PATH
 
         if hermes_path and os.path.exists(hermes_path):
@@ -1149,7 +1163,7 @@ class UnifiedBrain:
         except Exception as e:
             logger.error(f"❌ DeerFlow FALLBACK also failed: {e}; using inert stub to keep AOS alive")
 
-        self.deerflow = _InertDeerFlow()
+        self.deerflow = self._InertDeerFlow()
 
     # ========================================================================
     #  Execution Layer (执行层)
@@ -1168,7 +1182,7 @@ class UnifiedBrain:
         
         self._integrate_execution_with_deerflow()
         
-        logger.info(f"✅ Execution Layer initialized with DeerFlow integration")
+        logger.info("✅ Execution Layer initialized with DeerFlow integration")
         logger.info(f"   - SandboxManager: {type(self.sandbox).__name__}")
         logger.info(f"   - ToolExecutor: {type(self.tool_executor).__name__}")
         logger.info(f"   - TaskRunner: {type(self.task_runner).__name__}")
@@ -1284,7 +1298,6 @@ class UnifiedBrain:
         复用, 避免重复调用 route_intent 导致 evolution_log 双写。为 None 时本方法自行计算。
         """
         
-        import re
         date_patterns = ["今天几号", "今天日期", "日期", "几号", "几月几号", "几号了", "什么日子", "星期几"]
         if any(pattern in message for pattern in date_patterns):
             from datetime import datetime
@@ -1805,19 +1818,19 @@ class UnifiedBrain:
             },
         }
 
-        # hermes / deerflow deep 标志 (仅当对应对象存在时)
+        # hermes / deerflow deep integration (always enabled in v5.0+)
         if hermes is not None:
             components["hermes"]["deep"] = {
-                "self_evolving_skills": getattr(self, "_deep_hermes_enabled", False),
-                "nudge_engine": getattr(self, "_deep_hermes_enabled", False),
-                "memory_lifecycle": getattr(self, "_deep_hermes_enabled", False),
-                "context_engine": getattr(self, "_deep_hermes_enabled", False),
+                "self_evolving_skills": True,
+                "nudge_engine": True,
+                "memory_lifecycle": True,
+                "context_engine": True,
             }
         if deerflow is not None:
             components["deerflow"]["deep"] = {
-                "runtime_journal": getattr(self, "_deep_deerflow_enabled", False),
-                "tracing": getattr(self, "_deep_deerflow_enabled", False),
-                "user_context": getattr(self, "_deep_deerflow_enabled", False),
+                "runtime_journal": True,
+                "tracing": True,
+                "user_context": True,
                 "middleware_chain": "14-layer onion model",
             }
 
@@ -1902,10 +1915,10 @@ class UnifiedBrain:
             try:
                 dh = hermes.deep_hermes
                 stats["deep_hermes"] = {
-                    "self_evolving_skills": getattr(self, "_deep_hermes_enabled", False),
-                    "nudge_engine": getattr(self, "_deep_hermes_enabled", False),
-                    "memory_lifecycle": getattr(self, "_deep_hermes_enabled", False),
-                    "context_engine": getattr(self, "_deep_hermes_enabled", False),
+                    "self_evolving_skills": True,
+                    "nudge_engine": True,
+                    "memory_lifecycle": True,
+                    "context_engine": True,
                     "skill_count": len(getattr(dh, "_skill_commands", []) or []),
                     "review_enabled": getattr(dh, "_review_enabled", False),
                     "context_status": getattr(hermes, "get_context_status", lambda: {})()

@@ -3,8 +3,7 @@ from datetime import datetime
 import json
 import logging
 from pathlib import Path
-from .base import Skill, SkillRegistry
-from .template import SkillTemplate
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

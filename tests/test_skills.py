@@ -2,8 +2,6 @@
 Unit tests for AOS skills system.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestSkillRegistry:
@@ -19,7 +17,7 @@ class TestSkillRegistry:
 
     def test_register_skill(self):
         """Test registering a skill."""
-        from src.skills.base import SkillRegistry, Skill, SkillMeta
+        from src.skills.base import SkillRegistry, Skill
 
         class DummySkill(Skill):
             name = "dummy"

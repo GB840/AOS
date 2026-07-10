@@ -6,8 +6,7 @@
 
 import logging
 import traceback
-import sys
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 from fastapi import HTTPException, Request, status

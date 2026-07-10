@@ -18,14 +18,12 @@ Sandbox Manager - 沙箱隔离层
 
 import os
 import sys
-import json
 import logging
 import uuid
 import tempfile
 import subprocess
-from typing import Dict, List, Optional, Any
+from typing import Dict, Any
 from datetime import datetime
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

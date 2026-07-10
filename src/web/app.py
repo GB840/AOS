@@ -3,7 +3,6 @@ import os
 import json
 import base64
 import time
-import io
 import tempfile
 from pathlib import Path
 from datetime import datetime
@@ -363,7 +362,6 @@ elif page == "🎤 语音交互":
     
     if recording and st.session_state.pyaudio_available:
         import pyaudio
-        import wave
         
         chunk = 1024
         sample_format = pyaudio.paInt16
@@ -538,15 +536,15 @@ elif page == "🔄 Loop循环":
                             st.subheader("📋 迭代详情")
                             for iteration in result["iterations"]:
                                 with st.expander(f"🔄 迭代 #{iteration['iteration']}"):
-                                    st.markdown(f"**执行结果:**")
+                                    st.markdown("**执行结果:**")
                                     st.markdown(iteration.get('result', ''))
                                     
                                     st.markdown(f"**验收结果:** {'✅ 通过' if iteration.get('verified') else '❌ 未通过'}")
-                                    st.markdown(f"**验收详情:**")
+                                    st.markdown("**验收详情:**")
                                     st.markdown(iteration.get('verification', {}).get('verification', ''))
                                     
                                     if not iteration.get('verified'):
-                                        st.markdown(f"**复盘建议:**")
+                                        st.markdown("**复盘建议:**")
                                         st.markdown(iteration.get('review', {}).get('review', ''))
                         
                         if result.get("final_result"):
@@ -1291,7 +1289,7 @@ elif page == "✂️ 视频剪辑":
                     })
                     
                     if result.get("success"):
-                        st.success(f"✅ 剪辑完成！")
+                        st.success("✅ 剪辑完成！")
                         
                         result_data = result.get("result", {})
                         
@@ -1398,7 +1396,7 @@ elif page == "🎛️ 模型网关":
                                    details={"strategy": selected_strategy, "message_length": len(message)})
                     
                     if result.get("success"):
-                        st.success(f"✅ 请求成功！")
+                        st.success("✅ 请求成功！")
                         
                         result_data = result.get("result", {})
                         provider_info = result_data.get("provider", {})
@@ -1536,7 +1534,7 @@ elif page == "🧠 知识图谱":
                     })
                     
                     if result.get("success"):
-                        st.success(f"✅ 操作完成！")
+                        st.success("✅ 操作完成！")
                         
                         result_data = result.get("result", {})
                         
@@ -1651,10 +1649,10 @@ elif page == "👥 Agent管理":
                     st.write(f"角色: {agent_info.get('role', '')}")
                     st.write(f"状态: {agent_info.get('status', '')}")
                     st.write(f"创建时间: {agent_info.get('created_at', '')}")
-                    if st.button(f"停止 Agent", key=f"stop_{agent_id}"):
+                    if st.button("停止 Agent", key=f"stop_{agent_id}"):
                         brain.subagents.invoke("herdr", {"action": "stop_agent", "agent_id": agent_id})
                         st.rerun()
-                    if st.button(f"查看日志", key=f"logs_{agent_id}"):
+                    if st.button("查看日志", key=f"logs_{agent_id}"):
                         log_result = brain.subagents.invoke("herdr", {"action": "get_agent_logs", "agent_id": agent_id})
                         if log_result.get("success"):
                             logs = log_result.get("result", {}).get("logs", [])
@@ -1850,7 +1848,7 @@ elif page == "🎨 设计规范":
                     })
                     
                     if result.get("success"):
-                        st.success(f"✅ 操作完成！")
+                        st.success("✅ 操作完成！")
                         
                         result_data = result.get("result", {})
                         
@@ -1994,7 +1992,7 @@ elif page == "✅ 代码质检":
                         score = result_data.get("score", 0)
                         status = result_data.get("status", "unknown")
                         
-                        st.subheader(f"📊 检查结果")
+                        st.subheader("📊 检查结果")
                         col1_score, col2_status = st.columns(2)
                         with col1_score:
                             st.metric("代码质量分数", score)
@@ -2042,7 +2040,7 @@ elif page == "✅ 代码质检":
                 
                 if result.get("success"):
                     result_data = result.get("result", {})
-                    st.success(f"✅ 扫描完成！")
+                    st.success("✅ 扫描完成！")
                     st.metric("质量分数", result_data.get("score", 0))
                     st.metric("问题数", result_data.get("total_issues", 0))
                     st.json(result_data)
@@ -2146,7 +2144,7 @@ elif page == "🗺️ 3D重建":
                     })
                     
                     if result.get("success"):
-                        st.success(f"✅ 重建完成！")
+                        st.success("✅ 重建完成！")
                         
                         result_data = result.get("result", {})
                         
@@ -2338,7 +2336,7 @@ elif page == "👨‍💻 RuFlo开发":
                                     st.download_button(
                                         "📥 下载代码",
                                         data=code_bytes,
-                                        file_name=f"ruflo_generated_{task_id}.py",
+                                        file_name=f"ruflo_generated_{selected_task}.py",
                                         mime="text/python",
                                     )
                             
@@ -2465,7 +2463,7 @@ elif page == "🧠 代码库记忆":
                     result = brain.subagents.invoke("codebase_memory_mcp", params)
                     
                     if result.get("success"):
-                        st.success(f"✅ 分析完成！")
+                        st.success("✅ 分析完成！")
                         
                         result_data = result.get("result", {})
                         
@@ -2884,7 +2882,7 @@ elif page == "📚 知识库":
                 result = brain.subagents.invoke("lightrag", params)
                 
                 if result.get("success"):
-                    st.success(f"✅ 操作完成！")
+                    st.success("✅ 操作完成！")
                     
                     result_data = result.get("result", {})
                     
@@ -2954,7 +2952,7 @@ elif page == "🌐 网页提取":
                 })
                 
                 if result.get("success"):
-                    st.success(f"✅ 提取完成！")
+                    st.success("✅ 提取完成！")
                     
                     result_data = result.get("result", {})
                     
@@ -3470,7 +3468,7 @@ elif page == "🖱️ UI-TARS自动化":
             with st.expander(f"{preset['name']} — {preset['desc']}"):
                 st.write(f"**示例**: {preset['example']}")
                 st.write(f"**操作类型**: {preset['action']}")
-                if st.button(f"🚀 使用此模板", key=f"preset_{preset_id}"):
+                if st.button("🚀 使用此模板", key=f"preset_{preset_id}"):
                     st.success(f"已选择: {preset['name']}")
                     st.info(f"示例任务: {preset['example']}")
     
@@ -3599,7 +3597,7 @@ elif page == "🎤 语音编辑":
                 })
                 
                 if result.get("success"):
-                    st.success(f"✅ 语音生成完成！")
+                    st.success("✅ 语音生成完成！")
                     
                     result_data = result.get("result", {})
                     st.info(f"风格: {styles[selected_style]['name']} | 情绪: {emotions[selected_emotion]['name']}")
@@ -3805,7 +3803,7 @@ elif page == "🛠️ 技能中心":
                         st.subheader(skill.get("name", "unknown"))
                         st.write(f"{skill.get('description', '')[:100]}...")
                         st.caption(f"分类: {skill.get('category', '')}")
-                        if st.button(f"执行", key=f"exec_{skill.get('name')}"):
+                        if st.button("执行", key=f"exec_{skill.get('name')}"):
                             with st.spinner("执行中..."):
                                 result = brain.hermes.execute_skill(skill.get('name'), {})
                                 st.json(result)
@@ -3927,7 +3925,7 @@ elif page == "🗂️ 沙盒终端":
                     st.code(entry["output"], language="bash")
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button(f"📋 复制", key=f"copy_{entry['timestamp']}", use_container_width=True):
+                        if st.button("📋 复制", key=f"copy_{entry['timestamp']}", use_container_width=True):
                             st.copy_to_clipboard(entry["output"])
                             st.success("已复制")
     
@@ -3967,7 +3965,7 @@ elif page == "🗂️ 沙盒终端":
                             if "<html" in (result.output or "").lower() or "</html>" in (result.output or "").lower():
                                 preview_content = result.output
                             elif "import matplotlib" in code or "import plotly" in code:
-                                preview_content = f"<div style='padding: 20px;'>图表输出需要在支持的环境中查看</div>"
+                                preview_content = "<div style='padding: 20px;'>图表输出需要在支持的环境中查看</div>"
                         
                         st.session_state.sandbox_preview = preview_content
                         
@@ -4115,7 +4113,7 @@ elif page == "📁 项目导入":
                                 "css" if file.name.endswith('.css') else
                                 "markdown" if file.name.endswith('.md') else "text")
                     with col2:
-                        if st.button(f"💡 分析", key=f"analyze_upload_{file.name}"):
+                        if st.button("💡 分析", key=f"analyze_upload_{file.name}"):
                             with st.spinner("分析中..."):
                                 analysis = brain.chat(
                                     message=f"请分析以下代码文件，并提供改进建议：\n\n文件名: {file.name}\n\n```\n{content[:2000]}\n```\n\n请从以下方面分析：\n1. 代码结构和架构设计\n2. 潜在的 bug 或问题\n3. 性能优化建议\n4. 安全隐患\n5. 代码风格改进",

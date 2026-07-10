@@ -10,16 +10,12 @@ Wires AOS into DeerFlow 2.0's FULL capabilities:
 """
 
 import logging
-import sys
 import os
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable
 
 logger = logging.getLogger(__name__)
 
-from utils.config import config
 from deerflow.path_detect import detect_deerflow_path
 
 # ---- DeerFlow 路径自动检测 ----

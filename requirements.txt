@@ -55,6 +55,16 @@ PyJWT>=2.10.1
 # psycopg2: PostgresStateBackend 可插拔状态后端（STATE_BACKEND=postgres 时启用）。
 psycopg2-binary==2.9.12
 
+# 异步 SQLite：src/core/pool/connection_pool.py 顶层 `import aiosqlite`，
+# 缺失会导致 AOS 启动即 ImportError（2026-07-11 实测）。必须随 aos venv 安装。
+aiosqlite>=0.19.0
+
+# 认证平面：src/api/security.py 顶层 `import bcrypt`，API Key 哈希校验（恒定时间）。
+bcrypt>=4.1.0
+
+# 统一网关：src/api/gateway.py 顶层 `import aiohttp`，反向代理 /web /openclaw /deerflow。
+aiohttp>=3.9.0
+
 # 智谱 SDK：litellm 走 zhipu 时走 OpenAI 兼容透传，本身不需要 zhipuai 包
 # （AOS src 中无任何 `import zhipuai`）。且 zhipuai 元数据锁 pyjwt<2.9.0，
 # 与 mcp 要求的 pyjwt>=2.10.1 硬冲突，会令 `pip install -r` ResolutionImpossible。

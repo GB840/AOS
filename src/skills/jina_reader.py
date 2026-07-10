@@ -17,18 +17,15 @@ Jina Reader 是一个网页正文提取服务，将任意URL转换为干净的Ma
 - 支持本地降级：使用 requests + BeautifulSoup
 """
 
-import os
-import sys
 import json
 import logging
 import uuid
-import time
 import requests
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 from datetime import datetime
 from urllib.parse import urlparse
 
-from .base import Skill, SkillMeta
+from .base import Skill
 from utils.config import config
 
 logger = logging.getLogger(__name__)

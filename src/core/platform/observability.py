@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - 可选依赖
     from opentelemetry import trace as otel_trace
-    from opentelemetry.trace import Status, StatusCode
     _HAS_OTEL = True
 except Exception:  # pragma: no cover
     _HAS_OTEL = False

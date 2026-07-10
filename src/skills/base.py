@@ -9,7 +9,7 @@ AOS Skill Base — 符合 agentskills.io 标准的技能基类。
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)

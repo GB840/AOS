@@ -11,7 +11,6 @@ Wires AOS into Hermes Agent's FULL capabilities:
 
 import logging
 import threading
-import json
 import os
 import sys
 from datetime import datetime
@@ -118,7 +117,7 @@ class DeepHermesIntegration:
     def _init_skills(self) -> None:
         """Scan and load the Hermes skill library."""
         try:
-            from agent.skill_commands import scan_skill_commands, get_skill_commands
+            from agent.skill_commands import scan_skill_commands
             self._skill_commands = scan_skill_commands()
             self._last_skill_scan = datetime.now()
             logger.info(

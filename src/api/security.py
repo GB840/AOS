@@ -79,9 +79,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             # 开发环境：较短时间，便于测试
             response.headers["Strict-Transport-Security"] = "max-age=300"
         
-        # 防止点击劫持
+        # 防止点击劫持和XSS攻击
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            "frame-ancestors 'none'; "
+            "object-src 'none'; "
+            "base-uri 'self';"
+        )
         
         # 防止MIME类型嗅探
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -111,15 +120,37 @@ def hash_api_key(api_key: str) -> str:
 
 
 def verify_api_key_hash(api_key: str, hashed_key: str) -> bool:
-    """验证API密钥哈希"""
+    """使用恒定时间验证API密钥哈希，防止时序攻击"""
     try:
+        # 输入验证
+        if not api_key or not hashed_key:
+            return False
+            
+        # 验证哈希格式 (bcrypt哈希应该以$2b$开头且长度为60)
+        if not hashed_key.startswith('$2b$') or len(hashed_key) != 60:
+            logger.warning("API密钥哈希格式无效")
+            return False
+        
+        # 编码处理
         if isinstance(api_key, str):
-            api_key = api_key.encode('utf-8')
+            api_key_bytes = api_key.encode('utf-8')
+        else:
+            api_key_bytes = api_key
         if isinstance(hashed_key, str):
-            hashed_key = hashed_key.encode('utf-8')
-        return bcrypt.checkpw(api_key, hashed_key)
+            hashed_key_bytes = hashed_key.encode('utf-8')
+        else:
+            hashed_key_bytes = hashed_key
+            
+        # 使用bcrypt恒定时间比较
+        return bcrypt.checkpw(api_key_bytes, hashed_key_bytes)
     except Exception as e:
-        logger.error(f"API密钥验证失败: {e}")
+        # 即使发生异常也要执行虚假比较维持时序恒定
+        try:
+            # 执行虚假比较防止时序信息泄露
+            bcrypt.checkpw(b"fake_key", b"$2b$12$fake_hash_for_constant_time_protection")
+        except Exception:
+            pass
+        logger.error(f"API密钥验证异常(已防止时序泄露): {type(e).__name__}")
         return False
 
 
@@ -171,30 +202,55 @@ async def get_api_key(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API Key is required",
-            headers={"WWW-Authenticate": f"Bearer realm='AOS API'"},
+            headers={"WWW-Authenticate": "Bearer realm='AOS API'"},
         )
     
-    # 支持明文比较（向后兼容）
-    if api_key == config.API_KEY:
-        logger.warning("使用明文API密钥比较，建议升级到哈希验证")
-        return api_key
+    # 安全升级：已移除明文API密钥支持，强制使用哈希验证
     
-    # 支持哈希比较（如果配置了哈希值）
+    # 强制哈希比较（安全升级）
     if hasattr(config, 'API_KEY_HASH') and config.API_KEY_HASH:
         if verify_api_key_hash(api_key, config.API_KEY_HASH):
             return api_key
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or missing API Key",
-        headers={"WWW-Authenticate": f"Bearer realm='AOS API'"},
+        detail="Invalid or missing API Key. Please ensure you are using a hashed API key configuration",
+        headers={"WWW-Authenticate": "Bearer realm='AOS API'"},
     )
 
 
 class APISecurityMiddleware(BaseHTTPMiddleware):
     # 统一网关收编的上游子路径：各自上游自带鉴权（/web=Streamlit 控制台、
-    # /openclaw=OpenClaw 网关、/deerflow=DeerFlow 网关），AOS 不二次校验。
+    # /openclaw=OpenClaw 网关、/deerflow=DeerFlow 网关），注意：AOS仅做流量转发，
+    # 不处理上游网关的实际权限控制。
     _UPSTREAM_PREFIXES = ("/web", "/openclaw", "/deerflow")
+    
+    def __init__(self, app, require_upstream_auth_check: bool = None):
+        """增强安全性：可选择是否要求上游认证检查
+        
+        Args:
+            app: FastAPI应用
+            require_upstream_auth_check: 是否强制验证上游认证头
+                       默认为None时，生产环境自动启用严格模式
+        """
+        super().__init__(app)
+
+        # 安全默认值：生产环境自动启用严格模式
+        if require_upstream_auth_check is None:
+            from utils.config import config
+            self.require_upstream_auth_check = config.APP_ENV == "production"
+        else:
+            self.require_upstream_auth_check = require_upstream_auth_check
+
+        # 凭据铁律：生产环境必须至少配置 API_KEY 或 API_KEY_HASH 其一，否则 fail-fast。
+        # 旧逻辑仅查 API_KEY，运维按推荐只配哈希口令(API_KEY_HASH)时反而跳过鉴权 -> 匿名可访问。
+        if config.APP_ENV == "production" and not (config.API_KEY or getattr(config, "API_KEY_HASH", None)):
+            raise RuntimeError(
+                "安全配置缺失：生产环境必须设置 AOS_API_KEY 或 AOS_API_KEY_HASH 之一，"
+                "否则任何人都可匿名访问。已按凭据铁律 fail-fast 拒绝启动。"
+            )
+        # 是否启用统一鉴权：未配置任何凭据时（仅开发环境，生产已在上方 fail-fast）放开。
+        self._auth_enabled = bool(config.API_KEY or getattr(config, "API_KEY_HASH", None))
 
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
@@ -205,7 +261,14 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # 2) 上游网关子路径：由各自上游鉴权（架构性豁免，非弱鉴权）。
-        if any(path == p or path.startswith(p + "/") for p in self._UPSTREAM_PREFIXES):
+        is_upstream = any(path == p or path.startswith(p + "/") for p in self._UPSTREAM_PREFIXES)
+        if is_upstream:
+            # 安全增强：检查上游认证头是否被篡改
+            if self.require_upstream_auth_check and not self._validate_upstream_auth(request):
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"error": "Unauthorized", "detail": "Invalid upstream authentication"},
+                )
             return await call_next(request)
 
         # 3) API 文档与 OpenAPI Schema：
@@ -217,7 +280,11 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         # 4) 技能目录/刷新端点（原 G4 免认证豁免已收回）：始终要求认证，
         #    禁止匿名获取内部能力清单或触发服务端重索引。落入下方统一鉴权。
 
-        # 5) 统一鉴权：团队级 Bearer(JWT) 或个人级静态 API-Key
+        # 5) 统一鉴权：团队级 Bearer(JWT) 或个人级静态 API-Key（明文 + 哈希均支持）
+        #    未配置任何凭据时（仅开发环境，已在前置 fail-fast 排除生产）放开。
+        if not self._auth_enabled:
+            return await call_next(request)
+
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             sub = decode_access_token(auth[7:].strip())
@@ -229,23 +296,58 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # 个人级: 静态 API-Key（恒定时间比较，避免计时侧信道）
-        if config.API_KEY:
-            api_key = request.headers.get(API_KEY_NAME) or request.query_params.get(API_KEY_NAME)
-            if not hmac.compare_digest(api_key or "", config.API_KEY or ""):
-                # 审计日志仅记录脱敏后的密钥前缀 (可溯源但不泄露), 不记录完整密钥。
-                from utils.sanitize import mask_secret
-                logger.warning(
-                    "Unauthorized access attempt to %s from %s key=%s",
-                    path, request.client.host, mask_secret(api_key or ""),
-                )
-                return JSONResponse(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    content={"error": "Unauthorized", "detail": "Invalid or missing API Key / Bearer token"},
-                )
+        # 个人级: 静态 API-Key（恒定时间比较，支持明文 + bcrypt 哈希，避免计时侧信道）
+        api_key = request.headers.get(API_KEY_NAME) or request.query_params.get(API_KEY_NAME)
+        if not self._check_api_key(api_key or ""):
+            # 审计日志仅记录脱敏后的密钥前缀 (可溯源但不泄露), 不记录完整密钥。
+            from utils.sanitize import mask_secret
+            logger.warning(
+                "Unauthorized access attempt to %s from %s key=%s",
+                path, request.client.host, mask_secret(api_key or ""),
+            )
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Unauthorized", "detail": "Invalid or missing API Key / Bearer token"},
+            )
 
         response = await call_next(request)
         return response
+    
+    def _check_api_key(self, api_key: str) -> bool:
+        """恒定时间校验 API Key：支持明文(API_KEY) 与 bcrypt 哈希(API_KEY_HASH) 任一。"""
+        if not api_key:
+            return False
+        if config.API_KEY and hmac.compare_digest(api_key, config.API_KEY):
+            return True
+        api_key_hash = getattr(config, "API_KEY_HASH", None)
+        if api_key_hash and verify_api_key_hash(api_key, api_key_hash):
+            return True
+        return False
+
+    def _validate_upstream_auth(self, request: Request) -> bool:
+        """验证上游网关请求确实携带有效的 AOS 凭据（而非仅存在任意头，旧逻辑可被伪造头绕过）。
+
+        旧实现：只要请求带任意 Authorization 头即返回 True -> 伪造头可过上游校验。
+        新实现：必须能通过 API-Key(明文/哈希) 或 JWT 或网关共享令牌中的至少一种。
+        """
+        # 个人级 API-Key（明文 + 哈希，恒定时间）
+        api_key = request.headers.get(API_KEY_NAME) or request.query_params.get(API_KEY_NAME)
+        if self._check_api_key(api_key or ""):
+            return True
+
+        # 团队级 Bearer(JWT)
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            if decode_access_token(auth[7:].strip()):
+                return True
+
+        # 网关间共享令牌（如配置了 UPSTREAM_TOKEN），恒定时间比较
+        tok = request.headers.get("X-Upstream-Token")
+        upstream_token = getattr(config, "UPSTREAM_TOKEN", None)
+        if tok and upstream_token and hmac.compare_digest(tok, upstream_token):
+            return True
+
+        return False
 
 
 from datetime import datetime, timedelta

@@ -47,6 +47,9 @@ class ModelProvider(Enum):
     BAIDU = "baidu"
     XFYUN = "xfyun"
     OLLAMA = "ollama"
+    MISTRALRS_GENERAL = "mistralrs_general"
+    MISTRALRS_CODING = "mistralrs_coding"
+    MISTRALRS_REASONING = "mistralrs_reasoning"
 
 
 class LLMRouter:
@@ -140,6 +143,62 @@ class LLMRouter:
             else:
                 logger.warning("openai库未安装，Ollama不可用")
 
+        # 本地 Ollama 单端点多模型：按任务类型选具体本地模型
+        self.ollama_task_model: Dict[TaskType, str] = {
+            TaskType.GENERAL: config.OLLAMA_MODEL_GENERAL,
+            TaskType.HIGH_CONCURRENCY: config.OLLAMA_MODEL_GENERAL,
+            TaskType.CODING: config.OLLAMA_MODEL_CODING,
+            TaskType.LONG_CONTEXT: config.OLLAMA_MODEL_REASONING,
+            TaskType.EXPERIMENT: config.OLLAMA_MODEL_REASONING,
+        }
+
+        # ===== MistralRS：主本地运行时 =====
+        # 三个模型分别起独立服务（端口 1234/1235/1236），均为 OpenAI 兼容端点。
+        if config.MISTRALRS_ENABLED:
+            if OPENAI_AVAILABLE:
+                mistralrs_defs = {
+                    ModelProvider.MISTRALRS_GENERAL: (
+                        config.MISTRALRS_PORT_GENERAL,
+                        config.MISTRALRS_MODEL_GENERAL,
+                        "MistralRS-MiniCPM5(全能)",
+                    ),
+                    ModelProvider.MISTRALRS_CODING: (
+                        config.MISTRALRS_PORT_CODING,
+                        config.MISTRALRS_MODEL_CODING,
+                        "MistralRS-QwenCoder(写代码)",
+                    ),
+                    ModelProvider.MISTRALRS_REASONING: (
+                        config.MISTRALRS_PORT_REASONING,
+                        config.MISTRALRS_MODEL_REASONING,
+                        "MistralRS-DeepSeek(推理)",
+                    ),
+                }
+                for prov, (port, model, name) in mistralrs_defs.items():
+                    try:
+                        self.providers[prov] = {
+                            "name": name,
+                            "model": model,
+                            "enabled": True,
+                            "available": True,
+                        }
+                        self.clients[prov] = OpenAI(
+                            base_url=f"{config.MISTRALRS_HOST}:{port}/v1",
+                            api_key="mistralrs",
+                        )
+                    except Exception as e:
+                        logger.warning(f"MistralRS {name} 初始化失败: {e}")
+            else:
+                logger.warning("openai库未安装，MistralRS不可用")
+
+        # 任务类型 -> MistralRS provider 映射（主本地路径）
+        self.mistralrs_task_provider: Dict[TaskType, ModelProvider] = {
+            TaskType.GENERAL: ModelProvider.MISTRALRS_GENERAL,
+            TaskType.HIGH_CONCURRENCY: ModelProvider.MISTRALRS_GENERAL,
+            TaskType.CODING: ModelProvider.MISTRALRS_CODING,
+            TaskType.LONG_CONTEXT: ModelProvider.MISTRALRS_REASONING,
+            TaskType.EXPERIMENT: ModelProvider.MISTRALRS_REASONING,
+        }
+
         if not self.providers:
             logger.warning("没有可用的LLM提供商，请安装相应依赖或配置API密钥")
         else:
@@ -185,6 +244,20 @@ class LLMRouter:
 
         priority = []
         seen = set()
+
+        # 优先本地：主用 MistralRS（按任务类型选对应端口/模型），Ollama 作备选，云端作兜底
+        if getattr(config, "ROUTER_PREFER_LOCAL", False):
+            # 1) MistralRS 主本地运行时（任务自适应）
+            mp = self.mistralrs_task_provider.get(task_type)
+            if mp and mp in self.providers and self.providers[mp].get("available", False):
+                priority.append(mp)
+                seen.add(mp)
+            # 2) Ollama 备选本地运行时
+            ollama = ModelProvider.OLLAMA
+            if ollama in self.providers and self.providers[ollama].get("available", False):
+                priority.append(ollama)
+                seen.add(ollama)
+
         for p in priority_map.get(task_type, priority_map[TaskType.GENERAL]):
             try:
                 provider = ModelProvider(p)
@@ -195,8 +268,17 @@ class LLMRouter:
                     priority.append(provider)
                     seen.add(provider)
 
-        if ModelProvider.OLLAMA not in seen and ModelProvider.OLLAMA in self.providers:
-            priority.append(ModelProvider.OLLAMA)
+        # 3) 云端兜底：所有仍在线的云厂商按固定顺序补充
+        cloud_order = [
+            ModelProvider.ZHIPU,
+            ModelProvider.SILICONFLOW,
+            ModelProvider.BAIDU,
+            ModelProvider.XFYUN,
+        ]
+        for c in cloud_order:
+            if c not in seen and c in self.providers and self.providers[c].get("available", False):
+                priority.append(c)
+                seen.add(c)
 
         return priority
 
@@ -340,7 +422,22 @@ class LLMRouter:
         if not OPENAI_AVAILABLE:
             raise Exception("openai库未安装")
         client = self.clients[ModelProvider.OLLAMA]
-        model = self.providers[ModelProvider.OLLAMA]["model"]
+        # 允许按任务类型覆盖本地模型（ollama_model），否则用默认
+        model = kwargs.get("ollama_model") or self.providers[ModelProvider.OLLAMA]["model"]
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=kwargs.get("temperature", 0.7),
+            max_tokens=kwargs.get("max_tokens", 2048),
+        )
+        return response.choices[0].message.content
+
+    def _call_openai_compatible(self, provider: ModelProvider, messages: List[Dict], **kwargs) -> str:
+        """OpenAI 兼容端点统一调用（Ollama / MistralRS 均适用）。"""
+        if not OPENAI_AVAILABLE:
+            raise Exception("openai库未安装")
+        client = self.clients[provider]
+        model = self.providers[provider]["model"]
         response = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -350,12 +447,20 @@ class LLMRouter:
         return response.choices[0].message.content
 
     def _call_provider(self, provider: ModelProvider, messages: List[Dict], **kwargs) -> str:
+        # OpenAI 兼容端点（Ollama、MistralRS 三个实例）共用一套调用
+        if provider in (
+            ModelProvider.OLLAMA,
+            ModelProvider.MISTRALRS_GENERAL,
+            ModelProvider.MISTRALRS_CODING,
+            ModelProvider.MISTRALRS_REASONING,
+        ):
+            return self._call_openai_compatible(provider, messages, **kwargs)
+
         call_map = {
             ModelProvider.ZHIPU: self._call_zhipu,
             ModelProvider.SILICONFLOW: self._call_siliconflow,
             ModelProvider.BAIDU: self._call_baidu,
             ModelProvider.XFYUN: self._call_xfyun,
-            ModelProvider.OLLAMA: self._call_ollama,
         }
 
         handler = call_map.get(provider)
@@ -387,11 +492,19 @@ class LLMRouter:
         last_error = None
         for provider in priority:
             try:
-                content = self._call_provider(provider, messages, **kwargs)
+                call_kwargs = dict(kwargs)
+                model_used = self.providers[provider]["model"]
+                # 本地 Ollama：按任务类型选具体小模型
+                if provider == ModelProvider.OLLAMA:
+                    local_model = self.ollama_task_model.get(task_type)
+                    if local_model:
+                        call_kwargs["ollama_model"] = local_model
+                        model_used = local_model
+                content = self._call_provider(provider, messages, **call_kwargs)
                 return {
                     "content": content,
                     "provider": self.providers[provider]["name"],
-                    "model": self.providers[provider]["model"],
+                    "model": model_used,
                     "task_type": task_type.value,
                     "success": True,
                 }

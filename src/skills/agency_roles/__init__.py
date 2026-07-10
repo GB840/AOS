@@ -555,6 +555,6 @@ def register_agency_roles():
     registry.register(测试结果分析师Skill())
     registry.register(工具评估师Skill())
     registry.register(工作流优化师Skill())
-    logger.info(f"已注册 {{len(registry.list_all())}} 个部门角色技能")
+    logger.info("已注册 {len(registry.list_all())} 个部门角色技能")
 
 logger = logging.getLogger(__name__)

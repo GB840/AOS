@@ -15,17 +15,12 @@ Pixelle-Video 是一个基于 ComfyUI 架构的 AI 全自动短视频引擎。
 本质是一条 "工作流管道"，适合批量生产标准化内容
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
-import time
-from typing import Dict, List, Optional, Any
-from pathlib import Path
+from typing import Dict, List, Any
 from datetime import datetime
 
-from .base import Skill, SkillMeta
+from .base import Skill
 
 logger = logging.getLogger(__name__)
 

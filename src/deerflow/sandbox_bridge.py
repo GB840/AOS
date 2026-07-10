@@ -10,10 +10,8 @@ Wraps:
 All imports resolve to REAL DeerFlow 2.0 source, NOT stubs.
 """
 
-import sys
 import logging
 from typing import Optional, List, Tuple
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

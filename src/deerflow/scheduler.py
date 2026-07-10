@@ -147,7 +147,7 @@ except ImportError:
         def get_thread(self, thread_id):
             return {"thread_id": thread_id, "messages": []}
 
-from deerflow.deep_deerflow import DeepDeerFlowIntegration, create_deep_deerflow
+from deerflow.deep_deerflow import create_deep_deerflow
 
 
 class TaskStatus(Enum):

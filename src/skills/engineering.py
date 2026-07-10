@@ -1,6 +1,4 @@
-from typing import Dict, List, Optional, Any
-import subprocess
-import tempfile
+from typing import Dict
 import os
 import logging
 from .base import Skill, SkillMeta
@@ -131,27 +129,27 @@ class UnitTestGenerator:
         
         for func_name in functions:
             if not func_name.startswith("_"):
-                test_lines.append(f"")
+                test_lines.append("")
                 test_lines.append(f"def test_{func_name}():")
                 test_lines.append(f"    \"\"\"Test for {func_name} function\"\"\"")
-                test_lines.append(f"    # TODO: Add test cases")
-                test_lines.append(f"    pass")
+                test_lines.append("    # TODO: Add test cases")
+                test_lines.append("    pass")
         
         for class_name in classes:
-            test_lines.append(f"")
+            test_lines.append("")
             test_lines.append(f"class Test{class_name}(unittest.TestCase):")
             test_lines.append(f"    \"\"\"Tests for {class_name} class\"\"\"")
-            test_lines.append(f"")
-            test_lines.append(f"    def setUp(self):")
+            test_lines.append("")
+            test_lines.append("    def setUp(self):")
             test_lines.append(f"        self.instance = {class_name}()")
-            test_lines.append(f"")
-            test_lines.append(f"    def test_initialization(self):")
-            test_lines.append(f"        \"\"\"Test initialization\"\"\"")
-            test_lines.append(f"        self.assertIsNotNone(self.instance)")
+            test_lines.append("")
+            test_lines.append("    def test_initialization(self):")
+            test_lines.append("        \"\"\"Test initialization\"\"\"")
+            test_lines.append("        self.assertIsNotNone(self.instance)")
         
-        test_lines.append(f"")
-        test_lines.append(f"if __name__ == '__main__':")
-        test_lines.append(f"    unittest.main()")
+        test_lines.append("")
+        test_lines.append("if __name__ == '__main__':")
+        test_lines.append("    unittest.main()")
         
         return "\n".join(test_lines)
 
@@ -300,3 +298,41 @@ class EngineeringSkill(Skill):
                 "security-audit - Security vulnerability detection",
             ],
         }
+
+
+def _cli_main() -> int:
+    """`python -m skills.engineering` 入口：脱离 AOS 大脑独立演示。
+
+    quality-check / generate-tests / refactor / security-audit 均为纯静态分析，
+    无需 LLM 或 brain，因此可产出真实结果（最强的"可独立跑"证明）。
+    """
+    import argparse
+    import json
+    import logging
+
+    # 独立演示：强制 brain-less 回退，并静音 AOS 启动日志噪音
+    os.environ.setdefault("AOS_CLI_STANDALONE", "1")
+    logging.disable(logging.CRITICAL)
+
+    ap = argparse.ArgumentParser(description="Engineering 技能独立演示（可脱离 AOS 大脑运行）")
+    ap.add_argument("--mode", "-m", default="quality-check",
+                    choices=["quality-check", "generate-tests", "refactor", "security-audit", "list"],
+                    help="运行模式")
+    ap.add_argument("--code", "-c", default=None, help="直接传入代码片段")
+    ap.add_argument("--file", "-f", default=None, help="从文件读取代码（与 --code 二选一）")
+    ap.add_argument("--language", "-l", default="python", choices=["python", "javascript"])
+    args = ap.parse_args()
+
+    code = args.code
+    if code is None and args.file:
+        with open(args.file, "r", encoding="utf-8") as fh:
+            code = fh.read()
+
+    skill = EngineeringSkill()
+    result = skill.execute({"mode": args.mode, "code": code or "", "language": args.language})
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    return 0 if result.get("success") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

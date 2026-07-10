@@ -18,31 +18,35 @@
 
 ### 1.1 灵魂与肉体不对齐 —— 根因
 - **宣称**：开放能力总线，不重造大脑，只做接线板（STATUS.md）。
-- **实际**：`brain.py` 1841 行 + 7 大脑模块 1850 行 ≈ **3700 行自研决策**，且 fabric 是"嫁接"进 brain 而非取代。**新旧两套架构并存。**
+- **实际**：`brain.py`(~1965 行) + 7 大脑模块(~2237 行) + `brain_registration.py`(144 行) ≈ **~4346 行自研决策**（07-10 二期核验实测；原 1770/1850/113 为过期快照），且 fabric 是"嫁接"进 brain 而非取代。**新旧两套架构并存。**
 - **代价**：每加功能喂两套架构；提交历史里"死锁/撞包/三重失效"就是两套架构同进程打架（commit deb5082 跨-await 持锁死锁）。
-- 详见 → `docs/BRAIN_TRIAGE.md`（逐方法处置，行号级）
+- ⚠️ 注：行数为 07-10 实测快照，代码仍在动，**以 `git ls-files | xargs wc -l` 实测为准**，勿引用本节数字做决策。
+- 详见 → `docs/BRAIN_TRIAGE.md`（处置思路，行号已漂移，按方法名定位）
 
-### 1.2 "假智能"病灶 —— 被第三方分析交叉验证、逐条坐实
-| 模块 | 名字宣称 | 实际 |
+### 1.2 "智能接线缺口" —— 经用户复核校正
+> ⚠️ 本节为校正版。初版误将 `classify_with_llm` 描述为"从不调 LLM 的假函数"，经代码实测证伪。详见 `docs/DECISIONS.md` §8。
+
+| 模块 | 性质 | 处置 |
 |---|---|---|
-| `task_classifier.classify_with_llm` | LLM 分类 | 内部 `return self._local_classify()`，**从不调 LLM** |
-| `task_classifier._local_classify` | 任务分级 | `simple_patterns` 关键字包含 |
-| `meta_debate.run_self_pitch` | 元辩论 | 注释"本地规则避免递归"，关键字累加分 |
-| `swarm_flow.execute_parallel` | 并行执行 | `for step_id in group` 串行循环 |
+| `task_classifier.classify_with_llm` | **写了 LLM 分类但没接进路由**（死代码，非造假） | 🟢 **接线修复**：接入 `classify()` 主路径，本地规则降级为兜底 |
+| `task_classifier._local_classify` | 关键字匹配，被当主路径 | 作为 `classify_with_llm` 的降级兜底保留 |
+| `meta_debate.run_self_pitch` | 真关键字模拟 | 收敛时按情况替换或保留 |
+| `swarm_flow.execute_parallel` | 名为并行实则串行 | 接 asyncio/ThreadPool，或改名+文档标注 |
 
-> L1-L5 整条"智能路由"链路实际是**关键字匹配驱动**。收敛时这些模块**要用真实引擎替换**（删了就没智能，换上才是升级）。
+**关键修正**：缺陷是"接线缺口"，不是"函数造假"。多数情况的正确修法是**把已写好的能力接上**，而非"删 1850 行换外部引擎"。后者还与本节 §1.3"fabric 多数 adapter 没通电"自相矛盾——不能用没通电的引擎替换能跑的本地逻辑。引擎替换仅在 adapter 确实 live 后才考虑。
 - 详见 → `docs/DECISIONS.md` §8
 
-### 1.3 地基本身没通电
-- 环境 Python 3.14，声明 3.10/3.11；sqlmodel/ag2/mem0 **未装**；pytest 无法 collect。
-- fabric 6 个 adapter **仅 2 个 live**（OpenClaw、AG2），LiteLLM/Mem0/browser-use/Langfuse 均 `health()=False`。
-- git **仅 23 提交**承载 5 万行，版本保护几乎为零。
-- mcp/ag2/pyjwt 是 7/9 才补进 requirements 的（注释自述"此前漏声明"）。
+### 1.3 地基通电进度（07-10 复测，已部分解决）
+- ✅ **环境已解**：已有 `requirements.lock`，venv + sqlmodel/ag2/mem0 可装齐（初版"跑不起来"已过期）。
+- ⚠️ **fabric adapter 待复测**：OpenClaw 已真实部署 @18789，其余（LiteLLM/Mem0/browser-use/Langfuse）health() 需实测确认，勿沿用"仅 2 live"旧说法。
+- ✅ **git 版本保护改善**：提交数已 23 → **40**（初版数据过期）。
+- 🟡 **表数**：权威计数 42（test_database 断言），grep `__tablename__` 为 47，有 5 个账未平，建议 reconcile。
+- mcp/ag2/pyjwt 已在 7/9 补进 requirements 并锁版本。
 
 ### 1.4 工程卫生落后
-- 巨型文件违反自家规范（`web/app.py` 211KB，`brain.py` 95KB；AGENTS.md 定 max 500 行）。
+- 巨型文件违反自家规范（`brain.py` 实测 1965 行远超 AGENTS.md max 500 行；注：原写 `web/app.py` 211KB 系误指——仓库无 `web/app.py`，真实入口为 `web/console.py` 轻量代理，详见 `docs/AOS_DIGEST_PLAYBOOK.md` §1.1）。
 - 死代码/重复：UITARS 注册块复制两遍、日期硬编码、4 个 `_*_bridge` 死属性、`_chat_legacy` 死路径。
-- 隐患：`brain.py:91-94` 明文 `admin/aos123456` 兜底。
+- ✅ ~~明文口令 `admin/aos123456`~~：**已治理**（brain.py:91-92 改读 config，仅剩注释），不再是存活隐患。
 
 ### 1.5 唯一真实护城河：合规
 - GB/Z 185-2026 审计/身份/追踪是国内企业上 agent 的硬门槛，LangGraph/CrewAI/AutoGen 全没有。**这是唯一"别人没有、且有人愿付费"的点。**
@@ -75,30 +79,36 @@
 
 | 步骤 | 做什么 | 验收信号 |
 |---|---|---|
-| 0.1 | 建 venv 对齐 3.11，`pip install -e .[dev]` 装齐 sqlmodel/ag2/mem0 | `pytest --collect-only` 不报 ImportError |
-| 0.2 | 核心代码提交入仓（建立版本保护基线） | `git log` 形成有意义的提交链 |
-| 0.3 | brain.py 零风险清理（删死代码/重复块/明文口令兜底，不碰逻辑） | `/health` 仍 healthy，brain.py 瘦身 |
-| 0.4 | 验证 §1.2 待查项：`exec/eval` 路径、embedding 真假、同步异步混用点 | 出一份"安全/真假"清单 |
+| 0.1 | ✅ 大部分已做：已有 `requirements.lock` + venv。补齐跑测试所需 dev 依赖 | `pytest --collect-only` 不报 ImportError |
+| 0.2 | ✅ 已改善：提交数 23→40。继续把核心代码补提交入仓 | `git log` 形成有意义的提交链 |
+| 0.3 | brain.py 零风险清理（删死代码/重复块/**明文口令兜底已删，勿重复处理**） | `/health` 仍 healthy，brain.py 瘦身 |
+| 0.4 | 验证 §1.2 待查项：~~exec/eval~~（已澄清误报）、embedding 真假、同步异步混用点、**复测 fabric adapter 实时 health()** | 出一份"真假/通电"清单 |
 
-**为什么先做这个：** 没有绿信号，后面所有讨论都是空谈。0.3 是纯减法，立刻见效。
+**为什么先做这个：** 没有绿信号，后面所有讨论都是空谈。注意 0.1/0.2/口令已部分完成，勿按初版当未做处理。
 
 → 执行细则见 `docs/BRAIN_TRIAGE.md` §6 第1步、`docs/DECISIONS.md` §6 P0
 
 ---
 
-### 🟡 阶段 1：收敛 + 两个最大杠杆（两周内）
-**目标：新旧架构收敛为单一主干；AOS 能"被外部用"且"看见自己"。**
+### 🟡 阶段 1：接线修复 + 激活 + 两个杠杆（两周内）
+**目标：让已写好的能力通电；AOS 能"被外部用"且"看见自己"。**
+
+> ⚠️ **关键修正**：初版 1.2 写成"逐个迁移 7 大脑模块给真实引擎"。这有两个问题：
+> (1) `classify_with_llm` 不是假函数，是没接线，正确修法是接线而非换引擎；
+> (2) fabric 多数 adapter 还没通电，用没通电的引擎替换能跑的本地逻辑，违背"先稳地基"。
+> **修正原则：先接线、后激活、最后才谈替换。**
 
 | 步骤 | 做什么 | 验收信号 |
 |---|---|---|
-| 1.1 | 激活 fabric 现有适配器（LiteLLM/Mem0 health()=True，有真实 trace） | `resolve_engine("inference.llm")` 返回非 None |
-| 1.2 | **逐个**迁移 7 大脑模块给真实引擎（每迁一个跑测试，绿了再下一个）<br>顺序：agent_card→LiteLLM · fingerprint→Mem0 · debate→AG2 · swarm/lemon→DeerFlow · classifier→fabric | 对应 L 路由改为真引擎调用，无关键词伪装 |
+| 1.1 | **接线修复**（先做，零依赖）：把 `classify_with_llm` 接进 `classify()` 主路径，本地规则降为兜底 | 路由分级实际走 LLM，关键词匹配仅作降级 |
+| 1.2 | **激活 fabric 现有适配器**：实测各 adapter health()，让 live 的真通电（LiteLLM/Mem0 出真实 trace） | `resolve_engine("inference.llm")` 返回非 None |
 | 1.3 | **暴露 MCP Server**（官方 mcp/fastmcp SDK 挂 stdio+SSE，复用现有骨架） | Claude Code/Cursor 一行配置能列出 AOS 技能 |
 | 1.4 | **搭评估框架**（10-20 标准任务集 + pass/fail + 耗时成本，跑出基线） | `make eval` 出第一份体检表 |
+| 1.5 | **引擎替换（仅在 1.2 验证某 adapter live 后才做）**：对该能力对应的本地模块，用 live 引擎替换。逐个进行，每换一个跑评估对比 | 评估分数不降反升 |
 
-**为什么是这两个杠杆（1.3/1.4）：** 1.3 让 AOS 从"自己跑"变"被生态调用"——投入产出比最高；1.4 是进化的前提，没有度量就没有进化。
+**为什么是这个顺序：** 1.1 接线是零成本高收益（已写好的能力接上即可）；1.2 激活是替换的前提；1.5 替换必须建立在"引擎已通电 + 有评估度量"之上，否则是盲改。1.3/1.4 是独立杠杆。
 
-→ 迁移细则见 `docs/BRAIN_TRIAGE.md` §4-5
+→ 思路见 `docs/BRAIN_TRIAGE.md` §4-5（注：该文档行号已漂移，按方法名定位，且其"删 1850 行"措辞需结合本节修正理解）
 
 ---
 
@@ -141,7 +151,7 @@
 | `STATUS.md` | 项目自省状态 | 想看自爆式诚实记录 |
 | `docs/EVOLUTION_ROADMAP.md` | 个人→团队→公司演进接口 | 想看长期架构 seam |
 | `docs/AOS_BUILD_STRATEGY.md` | 生产级 10 铁律横向对比 | 想看与业界对标 |
-| `docs/DATABASE_SCHEMA.md` | 38 表 ORM 文档（自动生成） | 想看数据层 |
+| `docs/DATABASE_SCHEMA.md` | 42 表 ORM 文档（自动生成；原写 38 表已过期） | 想看数据层 |
 
 ---
 

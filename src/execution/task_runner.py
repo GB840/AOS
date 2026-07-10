@@ -12,14 +12,12 @@ Task Runner - 任务运行器
 标准：任务队列标准 (RabbitMQ/Kafka 兼容)
 """
 
-import os
-import sys
-import json
 import logging
 import uuid
 import asyncio
 import threading
-from typing import Dict, List, Optional, Any, Callable
+import time
+from typing import Dict, Any, Callable
 from datetime import datetime
 from enum import Enum
 
@@ -193,7 +191,7 @@ class TaskRunner:
             return {"success": False, "error": f"任务不存在: {task_id}"}
         
         if task["status"] == TaskStatus.COMPLETED.value:
-            return {"success": False, "error": f"任务已完成"}
+            return {"success": False, "error": "任务已完成"}
         
         task["status"] = TaskStatus.CANCELLED.value
         task["completed_at"] = datetime.now().isoformat()
