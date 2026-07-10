@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import json
 import asyncio
 
 sys.dont_write_bytecode = True
@@ -237,6 +238,42 @@ async def _deferred_brain_init(app):
                 df_engine.register_handler("skill:"+sn, (lambda n: lambda d: brain.hermes.execute_skill(n, d))(sn))
         else:
             logger.warning("deerflow engine unavailable; chat/skill handlers not registered")
+
+        # ---- v1.0 内核引擎回调注册 ----
+        # brain 初始化完成后，把 hermes/deerflow 注册为内核的 AgentRuntime 插件。
+        # 这样 kernel.send_message() 可以路由到真实的 Hermes/DeerFlow 引擎，
+        # 而不是仅依赖 wiring.py 的 LiteLLMAdapter 静态插件。
+        bridge = getattr(app.state, "bridge", None)
+        if bridge is not None:
+            hermes = getattr(brain, "hermes", None)
+            if hermes is not None and hasattr(hermes, "chat"):
+                try:
+                    bridge.register_engine_callback(
+                        "hermes",
+                        lambda prompt, **kw: hermes.chat(
+                            message=prompt,
+                            session_id=kw.get("session_id", ""),
+                        ),
+                    )
+                    logger.info("v1.0 kernel: hermes engine registered")
+                except Exception as exc:
+                    logger.warning("hermes engine callback registration failed: %s", exc)
+
+            df = getattr(brain, "deerflow", None)
+            if df is not None and hasattr(df, "execute"):
+                try:
+                    bridge.register_engine_callback(
+                        "deerflow",
+                        lambda prompt, **kw: df.execute(
+                            message=prompt,
+                            session_id=kw.get("session_id", ""),
+                        ),
+                    )
+                    logger.info("v1.0 kernel: deerflow engine registered")
+                except Exception as exc:
+                    logger.warning("deerflow engine callback registration failed: %s", exc)
+        else:
+            logger.debug("kernel bridge not mounted; engine callbacks skipped")
     except Exception as e:  # noqa: BLE001
         logger.warning("brain 后台初始化未完成（降级运行）: %s", e)
 
@@ -417,9 +454,33 @@ async def fabric_status():
 
 # ---- Chat ----
 
+# 灰度切流：AOS_KERNEL_TRAFFIC_PCT 控制 /api/chat 走 kernel 的百分比（0-100）。
+# 0 = 全部走 brain.py（默认），100 = 全部走 kernel。用于渐进式验证 kernel 路径。
+import random as _random
+_kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "0"))
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     try:
+        # ---- 灰度切流：按比例路由到 kernel ----
+        if _kernel_traffic_pct > 0:
+            bridge = getattr(app.state, "bridge", None)
+            if bridge is not None and _random.randint(1, 100) <= _kernel_traffic_pct:
+                try:
+                    resp = await asyncio.to_thread(
+                        bridge.chat,
+                        prompt=request.message,
+                        session_id=request.session_id or "",
+                    )
+                    content = resp.data.get("content", "") if resp.data else ""
+                    logger.info("chat routed to kernel (pct=%d%%)", _kernel_traffic_pct)
+                    return {"response": content, "route": "kernel/v1", "ok": resp.ok}
+                except Exception as exc:
+                    logger.warning("kernel route failed, falling back to brain: %s", exc)
+
+        # ---- v5 路径（brain.py）—— 逐步退化 ----
+        logger.debug("chat via brain.py (v5 path)")
         # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策。
         # 关键：只算一次, 结果传给 brain.chat() 复用 —— 避免重复调用 route_intent
         # 导致 evolution_log 双写 (此前 /api/chat 与 brain.chat() 各调一次)。
@@ -475,35 +536,29 @@ class KernelChatRequest(BaseModel):
 
 @app.post("/api/v1/chat")
 async def kernel_chat(request: KernelChatRequest):
-    """v1.0 内核路由：/api/v1/chat → AOSKernel.send_message → mistralrs。
+    """v1.0 内核路由：/api/v1/chat → bridge.chat() → AOSKernel.send_message。
 
-    与旧 /api/chat（brain.py）双轨并存，不改 brain。内核消息路由默认经
-    AgentRuntime 插件；此处直接经 ModelGateway 调本地 mistralrs 三端点，
-    避免绕行。阻塞 HTTP 调用放线程池，事件循环不被占满（守稳定性铁律）。
+    通过 bridge.chat() 走完整内核链路：权限检查 → Agent 路由 → Runtime 分发
+    → Fitness 记录。不再直接访问 _model_gateway 私有成员。
     """
     bridge = getattr(app.state, "bridge", None)
     if bridge is None:
         raise HTTPException(status_code=503, detail="kernel not mounted")
     try:
-        from kernel.types import Message as KMessage
-
-        def _run():
-            gw = bridge.kernel._model_gateway
-            resp = gw.chat(
-                request.model,
-                [KMessage(sender="user", recipient="kernel",
-                          payload={"prompt": request.message})],
-                max_tokens=2048,
-            )
-            return resp
-
-        resp = await asyncio.to_thread(_run)
+        resp = await asyncio.to_thread(
+            bridge.chat,
+            prompt=request.message,
+            session_id=request.session_id or "",
+            engine=request.engine,
+        )
+        content = resp.data.get("content", "") if resp.data else ""
         return {
-            "ok": bool(resp.content),
-            "content": resp.content,
-            "model": resp.model,
-            "backend": resp.raw.get("backend") or resp.raw.get("error"),
+            "ok": resp.ok,
+            "content": content,
+            "model": resp.data.get("model", "") if resp.data else "",
+            "backend": resp.data.get("backend", "") if resp.data else "",
             "route": "kernel/v1",
+            "error": resp.error,
         }
     except Exception as e:
         logger.error("Kernel chat error: %s", e, exc_info=True)
@@ -517,6 +572,46 @@ async def kernel_health():
     if bridge is None:
         return {"status": "not_mounted"}
     return await asyncio.to_thread(bridge.health)
+
+
+@app.post("/api/v1/chat/stream")
+async def kernel_stream_chat(request: KernelChatRequest):
+    """v1.0 内核 SSE streaming — 通过 ModelGateway.stream_chat 逐块返回。
+
+    注意：streaming 路径直接经 ModelGateway（不经过 send_message 同步链路），
+    因为内核 send_message() 当前为同步阻塞。后续 AgentRuntime.stream_run()
+    实现后可迁移至完整内核链路。
+    """
+    bridge = getattr(app.state, "bridge", None)
+    if bridge is None:
+        raise HTTPException(status_code=503, detail="kernel not mounted")
+
+    async def generate():
+        try:
+            gw = bridge.kernel._model_gateway
+            if not hasattr(gw, "stream_chat"):
+                # 降级：不支持 streaming 的 gateway 走单次调用
+                resp = await asyncio.to_thread(
+                    bridge.chat,
+                    prompt=request.message,
+                    session_id=request.session_id or "",
+                    engine=request.engine,
+                )
+                content = resp.data.get("content", "") if resp.data else ""
+                yield f"data: {json.dumps({'content': content, 'done': True})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            messages = [{"role": "user", "content": request.message}]
+            async for chunk in gw.stream_chat(request.model, messages):
+                payload = chunk if isinstance(chunk, dict) else {"content": str(chunk)}
+                yield f"data: {json.dumps(payload)}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error("Kernel stream error: %s", e, exc_info=True)
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/api/chat/stream")
