@@ -24,6 +24,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import logging
+logger = logging.getLogger(__name__)
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -119,6 +122,7 @@ class LiteLLMAdapter(BaseAgentAdapter):
                 },
             )
         except Exception as e:  # missing key / network / provider error
+            logger.warning("litellm invoke failed: %s", e)
             return InvokeResult(ok=False, error=str(e))
 
     def health(self) -> bool:
@@ -126,7 +130,8 @@ class LiteLLMAdapter(BaseAgentAdapter):
         try:
             _import_litellm()
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug("litellm health check failed: %s", e)
             return False
 
     def supported_protocols(self) -> list[str]:

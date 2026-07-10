@@ -15,6 +15,9 @@ the real OSS.
 """
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger(__name__)
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -73,13 +76,15 @@ class LangfuseAdapter(BaseAgentAdapter):
                 return InvokeResult(ok=True, data={"span_id": span.id})
             return InvokeResult(ok=False, error=f"unknown action {action}")
         except Exception as e:  # not configured / offline
+            logger.warning("langfuse invoke failed: %s", e)
             return InvokeResult(ok=False, error=str(e))
 
     def health(self) -> bool:
         try:
             _import_langfuse()
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug("langfuse health check failed: %s", e)
             return False
 
     def supported_protocols(self) -> list[str]:

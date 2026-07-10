@@ -11,9 +11,12 @@ AOS v5.0 — 统一弹性框架 (Resilience)
 """
 
 import functools
+import logging
 import threading
 import time
 from typing import Any, Callable, Optional, Tuple, Type
+
+logger = logging.getLogger(__name__)
 
 
 class CircuitBreakerOpen(Exception):
@@ -119,6 +122,7 @@ def degrade(fn: Callable[..., Any]) -> Callable[..., Any]:
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except Exception:  # noqa: BLE001 - 软降级语义
+        except Exception as e:  # noqa: BLE001 - 软降级语义
+            logger.warning("degrade: %s raised, returning None: %s", fn.__name__, e)
             return None
     return wrapper

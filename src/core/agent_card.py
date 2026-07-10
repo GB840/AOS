@@ -351,8 +351,8 @@ class AgentCARD:
                     "cost": 0.0,
                     "tokens": {"input": estimated_input_tokens, "output": len(response) // 4},
                 }
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Local model call failed, falling back to simulation: %s", e)
 
         return {
             "content": f"【模拟输出】使用{model.name}生成的内容\n\n基于任务: {prompt[:100]}...",

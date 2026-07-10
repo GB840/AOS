@@ -256,8 +256,8 @@ class MemoryManager:
                     # ChromaDB PersistentClient 无显式 close()，通过置 None 让 GC 回收
                     self.chroma_client = None
                     self.collection = None
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("ChromaDB cleanup failed: %s", exc)
 
             logger.info("MemoryManager资源已关闭")
         except Exception as e:
@@ -302,8 +302,8 @@ class MemoryManager:
             logger.warning(f"无法设置WAL模式，使用默认模式: {e}")
         try:
             conn.execute("PRAGMA foreign_keys=ON")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("PRAGMA foreign_keys=ON failed: %s", exc)
         conn.row_factory = sqlite3.Row
 
         try:
@@ -316,8 +316,8 @@ class MemoryManager:
                 if wal_file.exists():
                     try:
                         wal_file.unlink()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("WAL file cleanup failed (%s): %s", wal_file, exc)
             conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
             conn.row_factory = sqlite3.Row
             self._create_tables(conn)
@@ -418,7 +418,8 @@ class MemoryManager:
             
             try:
                 self.zvec_index = zvec.open(memory_path)
-            except Exception:
+            except Exception as exc:
+                logger.warning("zvec.open() failed, falling back to create_and_open: %s", exc)
                 self.zvec_index = create_and_open(
                     path=memory_path,
                     schema=schema,
@@ -444,7 +445,8 @@ class MemoryManager:
             return None
         try:
             return self.chroma_client.get_collection(name=self.collection_name)
-        except Exception:
+        except Exception as exc:
+            logger.debug("ChromaDB get_collection failed, creating new: %s", exc)
             return self.chroma_client.create_collection(
                 name=self.collection_name,
                 metadata={"hnsw:space": "cosine"},

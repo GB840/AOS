@@ -82,8 +82,8 @@ class Pipeline:
             if self.on_result:
                 try:
                     self.on_result(rec)
-                except Exception:  # pragma: no cover - 回调异常不影响流水线
-                    pass
+                except Exception as e:  # pragma: no cover - 回调异常不影响流水线
+                    logger.warning("Pipeline on_result callback failed: %s", e)
             if not rec["ok"] and rec.get("on_fail") == "abort":
                 aborted = True
                 break

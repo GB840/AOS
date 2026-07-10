@@ -154,7 +154,8 @@ class DeepDeerFlowIntegration:
             return None
         try:
             return self._journal.get_entry(entry_id)
-        except Exception:
+        except Exception as exc:
+            logger.debug("Journal get_entry(%s) failed: %s", entry_id, exc)
             return None
 
     # ================================================================
@@ -180,7 +181,8 @@ class DeepDeerFlowIntegration:
         try:
             from deerflow.tracing import build_langfuse_trace_metadata
             return build_langfuse_trace_metadata(task_name, **kwargs)
-        except Exception:
+        except Exception as exc:
+            logger.debug("build_trace_metadata failed, using fallback: %s", exc)
             return {"name": task_name, "tags": ["aos"], **kwargs}
 
     def inject_trace_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -188,7 +190,8 @@ class DeepDeerFlowIntegration:
         try:
             from deerflow.tracing import inject_langfuse_metadata
             return inject_langfuse_metadata(metadata)
-        except Exception:
+        except Exception as exc:
+            logger.debug("inject_trace_metadata failed, returning original: %s", exc)
             return metadata
 
     # ================================================================

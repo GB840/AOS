@@ -107,7 +107,8 @@ class TaskFingerprint:
         try:
             created = datetime.fromisoformat(template.created_at)
             return datetime.now() - created > timedelta(days=30)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to parse template created_at %r, treating as outdated: %s", template.created_at, e)
             return True
 
     def store_template(self, task: str, level: str, role_whitelist: List[str],
@@ -200,8 +201,8 @@ class TaskFingerprint:
                         content = json.loads(item.get("content", "{}"))
                         template = TaskTemplate(**content)
                         self._templates[template.fingerprint] = template
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to parse task template entry: %s", e)
             logger.info(f"加载了 {len(self._templates)} 个任务模板")
         except Exception as e:
             logger.warning(f"加载模板失败: {e}")

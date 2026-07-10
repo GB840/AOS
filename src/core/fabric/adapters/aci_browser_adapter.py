@@ -14,6 +14,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+logger = logging.getLogger(__name__)
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -49,13 +52,15 @@ class BrowserUseAdapter(BaseAgentAdapter):
             result = asyncio.run(agent.run())
             return InvokeResult(ok=True, data={"result": str(result)})
         except Exception as e:  # no LLM / no browser binary installed
+            logger.warning("browser-use invoke failed: %s", e)
             return InvokeResult(ok=False, error=str(e))
 
     def health(self) -> bool:
         try:
             _import_browser_use()
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug("browser-use health check failed: %s", e)
             return False
 
     def supported_protocols(self) -> list[str]:

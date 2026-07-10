@@ -211,6 +211,7 @@ class SwarmFlow:
 
         except Exception as e:
             duration = (datetime.now() - start_time).total_seconds()
+            logger.warning("Step %s (role=%s) raised exception: %s", step.step_id, step.role, e)
             return StepResult(
                 step_id=step.step_id,
                 role=step.role,

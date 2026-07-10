@@ -19,6 +19,9 @@ import os
 import shutil
 import subprocess
 
+import logging
+logger = logging.getLogger(__name__)
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -101,6 +104,7 @@ class OpenClawAdapter(BaseAgentAdapter):
                 ok=False, error=f"unsupported capability {req.capability.value}"
             )
         except Exception as e:  # gateway down / cli missing -> graceful degrade
+            logger.warning("openclaw invoke failed: %s", e)
             return InvokeResult(ok=False, error=str(e))
 
     def health(self) -> bool:
@@ -110,7 +114,8 @@ class OpenClawAdapter(BaseAgentAdapter):
             import socket
             with socket.create_connection(("127.0.0.1", self.GATEWAY_PORT), timeout=2):
                 return True
-        except Exception:
+        except Exception as e:
+            logger.debug("openclaw health check failed: %s", e)
             return False
 
     def supported_protocols(self) -> list[str]:

@@ -20,6 +20,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import logging
+logger = logging.getLogger(__name__)
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -129,6 +132,7 @@ class AG2Adapter(BaseAgentAdapter):
                 ok=False, error=f"unsupported capability {req.capability.value}"
             )
         except Exception as e:  # surface real failures instead of faking success
+            logger.warning("ag2 group chat invoke failed: %s", e)
             return InvokeResult(ok=False, error=f"ag2 group chat failed: {e}")
 
     def health(self) -> bool:
@@ -136,7 +140,8 @@ class AG2Adapter(BaseAgentAdapter):
             return False
         try:
             return bool(self._llm_config.get("api_key"))
-        except Exception:
+        except Exception as e:
+            logger.debug("ag2 health check failed: %s", e)
             return False
 
     def supported_protocols(self) -> list[str]:

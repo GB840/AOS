@@ -73,7 +73,8 @@ class NotificationService:
     def _send_webhook(self, agent_id: str, payload: Dict[str, Any]) -> Any:
         try:
             import requests  # 可选依赖
-        except Exception:
+        except Exception as e:
+            logger.warning("requests library not available for webhook: %s", e)
             return {"sent": False, "error": "requests not installed"}
         url = payload.get("webhook_url")
         if not url:
@@ -82,6 +83,7 @@ class NotificationService:
             resp = requests.post(url, json=payload, timeout=5)
             return {"sent": True, "status": resp.status_code}
         except Exception as e:  # pragma: no cover
+            logger.warning("Webhook POST failed: %s", e)
             return {"sent": False, "error": str(e)}
 
     def _send_ws(self, agent_id: str, payload: Dict[str, Any]) -> Any:
@@ -91,4 +93,5 @@ class NotificationService:
             self._ws_sender(agent_id, payload)
             return {"sent": True}
         except Exception as e:  # pragma: no cover
+            logger.warning("WS notification failed: %s", e)
             return {"sent": False, "error": str(e)}

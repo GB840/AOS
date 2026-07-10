@@ -14,6 +14,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+logger = logging.getLogger(__name__)
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -56,13 +59,15 @@ class Mem0Adapter(BaseAgentAdapter):
                 return InvokeResult(ok=False, error=f"unknown action {action}")
             return InvokeResult(ok=True, data={"result": r})
         except Exception as e:  # no LLM key / no vector store configured
+            logger.warning("mem0 invoke failed: %s", e)
             return InvokeResult(ok=False, error=str(e))
 
     def health(self) -> bool:
         try:
             _import_mem0()
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug("mem0 health check failed: %s", e)
             return False
 
     def supported_protocols(self) -> list[str]:

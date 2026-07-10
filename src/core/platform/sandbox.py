@@ -90,8 +90,8 @@ class WasmSandbox(Sandbox):
         try:
             if self.runtime == "wasmtime":
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("WASM runtime probe failed: %s", e)
         return False
 
     @property

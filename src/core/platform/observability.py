@@ -57,8 +57,8 @@ class Metrics:
         if _HAS_OTEL:
             try:
                 otel_trace.get_tracer("aos").get_tracer_provider()  # noqa
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("OTel tracer bridge failed: %s", e)
 
     def observe(self, name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
         key = self._key(name, labels)
@@ -104,8 +104,8 @@ class Tracer:
                             s.set_attribute(str(k), str(v))
                     yield s
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("OTel span creation failed, falling back to local span: %s", e)
         try:
             yield rec
         finally:

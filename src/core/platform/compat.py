@@ -9,9 +9,12 @@ AOS v5.0 — 兼容性矩阵 (Compatibility Matrix)
 """
 
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class CompatMatrix:
@@ -22,7 +25,8 @@ class CompatMatrix:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     self._data = json.load(f)
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to load compat matrix from %s: %s", path, e)
                 self._data = {}
 
     def register(self, capability: str, version: str, status: str = "ok",
@@ -66,8 +70,8 @@ class CompatMatrix:
             try:
                 with open(self.path, "w", encoding="utf-8") as f:
                     json.dump(self._data, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to persist compat matrix to %s: %s", self.path, e)
 
     def snapshot(self) -> Dict[str, List[Dict[str, Any]]]:
         return json.loads(json.dumps(self._data))

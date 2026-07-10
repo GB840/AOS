@@ -75,7 +75,8 @@ class DeerFlowGatewayClient:
                     response = session.request(method, url, **kwargs)
             try:
                 return response.json()
-            except Exception:
+            except Exception as exc:
+                logger.debug("DeerFlow gateway response not JSON (%s), returning raw text", exc)
                 return {"status_code": response.status_code, "text": response.text[:500]}
         except Exception as e:
             logger.warning(f"DeerFlow API request failed: {e}")
@@ -169,8 +170,8 @@ class DeerFlowGatewayClient:
                 json={"thread_id": thread_id},
                 timeout=15,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("DeerFlow thread deletion failed: %s", exc)
 
     def run(self, message, thread_id=None, model_name=None, timeout=240, assistant_id=None, **kwargs):
         """Execute a long-running task (blocking). Returns final text answer.
@@ -193,7 +194,8 @@ class DeerFlowGatewayClient:
             if resp.status_code == 200:
                 try:
                     data = resp.json()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("DeerFlow run response not JSON (%s), returning raw text", exc)
                     return resp.text
                 return self._extract_answer(data)
             logger.warning(f"DeerFlow run -> {resp.status_code}; {resp.text[:200]}")
@@ -236,7 +238,8 @@ class DeerFlowGatewayClient:
                     continue
                 try:
                     evt = _json.loads(data_str)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("SSE event parse failed in stream_chat: %s", exc)
                     continue
                 if not isinstance(evt, dict):
                     continue
@@ -281,7 +284,8 @@ class DeerFlowGatewayClient:
                                 content = parsed.get("content", "")
                                 if content:
                                     return content
-                            except Exception:
+                            except Exception as exc:
+                                logger.debug("Legacy chat SSE parse failed: %s", exc)
                                 continue
                 return "DeerFlow responded"
         except Exception as e:
@@ -381,6 +385,7 @@ class DeerFlowGatewayClient:
                 rec["result"] = out
                 rec["status"] = "completed"
             except Exception as e:  # noqa: BLE001
+                logger.warning("Batch task %s failed: %s", task_id, e)
                 rec["error"] = str(e)
                 rec["status"] = "failed"
             finally:
@@ -458,8 +463,8 @@ class DeerFlowGatewayClient:
             if os.path.exists(self._SUBAGENT_REGISTRY):
                 with open(self._SUBAGENT_REGISTRY, encoding="utf-8") as f:
                     return _json.load(f)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Subagent registry load failed (%s), starting fresh", exc)
         return {}
 
     def _save_subagent_registry(self, reg):
@@ -511,6 +516,7 @@ class DeerFlowGatewayClient:
                 return False, str(resp)[:120]
             return False, "unexpected response"
         except Exception as e:  # noqa: BLE001
+            logger.warning("Subagent API check failed for %s: %s", name, e)
             return False, str(e)[:120]
 
     def register_subagent(self, name, description, **kwargs):
@@ -587,6 +593,7 @@ class DeerFlowGatewayClient:
                 res = self.execute_subagent(name, task, thread_id=thread_id, **kwargs)
                 self._tasks[task_id] = {"status": "completed", **res}
             except Exception as e:  # noqa: BLE001
+                logger.warning("Async subagent task %s failed: %s", task_id, e)
                 self._tasks[task_id] = {"status": "failed", "success": False, "error": str(e)}
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -927,7 +934,8 @@ class UnifiedBrain:
                         for c in adapter.advertise_capabilities()]
                 if capability in caps and adapter.health():
                     return eid
-        except Exception:
+        except Exception as exc:
+            logger.debug("Fabric adapter lookup for '%s' failed: %s", capability, exc)
             return None
         return None
 
@@ -1760,7 +1768,8 @@ class UnifiedBrain:
                    "conversations": len(self.memory.list_tasks(limit=10000))}
         try:
             df_mem = self.deerflow.export_memory()
-        except Exception:
+        except Exception as exc:
+            logger.warning("DeerFlow memory export failed: %s", exc)
             df_mem = {"status": "unavailable"}
         return {"aos": aos_mem, "deerflow": df_mem}
 
@@ -1905,7 +1914,8 @@ class UnifiedBrain:
                     "task_count": getattr(dd, "_task_counter", 0),
                     "active_user_contexts": len(getattr(dd, "_user_contexts", {}) or {}),
                 }
-            except Exception:
+            except Exception as exc:
+                logger.debug("Deep DeerFlow stats collection failed: %s", exc)
                 stats["deerflow_deep"] = {"status": "unavailable"}
         else:
             stats["deerflow_deep"] = {"status": "unavailable"}
@@ -1924,7 +1934,8 @@ class UnifiedBrain:
                     "context_status": getattr(hermes, "get_context_status", lambda: {})()
                     if hasattr(hermes, "get_context_status") else {},
                 }
-            except Exception:
+            except Exception as exc:
+                logger.debug("Deep Hermes stats collection failed: %s", exc)
                 stats["deep_hermes"] = {"status": "unavailable"}
         else:
             stats["deep_hermes"] = {"status": "unavailable"}

@@ -35,6 +35,7 @@ def extract_text(path_or_bytes: Any, mime: Optional[str] = None) -> Dict[str, An
             with open(path_or_bytes, "rb") as f:
                 data = f.read()
         except Exception as e:
+            logger.warning("File read failed for %s: %s", path_or_bytes, e)
             return {"ok": False, "error": f"read failed: {e}"}
     else:
         return {"ok": False, "error": "unsupported input type"}
@@ -43,6 +44,7 @@ def extract_text(path_or_bytes: Any, mime: Optional[str] = None) -> Dict[str, An
         try:
             return {"ok": True, "text": data.decode("utf-8", errors="replace"), "engine": "stdlib"}
         except Exception as e:
+            logger.warning("Text decode failed: %s", e)
             return {"ok": False, "error": f"decode failed: {e}"}
 
     if ext in _PDF_EXTS or mime == "application/pdf":
@@ -61,8 +63,8 @@ def _extract_pdf(data: bytes) -> Dict[str, Any]:
         with pdfplumber.open(io.BytesIO(data)) as pdf:
             text = "\n".join((p.extract_text() or "") for p in pdf.pages)
         return {"ok": True, "text": text, "engine": "pdfplumber"}
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("pdfplumber extraction failed, trying PyPDF2: %s", exc)
     try:
         import PyPDF2  # type: ignore
         import io
@@ -70,6 +72,7 @@ def _extract_pdf(data: bytes) -> Dict[str, Any]:
         text = "\n".join((p.extract_text() or "") for p in reader.pages)
         return {"ok": True, "text": text, "engine": "PyPDF2"}
     except Exception as e:
+        logger.warning("PyPDF2 extraction failed: %s", e)
         return {"ok": False, "error": f"PDF 依赖未安装 (需 pdfplumber 或 PyPDF2): {e}"}
 
 
@@ -82,4 +85,5 @@ def _ocr(data: bytes) -> Dict[str, Any]:
         text = pytesseract.image_to_string(img)
         return {"ok": True, "text": text, "engine": "pytesseract"}
     except Exception as e:
+        logger.warning("OCR extraction failed: %s", e)
         return {"ok": False, "error": f"OCR 依赖未安装 (需 pytesseract + Pillow): {e}"}
