@@ -25,7 +25,7 @@ async def test_planner():
             result = await planner.run(task)
             print(f"\n任务ID: {result['task_id']}")
             print(f"任务状态: {result['task_status']}")
-            print(f"\n步骤规划:")
+            print("\n步骤规划:")
             for i, step in enumerate(result['plan']):
                 print(f"  {i+1}. [{step['worker_type']}] {step['description']} - {step['status']}")
             

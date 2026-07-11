@@ -10,24 +10,7 @@ Focuses on areas not covered by the existing test_security.py:
 Run: python -m pytest tests/test_security_middleware.py -v
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-# Ensure config won't crash during import
-for var in ["API_KEY_HASH", "ADMIN_USERNAME", "ADMIN_PASSWORD", "POSTGRES_PASSWORD", "AOS_TOKEN_SECRET"]:
-    os.environ.setdefault(var, "test-placeholder")
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
-except ImportError:
-    pass
-
 import pytest
-
-bcrypt = pytest.importorskip("bcrypt")
 
 from fastapi import FastAPI
 from starlette.testclient import TestClient
@@ -40,8 +23,9 @@ from api.security import (
     generate_api_key,
     hash_api_key,
     verify_api_key_hash,
-    get_api_key,
 )
+
+bcrypt = pytest.importorskip("bcrypt")
 
 
 # ---------------------------------------------------------------------------

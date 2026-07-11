@@ -4,7 +4,6 @@
 - 绝不调用 legacy 路径的 ``get_brain()``（会 import cognee → 批量删除守卫）。
 - 只验证：flag 解析、runtime 选择器、kernel 路径经 ``get_bridge().call_skill/chat`` 正确透传。
 """
-import importlib
 
 import pytest
 

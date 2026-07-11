@@ -2,10 +2,8 @@
 Unit tests for AOS memory system.
 """
 
-import os
 import sys
 import time
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,7 +17,11 @@ if _src not in sys.path:
 def clean_data_dir(tmp_path, monkeypatch):
     """为每个测试创建独立的临时 SQLite 数据库, 避免测试间数据泄漏."""
     db_path = str(tmp_path / "test_aos.db")
-    monkeypatch.setenv("SQLITE_DB_PATH", db_path)
+    # 用 from utils.config import config（不带 src. 前缀），
+    # 和 memory.py 的导入方式一致，
+    # 否则 monkeypatch.setattr 落在 src.utils.config 而 memory.py 用的是 utils.config。
+    from utils.config import config
+    monkeypatch.setattr(config, "SQLITE_DB_PATH", db_path)
     yield tmp_path
     # 清理: tmp_path 由 pytest 自动回收
 
@@ -119,7 +121,6 @@ class TestMemoryManager:
         task = mem.get_task(task_id)
         assert task["status"] == "completed"
 
-    @pytest.mark.xfail(reason="ConnectionPool.get_connection() not implemented", raises=AttributeError)
     def test_list_tasks_filtered(self, clean_data_dir):
         """Test listing tasks with status filter."""
         from src.memory.memory import MemoryManager

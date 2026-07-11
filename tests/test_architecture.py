@@ -35,13 +35,13 @@ async def test_protocol_layer():
     }
     
     serialized = a2a_adapter.serialize(test_message)
-    print(f"✓ A2A 序列化测试通过")
+    print("✓ A2A 序列化测试通过")
     
     translated = translator.translate(serialized, ProtocolType.A2A, ProtocolType.MCP)
-    print(f"✓ A2A → MCP 转换测试通过")
+    print("✓ A2A → MCP 转换测试通过")
     
     translated_back = translator.translate(translated, ProtocolType.MCP, ProtocolType.A2A)
-    print(f"✓ MCP → A2A 转换测试通过")
+    print("✓ MCP → A2A 转换测试通过")
 
 
 async def test_registry():
@@ -74,7 +74,7 @@ async def test_event_bus():
         received_events.append(event)
     
     event_bus.subscribe(EventType.TASK_CREATED, test_handler)
-    print(f"✓ 订阅测试事件成功")
+    print("✓ 订阅测试事件成功")
     
     event_bus.publish(
         EventType.TASK_CREATED,
@@ -85,10 +85,10 @@ async def test_event_bus():
     await asyncio.sleep(0.1)
     
     assert len(received_events) == 1
-    print(f"✓ 事件发布/订阅测试通过")
+    print("✓ 事件发布/订阅测试通过")
     
     event_bus.unsubscribe(EventType.TASK_CREATED, test_handler)
-    print(f"✓ 取消订阅测试成功")
+    print("✓ 取消订阅测试成功")
 
 
 async def test_china_adapter():
@@ -103,7 +103,7 @@ async def test_china_adapter():
         print(f"  - {provider.value}: {type(bridge).__name__}")
     
     result = await china_adapter.chat([{"role": "user", "content": "你好"}])
-    print(f"✓ 中文任务路由测试通过")
+    print("✓ 中文任务路由测试通过")
     print(f"  结果: {result.get('content', '')[:50]}...")
 
 
@@ -121,7 +121,7 @@ async def test_planner():
     
     try:
         result = await planner.run(task)
-        print(f"✓ 任务执行完成")
+        print("✓ 任务执行完成")
         print(f"  状态: {result['task_status']}")
         print(f"  步骤数: {len(result['plan'])}")
         

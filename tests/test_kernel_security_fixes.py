@@ -14,7 +14,6 @@ These tests import only kernel modules (no cognee), so they gate cleanly.
 
 from __future__ import annotations
 
-from kernel.kernel import AOSKernel
 from kernel.types import AgentSpec, Message
 from kernel.wiring import build_default_kernel
 

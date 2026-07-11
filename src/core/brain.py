@@ -18,7 +18,7 @@ import time
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Generator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 
 from utils.config import config
 
@@ -685,12 +685,20 @@ class UnifiedBrain:
                         pool.submit(self._run_init_step, name, method_name): name
                         for name, method_name in batch
                     }
-                    for future in as_completed(futures):
-                        name = futures[future]
-                        try:
-                            future.result()  # 异常已在 _run_init_step 内捕获
-                        except Exception as e:  # pragma: no cover - 双重保险
-                            logger.error("组件 %s 并行初始化异常逃逸: %s", name, e)
+                    try:
+                        for future in as_completed(futures, timeout=60):
+                            name = futures[future]
+                            try:
+                                future.result()  # 异常已在 _run_init_step 内捕获
+                            except Exception as e:  # pragma: no cover - 双重保险
+                                logger.error("组件 %s 并行初始化异常逃逸: %s", name, e)
+                    except TimeoutError:
+                        logger.warning("批量初始化超时(60s)，标记未完成组件为失败")
+                        for f, name in futures.items():
+                            if not f.done():
+                                self.init_status[name] = "timeout"
+                                self._initialization_errors.append((name, "Timeout after 60s"))
+                                logger.error("组件 %s 初始化超时", name)
 
         # 汇总日志
         ok = sum(1 for s in self.init_status.values() if s == "success")
