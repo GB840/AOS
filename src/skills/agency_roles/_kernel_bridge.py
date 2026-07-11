@@ -35,16 +35,24 @@ from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 AGENCY_KERNEL_FLAG = "AOS_USE_KERNEL_FOR_ROLES"
+AGENCY_KERNEL_ROLES = "AOS_KERNEL_ROLES"  # 逗号分隔的角色白名单，留空=全部
 _DEFAULT_ROLE_ID = "agency"
 
 
-def is_kernel_consolidation_enabled() -> bool:
+def is_kernel_consolidation_enabled(role_id: str = "") -> bool:
     """动态读取 feature flag（每次调用都读环境变量，便于测试与热切换）。
 
     默认关闭。开启值：``1 / true / yes / on``（大小写不敏感）。
+    开启后若设了 ``AOS_KERNEL_ROLES`` 白名单，则仅名单内角色走内核，
+    其余仍走 brain —— 用于逐角色灰度，无需回退文件。
     """
     val = os.environ.get(AGENCY_KERNEL_FLAG, "0").strip().lower()
-    return val in ("1", "true", "yes", "on")
+    if val not in ("1", "true", "yes", "on"):
+        return False
+    allow = os.environ.get(AGENCY_KERNEL_ROLES, "").strip()
+    if not allow:
+        return True
+    return role_id in {a.strip() for a in allow.split(",")}
 
 
 def _role_agent_id(role_id: str) -> str:
@@ -105,12 +113,12 @@ class _KernelRuntime:
 
 
 def get_agency_runtime(role_id: str = _DEFAULT_ROLE_ID):
-    """统一入口：flag 开 → 内核收口；关 → 遗留脑（默认，零风险）。
+    """统一入口：flag 开且（无白名单或角色在白名单）→ 内核收口；否则遗留脑。
 
     用法见模块 docstring。角色文件替换 ``brain = get_brain()`` 为
     ``rt = get_agency_runtime(role_id=self.NAME)`` 即可在 flag 开启时收口。
     """
-    if is_kernel_consolidation_enabled():
+    if is_kernel_consolidation_enabled(role_id):
         logger.info("[agency-roles] 收口 ON: role=%s 走内核", role_id)
         return _KernelRuntime(role_id)
     return _LegacyRuntime(role_id)
