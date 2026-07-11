@@ -356,99 +356,97 @@ import threading
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    改进的速率限制中间件 - 修复内存泄漏
-    
-    使用滑动窗口算法 + 定期清理过期条目，防止内存泄漏
+    改进的速率限制中间件 - 修复内存泄漏 + v1.0 API Key 治理。
+
+    使用滑动窗口算法 + 定期清理过期条目，防止内存泄漏。
+    同时支持 IP 级别和 API Key 级别的限流。
     """
-    
+
     def __init__(self, app, max_requests: int = 100, time_window_seconds: int = 60):
         super().__init__(app)
         self.max_requests = max_requests
         self.time_window = time_window_seconds
-        
+        # API Key 所有者可享受更高限额
+        self.api_key_max_requests = max_requests * 3  # 认证用户 3x 限额
+
         # 使用线程安全的数据结构
-        self._clients = defaultdict(deque)
+        self._clients: dict = defaultdict(deque)
+        self._api_keys: dict = defaultdict(deque)  # v1.0: API Key 级别限流
         self._lock = threading.Lock()
         self._last_cleanup = datetime.now()
-        self._cleanup_interval = timedelta(minutes=5)  # 每5分钟清理一次
-        
-        logger.info(f"速率限制中间件初始化: {max_requests}请求/{time_window_seconds}秒")
-    
+        self._cleanup_interval = timedelta(minutes=5)
+
+        logger.info("速率限制中间件: IP=%dreq/%ds | API-Key=%dreq/%ds",
+                    max_requests, time_window_seconds,
+                    self.api_key_max_requests, time_window_seconds)
+
     def _cleanup_expired_clients(self):
         """清理过期的客户端记录，防止内存泄漏"""
         now = datetime.now()
-        
-        # 检查是否需要清理
         if now - self._last_cleanup < self._cleanup_interval:
             return
-        
         with self._lock:
-            expired_clients = []
-            
-            # 找出所有过期的客户端
-            for client_ip, requests in self._clients.items():
-                # 移除超出时间窗口的请求
-                while requests and now - requests[0] > timedelta(seconds=self.time_window):
-                    requests.popleft()
-                
-                # 如果客户端没有活跃请求，标记为过期
-                if not requests:
-                    expired_clients.append(client_ip)
-            
-            # 删除过期的客户端记录
-            for client_ip in expired_clients:
-                del self._clients[client_ip]
-            
+            for store in (self._clients, self._api_keys):
+                expired = []
+                for key, requests in store.items():
+                    while requests and now - requests[0] > timedelta(seconds=self.time_window):
+                        requests.popleft()
+                    if not requests:
+                        expired.append(key)
+                for key in expired:
+                    del store[key]
             self._last_cleanup = now
-            
-            if expired_clients:
-                logger.info(f"清理了 {len(expired_clients)} 个过期的客户端记录")
+            if expired:
+                logger.debug("限流清理: %d 条过期记录", len(expired))
 
     async def dispatch(self, request: Request, call_next) -> Response:
         client_ip = request.client.host if request.client else "unknown"
         now = datetime.now()
-        
-        # 定期清理过期记录
+
         self._cleanup_expired_clients()
-        
-        # ⚠️ 关键并发正确性: threading.Lock 只保护限流簿记 (deque 读写),
-        # 绝不能跨 `await call_next(request)` 持锁。此前把 await 放在 with 块内,
-        # 单 worker uvicorn 下会死锁: 请求A持锁 await 长耗时 brain.chat 期间,
-        # 请求B(如 /health 轮询)进入 dispatch 执行 `with self._lock` 会同步阻塞
-        # 事件循环线程 -> 事件循环无法回去跑A的续体释放锁 -> 全进程冻结。
-        # 修法: 锁内只做记账并算出 remaining, await 在锁外执行。
+
+        # v1.0: 优先 API Key 限流，再 IP 限流
+        api_key = request.headers.get("X-API-Key", "") or request.headers.get("Authorization", "")
+        if api_key.startswith("Bearer "):
+            api_key = api_key[7:]
+        use_api_key = bool(api_key and len(api_key) > 16)
+
         with self._lock:
-            client_requests = self._clients[client_ip]
+            if use_api_key:
+                store = self._api_keys
+                key = api_key[:32]  # 截断保护隐私
+                limit = self.api_key_max_requests
+            else:
+                store = self._clients
+                key = client_ip
+                limit = self.max_requests
 
-            # 移除超出时间窗口的旧请求
-            while client_requests and now - client_requests[0] > timedelta(seconds=self.time_window):
-                client_requests.popleft()
+            requests_deque = store[key]
+            while requests_deque and now - requests_deque[0] > timedelta(seconds=self.time_window):
+                requests_deque.popleft()
 
-            # 检查是否超限
-            if len(client_requests) >= self.max_requests:
-                logger.warning(f"速率限制超限: {client_ip} ({len(client_requests)}/{self.max_requests})")
-                reset = int((now - client_requests[0]).total_seconds()) if client_requests else self.time_window
+            if len(requests_deque) >= limit:
+                logger.warning("速率限制: %s (%d/%d)", key, len(requests_deque), limit)
+                reset = int((now - requests_deque[0]).total_seconds()) if requests_deque else self.time_window
                 return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     headers={
                         "Retry-After": str(self.time_window),
-                        "X-RateLimit-Limit": str(self.max_requests),
+                        "X-RateLimit-Limit": str(limit),
                         "X-RateLimit-Remaining": "0",
                         "X-RateLimit-Reset": str(reset),
                     },
                     content={
                         "error": "Too Many Requests",
-                        "detail": f"Rate limit exceeded. Maximum {self.max_requests} requests per {self.time_window} seconds.",
+                        "detail": f"Rate limit exceeded ({limit}/{self.time_window}s).",
                         "retry_after": self.time_window,
                     }
                 )
 
-            # 记录新请求
-            client_requests.append(now)
-            remaining = self.max_requests - len(client_requests)
+            requests_deque.append(now)
+            remaining = limit - len(requests_deque)
 
-        # await 必须在锁外, 避免跨 await 持锁导致事件循环死锁
         response = await call_next(request)
-        response.headers["X-RateLimit-Limit"] = str(self.max_requests)
+        response.headers["X-RateLimit-Limit"] = str(limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response

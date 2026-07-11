@@ -21,6 +21,7 @@ from ..interfaces import ModelGateway
 from ..types import (
     ChatChunk,
     ChatResponse,
+    GatewayHealth,
     Message,
     ModelCapabilities,
     ModelInfo,
@@ -74,6 +75,28 @@ class MistralRSModelGateway(ModelGateway):
         return self._clients[model_id]
 
     # ---- ModelGateway 接口 ----
+    def health(self) -> GatewayHealth:
+        import time
+        if not getattr(self._cfg, "MISTRALRS_ENABLED", False):
+            return GatewayHealth(healthy=False, provider="mistralrs",
+                                error="MISTRALRS_ENABLED=False")
+        t0 = time.time()
+        try:
+            client = self._client("mistralrs_general")
+            if client is None:
+                return GatewayHealth(healthy=False, provider="mistralrs",
+                                    error="openai lib unavailable")
+            models = client.models.list()
+            latency = (time.time() - t0) * 1000
+            return GatewayHealth(
+                healthy=True, provider="mistralrs",
+                latency_ms=round(latency, 1),
+                model_count=len(models.data) if models else 0,
+            )
+        except Exception as e:
+            return GatewayHealth(healthy=False, provider="mistralrs",
+                                error=str(e), latency_ms=(time.time() - t0) * 1000)
+
     def list_models(self) -> List[ModelInfo]:
         if not getattr(self._cfg, "MISTRALRS_ENABLED", False):
             return []

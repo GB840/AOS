@@ -21,6 +21,7 @@ from .types import (
     AgentSpec,
     ChatResponse,
     ChatChunk,
+    GatewayHealth,
     Message,
     ModelCapabilities,
     ModelInfo,
@@ -37,6 +38,11 @@ class ModelGateway(ABC):
     今天：LiteLLMAdapter 实现 -> 调本地/云端 100+ 模型
     明天：任意新模型适配器 -> 内核不改，只换实现
     """
+
+    @abstractmethod
+    def health(self) -> GatewayHealth:
+        """健康检查：返回网关是否可达、延迟、可用模型数。用于降级链决策。"""
+        ...
 
     @abstractmethod
     def list_models(self) -> List[ModelInfo]:

@@ -13,6 +13,7 @@ from ..interfaces import ModelGateway
 from ..types import (
     ChatChunk,
     ChatResponse,
+    GatewayHealth,
     Message,
     ModelCapabilities,
     ModelInfo,
@@ -27,6 +28,21 @@ class LiteLLMModelGateway(ModelGateway):
 
     def __init__(self, adapter: LiteLLMAdapter | None = None) -> None:
         self._adapter = adapter or LiteLLMAdapter()
+
+    def health(self) -> GatewayHealth:
+        import time
+        t0 = time.time()
+        try:
+            models = self._adapter.list_models() if hasattr(self._adapter, 'list_models') else []
+            latency = (time.time() - t0) * 1000
+            return GatewayHealth(
+                healthy=True, provider="litellm",
+                latency_ms=round(latency, 1),
+                model_count=len(models) if models else 1,
+            )
+        except Exception as e:
+            return GatewayHealth(healthy=False, provider="litellm",
+                                error=str(e), latency_ms=(time.time() - t0) * 1000)
 
     def list_models(self) -> List[ModelInfo]:
         # LiteLLM 网关覆盖 100+ 模型；此处暴露默认模型作为代表，

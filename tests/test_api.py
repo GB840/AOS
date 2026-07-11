@@ -55,11 +55,25 @@ def client(mock_brain, monkeypatch):
     与请求头，使主链路在「已认证」前提下被验证。
     """
     test_key = "test-api-key-aos-0000000000"
-    monkeypatch.setenv("API_KEY", test_key)
+    monkeypatch.setenv("AOS_API_KEY", test_key)
+    # Patch the SAME config object the security middleware reads from.
+    # api/security.py does `from utils.config import config` — patching
+    # `src.utils.config.config` would target a *different* module instance
+    # (Python loads both `utils.config` and `src.utils.config` when sys.path
+    # contains both D:\AOS\src and D:\AOS), so the middleware never saw the
+    # test key and every authenticated endpoint returned 401.
     from utils.config import config as app_config
     monkeypatch.setattr(app_config, "API_KEY", test_key)
-    with patch("src.core.brain.get_brain", return_value=mock_brain):
-        with patch("src.core.brain._brain_instance", mock_brain):
+    # Patch get_brain / _brain_instance on BOTH module instances.
+    # api/main.py does `from core import get_brain` → resolves to `core.brain`,
+    # but the test suite's sys.path contains both D:\AOS\src and D:\AOS, so
+    # Python loads `core.brain` and `src.core.brain` as *separate* modules.
+    # The _BrainProxy in api.main calls get_brain() from `core.brain`, so
+    # patching only `src.core.brain` had no effect → real brain was used.
+    with patch("core.brain.get_brain", return_value=mock_brain), \
+         patch("core.brain._brain_instance", mock_brain), \
+         patch("src.core.brain.get_brain", return_value=mock_brain), \
+         patch("src.core.brain._brain_instance", mock_brain):
             from src.api.main import app
             # Override the startup event that initializes brain
             app.router.on_startup.clear()

@@ -1,5 +1,15 @@
 """
-Zvec 技能模块 - 阿里巴巴嵌入式向量数据库
+Zvec 技能模块 - 阿里巴巴嵌入式向量数据库 [已退役 / DEPRECATED]
+
+⚠️  v1.0 对账决议：Zvec 与 Qdrant/Chroma 功能重叠，增加运维面。
+    已标记为退役（DEPRECATED），不再作为 AOS 主向量存储。
+    推荐迁移路径：zvec_data/ → Qdrant（P99<100ms, 12k QPS@1M）。
+
+    迁移工具：scripts/migrate_zvec_to_qdrant.py（待实施）
+    迁移后建议：删除 zvec_data/ 目录，释放磁盘空间。
+
+    现有调用方（brain.py:760, memory.py）将在 v1.1 移除 zvec 依赖。
+    在此之前，ZvecSkill 仍可正常使用，但每次初始化会打印本条退役警告。
 
 Zvec 是阿里巴巴通义实验室开源的嵌入式向量数据库，核心设计理念是"向量数据库领域的 SQLite"。
 零依赖、无需独立部署、进程内运行，完美适配8GB内存的低配置设备。
@@ -92,6 +102,10 @@ class ZvecSkill(Skill):
         self._db_path = ZVEC_DB_PATH
         self._enhanced_mode = True
         self._collections = {}
+        logger.warning(
+            "⚠️  Zvec 已退役（v1.0 对账决议）。推荐迁移到 Qdrant（P99<100ms）。"
+            "详见 src/skills/zvec.py 顶部的退役说明。"
+        )
         self._check_zvec()
     
     def _check_zvec(self):

@@ -76,6 +76,17 @@ class AOSKernel:
         for p in (permissions or []):
             self._permissions[f"{p.agent_id}:{p.action}"] = p
 
+    def grant_permission(self, agent_id: str, action: str, granted: bool = True) -> None:
+        """增量授权：在保留现有策略的前提下，为单个 agent:action 设权。
+
+        区别于 set_permission_policy（会清空全部显式授权），本方法用于
+        运行时按需放行（如 v5_bridge.chat 为会话 agent 授予 receive 权限），
+        配合默认拒绝实现零信任：默认锁死，仅显式授予者放行。
+        """
+        self._permissions[f"{agent_id}:{action}"] = Permission(
+            agent_id=agent_id, action=action, granted=granted
+        )
+
     # ------------------------------------------------------------------
     # 职责 1：Agent 生命周期
     # ------------------------------------------------------------------

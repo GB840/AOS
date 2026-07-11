@@ -38,7 +38,7 @@ def _load_oss_adapter(spec: str):
         return None
 
 
-def build_default_kernel(default_grant: bool = True) -> AOSKernel:
+def build_default_kernel(default_grant: bool = False) -> AOSKernel:
     """组装默认内核：登记模型网关 + 四个 OSS 运行时 + MCP 技能总线。
 
     返回的内核已可用：register_agent / send_message / check_permission /
@@ -46,8 +46,8 @@ def build_default_kernel(default_grant: bool = True) -> AOSKernel:
     """
     kernel = AOSKernel()
 
-    # 1) 模型网关：mistralrs 主（本地三端点）+ litellm 兜底（云 100+ 模型）
-    #    对齐对账表"mistralrs 主、云兜底"；组合成一条网关级降级链。
+    # 1) 模型网关：mistralrs 主（本地三端点）→ litellm 兜底（云 100+ 模型）→ cloud 最后兜底（DeepRoute）
+    #    对齐对账表 L4"mistralrs → litellm → 云"三级回退链。
     gateways = []
     try:
         from .plugins.mistralrs_gateway import MistralRSModelGateway
@@ -60,6 +60,13 @@ def build_default_kernel(default_grant: bool = True) -> AOSKernel:
         gateways.append(LiteLLMModelGateway())
     except Exception as e:
         print(f"[wiring] litellm 网关登记失败: {e}")
+    try:
+        from .plugins.cloud_gateway import CloudModelGateway
+        cloud = CloudModelGateway()
+        if cloud.health().healthy or cloud._client:  # 有 API Key 配置才纳入
+            gateways.append(cloud)
+    except Exception as e:
+        print(f"[wiring] cloud 网关跳过: {e}")
 
     try:
         if len(gateways) > 1:
@@ -86,16 +93,56 @@ def build_default_kernel(default_grant: bool = True) -> AOSKernel:
         except Exception as e:
             print(f"[wiring] {engine} 运行时登记失败: {e}")
 
-    # 3) 技能总线：MCP 协议
+    # 3) 技能总线：MCP 协议 + 安全网关（白名单 + 命令注入检测）
+    #    用协议真实注册的默认工具种子化白名单，使第一方可信工具默认可用；
+    #    外部 MCP 服务器仍需显式 add_to_whitelist（零信任，不自动信任）。
     try:
-        kernel.set_skill_bus(MCPSkillBus())
+        from .plugins.mcp_skill_bus import MCPSkillBus
+        from .plugins.mcp_security_gateway import MCPSecurityGateway
+        _inner = MCPSkillBus()
+        try:
+            _seed = {s.skill_id for s in _inner.discover_skills()}
+        except Exception:
+            _seed = None
+        kernel.set_skill_bus(MCPSecurityGateway(_inner, tool_whitelist=_seed))
     except Exception as e:
         print(f"[wiring] 技能总线登记失败: {e}")
 
-    # 4) 权限策略：默认放行（演示用）；生产应改为默认拒绝 + 显式授权。
+    # 4) 权限策略：默认拒绝（零信任）。已显式授权者放行；
+    #    生产应配套在调用点按需 grant_permission（见 v5_bridge.chat）。
     kernel.set_permission_policy(default_grant=default_grant)
 
+    # 5) 对账 v1.0：把内核 ModelGateway 注入 brain.py，
+    #    使其 LLM 调用走统一三级回退链而非自建 LLM 逻辑。
+    #    非物理删除 brain.py，而是向内核让渡模型调用权。
+    _inject_kernel_into_brain(kernel)
+
     return kernel
+
+
+def _inject_kernel_into_brain(kernel: "AOSKernel") -> None:
+    """把内核 ModelGateway 注入 UnifiedBrain 单例（可选集成，失败不影响内核）。
+
+    brain.py 保持存活，但其 LLM 回退路径优先走内核网关，
+    实现"非物理删、桥接到 fabric"的对账目标。
+
+    注意：get_brain() 会触发 UnifiedBrain 重型初始化（含 cognee 等重依赖），
+    该步骤是"增强"而非"必需"。内核的可用性与 brain 注入必须解耦——
+    因此任何异常（含 cognee 日志清理在某些沙箱触发的 SystemExit）都被吞掉并告警，
+    内核照常构建。否则轻量内核会被重型 brain 栈拖垮（违背"内核零依赖"）。
+    """
+    try:
+        from core import get_brain
+        brain = get_brain()
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        print(f"[wiring] brain 注入跳过（不影响内核构建）: {e!r}")
+        return
+    gw = getattr(kernel, "_model_gateway", None)
+    if gw is not None:
+        try:
+            brain._kernel_gateway = gw
+        except Exception as e:  # noqa: BLE001
+            print(f"[wiring] brain 网关注入跳过: {e!r}")
 
 
 __all__ = ["build_default_kernel", "AOSKernel"]

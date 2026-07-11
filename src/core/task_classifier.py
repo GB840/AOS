@@ -102,7 +102,11 @@ class TaskClassifier:
         self._cache = {}
 
     def classify(self, task: str, context: Optional[Dict[str, Any]] = None) -> TaskClassification:
-        """对任务进行分级 - 使用本地规则避免递归调用"""
+        """对任务进行分级。
+
+        优先 LLMRouter 直接调用（避免 brain.chat 递归），
+        失败则回退 Hermes _route_l1，再失败则回退本地规则。
+        设置 AOS_SEMANTIC_ROUTING=0 可跳过 LLM 直接走本地规则。"""
         if not task or not task.strip():
             return TaskClassification(
                 level=TaskLevel.L1,
@@ -130,21 +134,50 @@ class TaskClassifier:
         return classification
 
     def classify_with_llm(self, task: str) -> TaskClassification:
-        """使用LLM进行更精确的分级(仅在非递归场景使用)"""
+        """使用LLM进行更精确的分级。
+
+        直接走 LLMRouter.chat() 避免经过 brain.chat 主循环（避免递归），
+        也避免依赖 HermesAgent（可能未初始化）。LLMRouter 失败时回退 _route_l1，
+        再失败则回退本地规则。
+        """
         if not self.brain:
             return self._local_classify(task)
 
         prompt = TASK_CLASSIFICATION_PROMPT.format(task=task)
+        response_text = ""
+
+        # 路径 1: 直接走 LLMRouter（最可靠，不依赖 Hermes，不走 brain.chat 主循环）
         try:
-            result = self.brain._route_l1(prompt, session_id="task_classification")
-            response_text = result.get("response", "")
-            classification = self._parse_classification(response_text)
-            if classification.confidence < 0.5:
-                classification = self._local_classify(task)
-            return classification
+            router = getattr(self.brain, "router", None)
+            if router is not None:
+                result = router.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    task_type=getattr(router, "TaskType", None),
+                )
+                if isinstance(result, dict) and result.get("success"):
+                    response_text = result.get("content", "")
+                    logger.debug("task_classifier: LLMRouter 路径成功")
         except Exception as e:
-            logger.warning(f"LLM分级失败, 使用本地规则: {e}")
+            logger.debug("task_classifier: LLMRouter 路径失败: %s", e)
+
+        # 路径 2: 回退到 brain._route_l1（Hermes 路径，兼容旧行为）
+        if not response_text:
+            try:
+                result = self.brain._route_l1(prompt, session_id="task_classification")
+                response_text = result.get("response", "") if isinstance(result, dict) else ""
+                logger.debug("task_classifier: _route_l1 回退路径成功")
+            except Exception as e:
+                logger.warning("LLM分级失败, 使用本地规则: %s", e)
+                return self._local_classify(task)
+
+        if not response_text:
             return self._local_classify(task)
+
+        classification = self._parse_classification(response_text)
+        if classification.confidence < 0.5:
+            logger.debug("task_classifier: LLM 置信度低(%.2f), 回退本地规则", classification.confidence)
+            return self._local_classify(task)
+        return classification
 
     def _local_classify(self, task: str) -> TaskClassification:
         """本地规则分级(无LLM时的降级逻辑)"""

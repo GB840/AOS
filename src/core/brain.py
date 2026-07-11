@@ -1374,11 +1374,35 @@ class UnifiedBrain:
 
     def _llm_cloud_fallback(self, message: str, session_id: str = None,
                              level: str = "L1", channel: str = "云端LLM回落") -> Dict[str, Any]:
-        """Hermes/本地模型不可用时, 回落到云端 LLMRouter(已配有效密钥)。
+        """Hermes/本地模型不可用时，回落到内核 ModelGateway（三级链）→ 再回落 LLMRouter。
 
         这是'个人级开箱即用'的关键兜底: 即使本地 ollama 没装, 只要 .env 里有
         任意云端供应商密钥(ZHIPU/SILICONFLOW/BAIDU/XFYUN), 对话仍能正常出结果。
+
+        v1.0 对账：优先走内核 ModelGateway（mistralrs→litellm→cloud 三级回退链），
+        避免 brain.py 自建 LLM 调用逻辑。内核不可用时回落原有 LLMRouter。
         """
+        # 优先：内核 ModelGateway（v1.0 三级回退链）
+        kw = getattr(self, "_kernel_gateway", None)
+        if kw is not None:
+            try:
+                from kernel.types import Message as KMsg
+                model_id = kw.list_models()[0].model_id if kw.list_models() else "qwen-qwen3.6-27b"
+                resp = kw.chat(model_id, [KMsg(sender="user", payload={"content": message})])
+                if resp and resp.content:
+                    return {
+                        "success": True,
+                        "response": resp.content,
+                        "model": model_id,
+                        "provider": "kernel_gateway",
+                        "level": level,
+                        "channel": channel,
+                        "backend": "kernel",
+                    }
+            except Exception as e:
+                logger.warning("内核 ModelGateway 调用失败，回落 LLMRouter: %s", e)
+
+        # 回落：原有 LLMRouter
         router = getattr(self, "router", None)
         if router is None:
             return {

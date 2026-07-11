@@ -1,7 +1,9 @@
 import asyncio
 import sys
+import pytest
 sys.path.insert(0, str(__file__).rsplit('/', 1)[0] if '/' in str(__file__) else str(__file__).rsplit('\\', 1)[0])
 
+pytest.importorskip("deerflow.graph")
 from deerflow.graph import PlannerAgent
 
 async def test_planner():

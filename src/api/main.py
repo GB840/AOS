@@ -455,9 +455,9 @@ async def fabric_status():
 # ---- Chat ----
 
 # 灰度切流：AOS_KERNEL_TRAFFIC_PCT 控制 /api/chat 走 kernel 的百分比（0-100）。
-# 0 = 全部走 brain.py（默认），100 = 全部走 kernel。用于渐进式验证 kernel 路径。
+# 0 = 全部走 brain.py（回退），100 = 全部走 kernel（默认）。kernel 失败时自动回退 brain。
 import random as _random
-_kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "0"))
+_kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "100"))
 
 
 @app.post("/api/chat")
@@ -571,7 +571,12 @@ async def kernel_health():
     bridge = getattr(app.state, "bridge", None)
     if bridge is None:
         return {"status": "not_mounted"}
-    return await asyncio.to_thread(bridge.health)
+    health = await asyncio.to_thread(bridge.health)
+    try:
+        health["telemetry"] = bridge.telemetry()
+    except Exception:
+        pass
+    return health
 
 
 @app.post("/api/v1/chat/stream")

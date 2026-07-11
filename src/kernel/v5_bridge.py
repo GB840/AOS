@@ -18,9 +18,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # ─── 内核 ───
 from kernel.system import build_default_system, AOSSystem
@@ -61,32 +64,49 @@ class V5Bridge:
         self._started_at = time.time()
         self._request_count = 0
 
+        # 切流遥测计数器（Layer 1：让切流可见，而非猜测）
+        self._mount_attempts = 0
+        self._mount_success = 0
+        self._mount_failures = 0
+        self._last_mount_error: Optional[str] = None
+        self._chat_total = 0
+        self._chat_kernel_ok = 0
+        self._chat_kernel_fail = 0
+
     # ═══════════════════════════════════════════════════════════════
     # mount — 一键注入
     # ═══════════════════════════════════════════════════════════════
 
     def mount(self, app) -> V5Bridge:
         """把内核注入到 FastAPI app。7 个缺口全接上。"""
-        self.auth = AuthBridge(self.kernel)
-        self.skills = SkillsBridge(self.kernel._skill_bus)
-        self.compliance = ComplianceLayer(guard_mode="audit")
-        self.compliance.audit.subscribe_to_kernel(self.kernel)
-
-        # 注册 skills（温柔模式：不因 v5.0 配置错误而崩溃）
-        registered = 0
+        self._mount_attempts += 1
         try:
-            registered = self.skills.register_all()
-        except Exception:
-            pass  # v5.0 config not available in test — fine, skills still work via kernel
+            self.auth = AuthBridge(self.kernel)
+            self.skills = SkillsBridge(self.kernel._skill_bus)
+            self.compliance = ComplianceLayer(guard_mode="audit")
+            self.compliance.audit.subscribe_to_kernel(self.kernel)
 
-        # 注入到 app.state
-        app.state.kernel = self.kernel
-        app.state.bridge = self
-        app.state.kernel_version = "1.0.0"
-        app.state.skills_registered = registered
+            # 注册 skills（非致命：配置缺失不应让 mount 崩溃）
+            registered = 0
+            try:
+                registered = self.skills.register_all()
+            except Exception as e:
+                logger.warning("v5_bridge.mount: skills.register_all 失败（非致命）: %s", e)
 
-        self._mounted = True
-        return self
+            # 注入到 app.state
+            app.state.kernel = self.kernel
+            app.state.bridge = self
+            app.state.kernel_version = "1.0.0"
+            app.state.skills_registered = registered
+
+            self._mounted = True
+            self._mount_success += 1
+            return self
+        except Exception as e:
+            self._mount_failures += 1
+            self._last_mount_error = str(e)
+            logger.error("v5_bridge.mount 失败, 回退 brain.py: %s", e)
+            raise
 
     # ═══════════════════════════════════════════════════════════════
     # 缺口 1: /api/chat → kernel.send_message
@@ -99,6 +119,7 @@ class V5Bridge:
         替代 brain.chat() 的调用点。
         """
         self._request_count += 1
+        self._chat_total += 1
         agent_id = f"api-chat-{engine}"
 
         if self.kernel.get_agent(agent_id) is None:
@@ -107,19 +128,33 @@ class V5Bridge:
                 engine=engine, capabilities=["chat"],
             ))
 
+        # 零信任：内核默认拒绝，必须为该会话 agent 授予 receive 权限，
+        # 否则 send_message 会因无 receive 授权而被拒（见 kernel.send_message）。
+        try:
+            self.kernel.grant_permission(agent_id, "receive", True)
+        except Exception as e:
+            logger.warning("v5_bridge.chat: grant_permission 失败（非致命）: %s", e)
+
         t0 = time.monotonic()
-        response = self.kernel.send_message(Message(
-            sender=caller, recipient=agent_id,
-            payload={"prompt": prompt, "session_id": session_id},
-        ))
+        try:
+            response = self.kernel.send_message(Message(
+                sender=caller, recipient=agent_id,
+                payload={"prompt": prompt, "session_id": session_id},
+            ))
+        except Exception as e:
+            self._chat_kernel_fail += 1
+            logger.error("v5_bridge.chat: kernel.send_message 抛异常, 回退 brain.py: %s", e)
+            raise
         latency = time.monotonic() - t0
 
-        # 记录真实 fitness
+        # 记录真实 fitness + 切流遥测
         if response.ok:
+            self._chat_kernel_ok += 1
             content_len = len(response.data.get("content", "")) if response.data else 0
             self.fitness.record_success(agent_id, latency=latency,
                                         tokens=max(10, content_len // 3))
         else:
+            self._chat_kernel_fail += 1
             self.fitness.record_failure(agent_id)
 
         return response
@@ -309,6 +344,26 @@ class V5Bridge:
             },
             "skills_registered": (len(self.list_skills())
                                   if self.skills else 0),
+        }
+
+
+    def telemetry(self) -> Dict[str, Any]:
+        """切流遥测快照（Layer 1）。
+
+        暴露给 /api/v1/health，用于回答"切流到底做到几成"——
+        0% 还是 100%，靠数据而非猜测。计数器为进程内存态，
+        多 worker / 重启会归零；生产环境应接入持久化指标后端。
+        """
+        ratio = (self._chat_kernel_ok / self._chat_total) if self._chat_total > 0 else 0.0
+        return {
+            "mount_attempts": self._mount_attempts,
+            "mount_success": self._mount_success,
+            "mount_failures": self._mount_failures,
+            "last_mount_error": self._last_mount_error,
+            "chat_total": self._chat_total,
+            "chat_kernel_ok": self._chat_kernel_ok,
+            "chat_kernel_fail": self._chat_kernel_fail,
+            "chat_kernel_ratio": round(ratio, 4),
         }
 
 

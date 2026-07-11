@@ -1,14 +1,18 @@
 import sys
+import pytest
 sys.path.insert(0, 'd:/AOS')
 
 print('Testing Qdrant connection...')
+pytest.importorskip("qdrant_client")
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Distance, VectorParams
 
-client = QdrantClient(url='http://localhost:6335')
-
-collections = client.get_collections()
-print('Existing collections:', [c.name for c in collections.collections])
+try:
+    client = QdrantClient(url='http://localhost:6335', timeout=2)
+    collections = client.get_collections()
+    print('Existing collections:', [c.name for c in collections.collections])
+except Exception:
+    pytest.skip("Qdrant server not available at localhost:6335", allow_module_level=True)
 
 client.create_collection(
     collection_name='test_graphrag',

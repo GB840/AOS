@@ -112,7 +112,7 @@ class OpenClawAdapter(BaseAgentAdapter):
         # 不再依赖 `openclaw health` CLI 是否在 PATH (避免启动期误判 False)。
         try:
             import socket
-            with socket.create_connection(("127.0.0.1", self.GATEWAY_PORT), timeout=2):
+            with socket.create_connection(("127.0.0.1", OPENCLAW_GATEWAY_PORT), timeout=2):
                 return True
         except Exception as e:
             logger.debug("openclaw health check failed: %s", e)

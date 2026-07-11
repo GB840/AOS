@@ -133,6 +133,18 @@ class ModelCapabilities:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class GatewayHealth:
+    """模型网关健康检查结果。"""
+
+    healthy: bool
+    provider: str = ""
+    latency_ms: float = 0.0
+    model_count: int = 0
+    error: Optional[str] = None
+    checked_at: str = field(default_factory=_now)
+
+
 # --------------------------------------------------------------------------
 # 技能总线（SkillBus）相关类型
 # --------------------------------------------------------------------------
