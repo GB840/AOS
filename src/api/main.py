@@ -466,30 +466,36 @@ async def chat(request: ChatRequest):
     kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "100"))
     bridge = getattr(app.state, "bridge", None)
     try:
+        routed_to_kernel = False
         # ---- 每次请求都计数（无论最终路由到哪）----
         if bridge is not None:
             bridge.record_chat_request()
 
         # ---- 灰度切流：按比例路由到 kernel ----
+        # record_chat_route("kernel") 记录「路由决策」（本请求发往内核），
+        # 与是否成功解耦：即便内核后端失败也计为发往内核，使 kernel_split_ratio
+        # 精确反映 AOS_KERNEL_TRAFFIC_PCT 的切流决策，不受后端健康度干扰。
+        # 后端成败由 chat_kernel_ok / chat_kernel_fail 单独刻画。
         if kernel_traffic_pct > 0 and bridge is not None \
                 and _random.randint(1, 100) <= kernel_traffic_pct:
+            routed_to_kernel = True
+            bridge.record_chat_route("kernel")
             try:
                 resp = await asyncio.to_thread(
                     bridge.chat,
                     prompt=request.message,
                     session_id=request.session_id or "",
                 )
-                if bridge is not None:
-                    bridge.record_chat_route("kernel")
                 content = resp.data.get("content", "") if resp.data else ""
                 logger.info("chat routed to kernel (pct=%d%%)", kernel_traffic_pct)
                 return {"response": content, "route": "kernel/v1", "ok": resp.ok}
             except Exception as exc:
                 logger.warning("kernel route failed, falling back to brain: %s", exc)
-                # 不在此计数，落到下方 brain 路径统一记录"brain"
+                # 已记录 route=kernel（决策层面确实发往内核），此处仅回退执行，
+                # 不再重复 record_chat_route，避免 kernel+brain 双重计数。
 
         # ---- v5 路径（brain.py）—— 逐步退化 ----
-        if bridge is not None:
+        if bridge is not None and not routed_to_kernel:
             bridge.record_chat_route("brain")
         logger.debug("chat via brain.py (v5 path)")
         # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策。
