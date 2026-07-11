@@ -12,6 +12,15 @@ from skills.base import SkillRegistry
 
 registry = SkillRegistry()
 
+# ── Layer 2: agency_roles 收口薄壳（feature flag 驱动，默认关闭，零侵入）──
+# 角色文件 opt-in: from skills.agency_roles import get_agency_runtime
+from ._kernel_bridge import (  # noqa: E402,F401
+    get_agency_runtime,
+    is_kernel_consolidation_enabled,
+    _KernelRuntime,
+    _LegacyRuntime,
+)
+
 from .agent_list import AgentListSkill
 from .catalog import CatalogSkill
 from .contributing import ContributingSkill
