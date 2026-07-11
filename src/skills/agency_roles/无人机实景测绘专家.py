@@ -44,15 +44,14 @@ class 无人机实景测绘专家Skill(Skill):
             return {"success": False, "error": "缺少任务描述（task 参数）"}
 
         try:
-            from core import get_brain
-            brain = get_brain()
-
+            from skills.agency_roles import get_agency_runtime
+            rt = get_agency_runtime(role_id=self.NAME)
             prompt = self._build_prompt(task)
 
             if inputs_data:
                 prompt += "\n\n## 相关输入数据:\n" + inputs_data
 
-            result = brain.chat(prompt, model="default")
+            result = rt.chat(prompt, model="default")
 
             if isinstance(result, str):
                 return {"success": True, "skill": "无人机实景测绘专家", "data": {"response": result}}

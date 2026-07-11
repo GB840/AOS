@@ -73,6 +73,11 @@ class V5Bridge:
         self._chat_kernel_ok = 0
         self._chat_kernel_fail = 0
 
+        # 切流分流精确计数（让 AOS_KERNEL_TRAFFIC_PCT 的真实比例可见）
+        self._chat_request_total = 0   # 每次 /api/chat 命中（无论最终路由）
+        self._chat_route_kernel = 0    # 实际走内核的请求数
+        self._chat_route_brain = 0     # 实际走 brain.py 的请求数
+
     # ═══════════════════════════════════════════════════════════════
     # mount — 一键注入
     # ═══════════════════════════════════════════════════════════════
@@ -347,14 +352,37 @@ class V5Bridge:
         }
 
 
+    # ═══════════════════════════════════════════════════════════════
+    # 切流精确计数（Layer 1：回答"分流比例到底几成"）
+    # ═══════════════════════════════════════════════════════════════
+
+    def record_chat_request(self) -> None:
+        """每次 /api/chat 命中调用一次（无论最终路由到哪）。"""
+        self._chat_request_total += 1
+
+    def record_chat_route(self, route: str) -> None:
+        """记录一次请求最终路由到的引擎：'kernel' 或 'brain'。"""
+        if route == "kernel":
+            self._chat_route_kernel += 1
+        else:
+            self._chat_route_brain += 1
+
     def telemetry(self) -> Dict[str, Any]:
         """切流遥测快照（Layer 1）。
 
         暴露给 /api/v1/health，用于回答"切流到底做到几成"——
         0% 还是 100%，靠数据而非猜测。计数器为进程内存态，
         多 worker / 重启会归零；生产环境应接入持久化指标后端。
+
+        两个互补视角：
+        - chat_kernel_ratio   : 走内核的请求里，成功 / (成功+失败) —— 内核健康度
+        - kernel_split_ratio  : 走内核的请求 / 总请求 —— 真实分流比例
+          （此前只数"走内核成功"，当 AOS_KERNEL_TRAFFIC_PCT<100 时
+           brain 回退流量不计入，比例会被低估；现用 chat_request_total
+           做分母，比例精确）
         """
         ratio = (self._chat_kernel_ok / self._chat_total) if self._chat_total > 0 else 0.0
+        split = (self._chat_route_kernel / self._chat_request_total) if self._chat_request_total > 0 else 0.0
         return {
             "mount_attempts": self._mount_attempts,
             "mount_success": self._mount_success,
@@ -364,6 +392,10 @@ class V5Bridge:
             "chat_kernel_ok": self._chat_kernel_ok,
             "chat_kernel_fail": self._chat_kernel_fail,
             "chat_kernel_ratio": round(ratio, 4),
+            "chat_request_total": self._chat_request_total,
+            "chat_route_kernel": self._chat_route_kernel,
+            "chat_route_brain": self._chat_route_brain,
+            "kernel_split_ratio": round(split, 4),
         }
 
 

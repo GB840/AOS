@@ -4,7 +4,7 @@ AOS Agency Roles Skills
 
 自动转换自 agency-agents-zh 的部门角色技能。
 
-包含 271 个专业角色技能，覆盖 26 个领域。
+包含 270 个专业角色技能，覆盖 26 个领域。
 """
 
 import logging

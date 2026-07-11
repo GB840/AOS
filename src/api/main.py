@@ -456,30 +456,41 @@ async def fabric_status():
 
 # 灰度切流：AOS_KERNEL_TRAFFIC_PCT 控制 /api/chat 走 kernel 的百分比（0-100）。
 # 0 = 全部走 brain.py（回退），100 = 全部走 kernel（默认）。kernel 失败时自动回退 brain。
+# 该值每次请求动态读取，改 env 无需重启即生效（便于真实测量切流比例）。
 import random as _random
-_kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "100"))
 
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
+    # 动态读取切流比例：改 env 无需重启即生效，便于真实测量分流比例
+    kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "100"))
+    bridge = getattr(app.state, "bridge", None)
     try:
+        # ---- 每次请求都计数（无论最终路由到哪）----
+        if bridge is not None:
+            bridge.record_chat_request()
+
         # ---- 灰度切流：按比例路由到 kernel ----
-        if _kernel_traffic_pct > 0:
-            bridge = getattr(app.state, "bridge", None)
-            if bridge is not None and _random.randint(1, 100) <= _kernel_traffic_pct:
-                try:
-                    resp = await asyncio.to_thread(
-                        bridge.chat,
-                        prompt=request.message,
-                        session_id=request.session_id or "",
-                    )
-                    content = resp.data.get("content", "") if resp.data else ""
-                    logger.info("chat routed to kernel (pct=%d%%)", _kernel_traffic_pct)
-                    return {"response": content, "route": "kernel/v1", "ok": resp.ok}
-                except Exception as exc:
-                    logger.warning("kernel route failed, falling back to brain: %s", exc)
+        if kernel_traffic_pct > 0 and bridge is not None \
+                and _random.randint(1, 100) <= kernel_traffic_pct:
+            try:
+                resp = await asyncio.to_thread(
+                    bridge.chat,
+                    prompt=request.message,
+                    session_id=request.session_id or "",
+                )
+                if bridge is not None:
+                    bridge.record_chat_route("kernel")
+                content = resp.data.get("content", "") if resp.data else ""
+                logger.info("chat routed to kernel (pct=%d%%)", kernel_traffic_pct)
+                return {"response": content, "route": "kernel/v1", "ok": resp.ok}
+            except Exception as exc:
+                logger.warning("kernel route failed, falling back to brain: %s", exc)
+                # 不在此计数，落到下方 brain 路径统一记录"brain"
 
         # ---- v5 路径（brain.py）—— 逐步退化 ----
+        if bridge is not None:
+            bridge.record_chat_route("brain")
         logger.debug("chat via brain.py (v5 path)")
         # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策。
         # 关键：只算一次, 结果传给 brain.chat() 复用 —— 避免重复调用 route_intent

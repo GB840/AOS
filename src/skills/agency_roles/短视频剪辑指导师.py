@@ -72,16 +72,15 @@ class 短视频剪辑指导师Skill(Skill):
             }
 
         try:
-            from core import get_brain
-            brain = get_brain()
-
+            from skills.agency_roles import get_agency_runtime
+            rt = get_agency_runtime(role_id=self.NAME)
             prompt = self._build_prompt(task)
 
             if inputs_data:
                 prompt += "\n\n## 相关输入数据:\n" + inputs_data
 
             if brain is not None and not os.getenv("AOS_CLI_STANDALONE"):
-                result = brain.chat(prompt, model="default")
+                result = rt.chat(prompt, model="default")
                 if isinstance(result, str):
                     return {"success": True, "skill": self.NAME, "data": {"response": result}}
                 elif isinstance(result, dict) and "content" in result:

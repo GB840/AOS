@@ -3,8 +3,8 @@
 
 背景
 ----
-271 个部门角色技能目前各自在 ``execute()`` 里 ``from core import get_brain``
-然后 ``brain.chat(...)``，约 538 处 ``get_brain()`` 调用直接耦合到 God Object
+270 个部门角色技能目前各自在 ``execute()`` 里 ``from core import get_brain``
+然后 ``brain.chat(...)``，共 269 处 ``get_brain()`` 调用直接耦合到 God Object
 ``core/brain.py``（2013 行）。这是 Layer 2 收口的核心对象。
 
 设计原则（不弄虚作假）
