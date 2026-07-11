@@ -146,9 +146,18 @@ class Config(BaseSettings):
     MISTRALRS_PORT_REASONING: int = 1236
     # 注意：mistralrs `serve` 会严格校验 model 字段，必须用其 /v1/models 实际报告的 id
     # （即模型目录路径），不能用简短别名，否则返回 500 "model not available"。
-    MISTRALRS_MODEL_GENERAL: str = "C:\\Users\\Administrator\\MiniCPM5-1B-GGUF"
-    MISTRALRS_MODEL_CODING: str = "D:\\models\\Qwen2.5-Coder-3B-Instruct"
-    MISTRALRS_MODEL_REASONING: str = "D:\\models\\DeepSeek-R1-1.5B"
+    MISTRALRS_MODEL_GENERAL: str = Field(
+        default="",
+        description="Path to MiniCPM5 model dir. Set via AOS_MISTRALRS_MODEL_GENERAL env var.",
+    )
+    MISTRALRS_MODEL_CODING: str = Field(
+        default="",
+        description="Path to Qwen2.5-Coder model dir. Set via AOS_MISTRALRS_MODEL_CODING env var.",
+    )
+    MISTRALRS_MODEL_REASONING: str = Field(
+        default="",
+        description="Path to DeepSeek-R1 model dir. Set via AOS_MISTRALRS_MODEL_REASONING env var.",
+    )
 
     # ---- 本地小模型（Ollama 备选，按任务类型自动选型）----
     OLLAMA_MODEL_GENERAL: str = "minicpm5-1b"

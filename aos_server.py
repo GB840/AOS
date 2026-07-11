@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""AOS v1.0 — 综合版。内核路由 + LLM语义降级 + 学习缓存。"""
+"""AOS v1.0 — 综合版。内核路由 + LLM语义降级 + 学习缓存。
+
+NOTE: kernel.router 模块从未入库（仅有 .pyc 缓存）。此文件的 router 相关功能
+（关键词路由、LLM 语义路由、学习缓存）当前不可用。作为 kernel 零依赖参考实现保留。
+"""
 
 import sys, os, json, time
 sys.path.insert(0, "src")
@@ -16,7 +20,11 @@ if os.path.exists(_E):
 
 from kernel.system import build_default_system
 from kernel.types import AgentSpec, Message
-from kernel.router import get_router, register_builtins
+try:
+    from kernel.router import get_router, register_builtins
+    _HAS_ROUTER = True
+except ImportError:
+    _HAS_ROUTER = False
 
 sys = build_default_system()
 k = sys.kernel

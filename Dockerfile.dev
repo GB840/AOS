@@ -1,0 +1,44 @@
+# =============================================================================
+# AOS v5.0 — Development Dockerfile (single-stage, hot-reload)
+# =============================================================================
+# Usage:
+#   docker build -f Dockerfile.dev -t aos-dev .
+#   docker run --rm -it -p 8000:8000 -p 8501:8501 \
+#     --env-file .env -v .:/app aos-dev
+#
+# 与生产 Dockerfile 的区别:
+#   - 单阶段，不创建非 root 用户（开发方便）
+#   - 挂载源码卷 + uvicorn --reload / streamlit 热重载
+#   - 包含 dev 工具（pytest, ruff, mypy）
+#   - 不拷贝代码进镜像（靠 volume mount）
+# =============================================================================
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 系统依赖：编译 C 扩展需要 gcc；curl 用于 healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ curl git sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv 加速安装
+RUN pip install --no-cache-dir uv==0.1.18
+
+# 复制依赖文件（利用 Docker layer cache）
+COPY requirements.txt pyproject.toml ./
+
+# 安装全部依赖（含 dev extras，如果 pyproject.toml 定义了 [dev]）
+RUN uv pip install --system --no-cache -r requirements.txt
+
+# 可选：安装开发工具
+RUN pip install --no-cache-dir pytest pytest-cov ruff mypy
+
+# 创建数据目录
+RUN mkdir -p data/sqlite data/chroma outputs logs
+
+EXPOSE 8000 8501
+
+# 默认启动 API 服务（开发模式，热重载）
+# 如需启动 Streamlit: docker run ... aos-dev streamlit
+CMD ["sh", "-c", "uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"]
