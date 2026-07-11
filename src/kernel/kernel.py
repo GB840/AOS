@@ -14,7 +14,7 @@ v1.0 物种思维的内核契约（恒定不变）：
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .interfaces import AgentRuntime, ModelGateway, SkillBus
 from .types import (
@@ -46,6 +46,10 @@ class AOSKernel:
         # 路由钩子（可选）：send_message 可经它分发到指定 runtime
         self._route_hook: Optional[Callable[[Message], Optional[str]]] = None
 
+        # fabric 能力枢纽（可选，由接线层经 set_fabric_hub 登记）。
+        # 内核核心零依赖，故此处只持引用、绝不 import 具体实现。
+        self.fabric_hub: Optional[Any] = None
+
         # 事件总线（可选）：注入后内核在关键路径发射事件
         if event_bus is not None:
             self.events = event_bus
@@ -73,6 +77,25 @@ class AOSKernel:
                               permissions: Optional[List[Permission]] = None) -> None:
         self._default_grant = default_grant
         self._permissions.clear()
+
+    # ------------------------------------------------------------------
+    # fabric 能力枢纽（可选集成；内核零依赖，只持引用 + 委派）
+    # ------------------------------------------------------------------
+    def set_fabric_hub(self, hub: Any) -> None:
+        """登记 fabric 能力枢纽（由接线层构造并注入）。"""
+        self.fabric_hub = hub
+
+    def resolve_engine(self, capability: str) -> Optional[str]:
+        """能力→引擎 单一可信源（内核级）。无枢纽或未通电返回 None。"""
+        hub = self.fabric_hub
+        if hub is None:
+            return None
+        return hub.resolve_engine(capability)
+
+    def fabric_health(self) -> Optional[dict]:
+        """返回 fabric 通电自检；未登记枢纽返回 None。"""
+        hub = self.fabric_hub
+        return hub.health_report() if hub is not None else None
         for p in (permissions or []):
             self._permissions[f"{p.agent_id}:{p.action}"] = p
 

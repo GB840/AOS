@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from .kernel import AOSKernel
-from .plugins import FabricAgentRuntime, LiteLLMModelGateway, MCPSkillBus
+from .plugins import FabricAgentRuntime, FabricHub, LiteLLMModelGateway, MCPSkillBus
 
 # 真实 OSS 引擎的 fabric 适配器（按铁律：AG2 / Hermes / DeerFlow / OpenClaw）。
 # 当前 fabric 已落地的适配器：OpenClaw / AG2 / Mem0 / ACI-Browser / Langfuse。
@@ -93,11 +93,17 @@ def build_default_kernel(default_grant: bool = False) -> AOSKernel:
         except Exception as e:
             print(f"[wiring] {engine} 运行时登记失败: {e}")
 
+    # 2.5) fabric 能力枢纽：把六个真实 OSS 适配器登记为「按能力路由」的单一可信源，
+    #      并暴露诚实的通电自检（MASTER_PLAN 阶段 1.2）。内核零依赖，故仅在此接缝构造。
+    try:
+        kernel.set_fabric_hub(FabricHub())
+    except Exception as e:  # noqa: BLE001
+        print(f"[wiring] fabric 能力枢纽构建失败: {e}")
+
     # 3) 技能总线：MCP 协议 + 安全网关（白名单 + 命令注入检测）
     #    用协议真实注册的默认工具种子化白名单，使第一方可信工具默认可用；
     #    外部 MCP 服务器仍需显式 add_to_whitelist（零信任，不自动信任）。
     try:
-        from .plugins.mcp_skill_bus import MCPSkillBus
         from .plugins.mcp_security_gateway import MCPSecurityGateway
         _inner = MCPSkillBus()
         try:

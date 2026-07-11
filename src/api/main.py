@@ -1684,6 +1684,26 @@ async def api_resolve_engine(capability: str):
     return {"capability": capability, "engine": engine, "live": engine is not None}
 
 
+_fabric_hub_cache = None
+
+
+@app.get("/api/fabric/health")
+async def api_fabric_health():
+    """fabric 薄适配层通电自检：诚实报告每个真实 OSS 引擎 live/dead。
+
+    返回 {total, live, adapters:{engine:{live,capabilities,error}}, registration_errors}。
+    这是「知道自己现在到底行不行」的对外落地（MASTER_PLAN 阶段 1.2）。
+    """
+    global _fabric_hub_cache
+    try:
+        if _fabric_hub_cache is None:
+            from kernel.plugins.fabric_hub import FabricHub
+            _fabric_hub_cache = FabricHub()
+        return _fabric_hub_cache.health_report()
+    except Exception as e:  # noqa: BLE001
+        return {"error": _safe_detail(e)}
+
+
 @app.post("/api/multimodal/analyze")
 async def analyze_image(image: UploadFile = File(...), prompt: str = "分析这张图片"):
     try:

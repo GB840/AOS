@@ -8,6 +8,7 @@
 """
 
 from .fabric_runtime import FabricAgentRuntime
+from .fabric_hub import FabricHub
 from .litellm_gateway import LiteLLMModelGateway
 from .mcp_skill_bus import MCPSkillBus
 
@@ -15,6 +16,7 @@ from .mcp_skill_bus import MCPSkillBus
 # 不在包顶层强制导入以保持缺依赖时可用。
 __all__ = [
     "FabricAgentRuntime",
+    "FabricHub",
     "LiteLLMModelGateway",
     "MCPSkillBus",
 ]
