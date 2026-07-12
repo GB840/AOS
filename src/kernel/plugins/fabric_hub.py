@@ -258,6 +258,11 @@ class FabricHub:
                     "rtt_us": host.rtt_us,
                     "last_recover_ms": host.last_recover_ms,
                 }
+            if hasattr(adapter, "health_detail"):
+                try:
+                    report["adapters"][eid]["health_detail"] = adapter.health_detail()
+                except Exception:  # noqa: BLE001 - 诊断失败绝不拖垮自检
+                    pass
             report["total"] += 1
             if live:
                 report["live"] += 1

@@ -4,6 +4,7 @@
     py -3.14 -m scripts.fabric_scorecard
 或  python scripts/fabric_scorecard.py
     python scripts/fabric_scorecard.py --isolation   # 按生产默认接线（Agnes/AG2 隔离）跑
+    python scripts/fabric_scorecard.py --bootstrap-openclaw   # openclaw dead 时自动拉起网关(:18789)再复测
 
 等价于 GET /api/fabric/health 的逻辑，但可在不启动服务时本地跑。
 输出 JSON，便于 CI / 主机巡检。--isolation 会额外打印隔离可观测快照
@@ -42,6 +43,7 @@ from kernel.wiring import build_fabric_hub
 
 def main() -> int:
     use_isolation = "--isolation" in sys.argv[1:]
+    bootstrap_oc = "--bootstrap-openclaw" in sys.argv[1:]
     used_env = _load_env()
     if use_isolation:
         # 按生产默认接线构建：Agnes/AG2 隔离进子进程，反映真实内核拓扑。
@@ -49,6 +51,14 @@ def main() -> int:
     else:
         hub = FabricHub()
     report = hub.health_report()
+    # openclaw 自愈：dead 时尽力拉起网关(:18789)再复测。生产网关归 aos_supervisor
+    # 管，这里提供运维按需一键自愈；沙箱无 openclaw 二进制则干净失败并报告死因。
+    if bootstrap_oc and not report["adapters"].get("openclaw", {}).get("live"):
+        from core.fabric.adapters.openclaw_adapter import OpenClawAdapter
+        print("[bootstrap] openclaw 未存活，尝试自动拉起网关(:18789)...", file=sys.stderr)
+        ok = OpenClawAdapter().ensure_gateway()
+        print(f"[bootstrap] ensure_gateway -> {ok}", file=sys.stderr)
+        report = hub.health_report()
     print(json.dumps(report, ensure_ascii=False, indent=2))
     tag = "with .env keys" if used_env else "keyless (no .env)"
     iso_n = sum(1 for a in report["adapters"].values() if a.get("isolated"))

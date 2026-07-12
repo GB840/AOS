@@ -17,7 +17,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
+import time
+from pathlib import Path
 
 import logging
 logger = logging.getLogger(__name__)
@@ -38,6 +41,33 @@ def _resolve_cli() -> str:
     if os.path.exists(OPENCLAW_DEFAULT_CLI):
         return OPENCLAW_DEFAULT_CLI
     return "openclaw"
+
+
+# --- gateway 自愈路径解析（与 aos_supervisor.py 同源逻辑，独立实现避免跨层导入） ---
+def _resolve_node_bin() -> str:
+    if os.environ.get("NODE_BIN"):
+        return os.environ["NODE_BIN"]
+    candidate = r"C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\node.exe"
+    if Path(candidate).exists():
+        return candidate
+    return "node"
+
+
+def _resolve_openclaw_mjs() -> Optional[str]:
+    if os.environ.get("OPENCLAW_MJS"):
+        return os.environ["OPENCLAW_MJS"]
+    try:
+        out = subprocess.run(["npm", "root", "-g"], capture_output=True, text=True, timeout=10)
+        if out.returncode == 0:
+            mjs = Path(out.stdout.strip()) / "openclaw" / "openclaw.mjs"
+            if mjs.exists():
+                return str(mjs)
+    except Exception:
+        pass
+    fb = Path(r"C:\Users\Administrator\AppData\Roaming\npm\node_modules\openclaw\openclaw.mjs")
+    if fb.exists():
+        return str(fb)
+    return None
 
 
 class OpenClawAdapter(BaseAgentAdapter):
@@ -108,15 +138,64 @@ class OpenClawAdapter(BaseAgentAdapter):
             return InvokeResult(ok=False, error=str(e))
 
     def health(self) -> bool:
-        # 主通路是网关反向代理 (src/api/gateway.py -> :18789); 探活网关端口即可,
-        # 不再依赖 `openclaw health` CLI 是否在 PATH (避免启动期误判 False)。
+        return self.health_detail()["status"] == "ok"
+
+    def health_detail(self) -> dict:
+        """结构化自检：区分「网关端口不通」与「二进制缺失」，并给出可操作修复动作。
+
+        返回 {"status": "ok"|"port_down"|"binary_missing",
+              "reason": str|None, "action": str|None}
+        """
         try:
-            import socket
             with socket.create_connection(("127.0.0.1", OPENCLAW_GATEWAY_PORT), timeout=2):
-                return True
-        except Exception as e:
-            logger.debug("openclaw health check failed: %s", e)
+                return {"status": "ok", "reason": None, "action": None}
+        except Exception as e:  # noqa: BLE001
+            port_err = e
+        have_cli = bool(shutil.which("openclaw")) or os.path.exists(OPENCLAW_DEFAULT_CLI)
+        if _resolve_openclaw_mjs() is None and not have_cli:
+            return {
+                "status": "binary_missing",
+                "reason": "OpenClaw 网关未运行，且未找到 openclaw 二进制（npm -g openclaw / openclaw.cmd）",
+                "action": "npm i -g openclaw   或   运行 python scripts/aos_supervisor.py --only openclaw 拉起网关(:18789)",
+            }
+        return {
+            "status": "port_down",
+            "reason": f"OpenClaw 网关未监听 127.0.0.1:{OPENCLAW_GATEWAY_PORT}（{type(port_err).__name__}）",
+            "action": "启动网关：openclaw gateway --allow-unconfigured   或   python scripts/aos_supervisor.py --only openclaw",
+        }
+
+    def ensure_gateway(self, token: str | None = None, timeout: float = 60.0) -> bool:
+        """尽力自动拉起 OpenClaw Gateway（:18789）。已健康则直接返回 True。
+
+        仅依赖本机已安装的 openclaw（node + openclaw.mjs）。拉起失败（无二进制 /
+        端口持续不通）返回 False 且不抛——调用方据此决定降级或提示用户。
+        """
+        if self.health():
+            return True
+        mjs = _resolve_openclaw_mjs()
+        if not mjs:
+            logger.warning("ensure_gateway: 找不到 openclaw.mjs，无法自动拉起网关")
             return False
+        node = _resolve_node_bin()
+        token = (token or self._token
+                 or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+                 or "aos-fabric-2026local")
+        cmd = [node, mjs, "gateway", "run", "--bind", "loopback",
+               "--port", str(OPENCLAW_GATEWAY_PORT), "--token", token]
+        try:
+            subprocess.Popen(
+                cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, close_fds=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ensure_gateway: 启动失败: %s", e)
+            return False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.health():
+                return True
+            time.sleep(1.0)
+        return False
 
     def supported_protocols(self) -> list[str]:
         # OpenClaw ships a native MCP bridge (stdio + HTTP).
