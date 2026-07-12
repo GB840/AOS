@@ -178,6 +178,13 @@ class SubprocessIsolationLayer:
     def spawn_ms(self) -> Optional[float]:
         return self._spawn_ms
 
+    @property
+    def pid(self) -> Optional[int]:
+        """子进程 PID（进程外铁证）；未启动或已退出返回 None。"""
+        if self._proc is None or self._proc.poll() is not None:
+            return None
+        return self._proc.pid
+
     def health(self) -> bool:
         if self._proc is None or self._conn is None:
             return False
@@ -328,6 +335,11 @@ class IsolatedEngineHost:
     @property
     def rtt_us(self) -> Optional[float]:
         return self._layer.rtt_us
+
+    @property
+    def subprocess_pid(self) -> Optional[int]:
+        """隔离子进程 PID（进程外铁证）；热备提拔后指向当前主层。"""
+        return self._layer.pid
 
 
 class SubprocessPool:

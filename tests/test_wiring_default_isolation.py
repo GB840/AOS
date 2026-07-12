@@ -83,3 +83,16 @@ def test_no_double_registration_when_engine_in_both_sets(monkeypatch):
     assert len(eids) == 1, f"bench 不应双注册，实际条目: {eids}"
     assert isinstance(hub._registry._adapters["bench"], IsolatedAdapterProxy), \
         "bench 应只以隔离代理注册，而非进程内实例"
+
+
+def test_isolated_engine_exposes_subprocess_pid(monkeypatch):
+    """隔离引擎必须真在另一个进程：subprocess_pid 非 None 且 ≠ 宿主 PID。
+
+    这是「进程外铁证」的自动锁死——防止某天隔离退化为进程内却仍报 isolated=True。
+    """
+    monkeypatch.setattr(wiring, "_ISOLATED_BY_DEFAULT", {"bench": BENCH_SPEC})
+    hub = wiring.build_fabric_hub(isolate_heavy=True)
+    host = hub._isolated["bench"]
+    pid = host.subprocess_pid
+    assert pid is not None, "隔离引擎子进程未拉起，subprocess_pid 应为非 None"
+    assert pid != os.getpid(), "subprocess_pid 等于宿主 PID → 隔离失效（没真进子进程）"

@@ -33,7 +33,7 @@ _OSS_ADAPTERS = {
 # 其余轻量适配器留在进程内。按需增删即调整默认隔离面（注释行展示可选项）。
 _ISOLATED_BY_DEFAULT: Dict[str, str] = {
     "agnes": "core.fabric.adapters.agnes_adapter:AgnesAdapter",
-    # "ag2": "core.fabric.adapters.ag2_adapter:AG2Adapter",   # 重型 agent 框架，需要时取消注释
+    "ag2": "core.fabric.adapters.ag2_adapter:AG2Adapter",   # 重型 agent 框架，隔离优先于进程内（import/配置失败则跳过）
 }
 
 
