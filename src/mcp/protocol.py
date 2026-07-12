@@ -1,5 +1,10 @@
+import contextlib
+import io
 import json
 import logging
+import os
+import sys
+import threading
 from enum import Enum
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
@@ -235,6 +240,47 @@ class MCPProtocol:
             self._lobster_handler,
         )
 
+        # ---- FabricHub 能力路由（B 路线成果对外暴露）----
+        self.register_tool(
+            MCPTool(
+                name="aos_list_engines",
+                description="列出 AOS 所有已注册引擎的实时状态：live/dead、声明的能力、是否隔离进子进程、隔离观测(子进程PID/热备就绪/三闸门)。对应 FabricHub.health_report()。",
+                input_schema={"type": "object", "properties": {}},
+            ),
+            self._aos_list_engines_handler,
+        )
+        self.register_tool(
+            MCPTool(
+                name="aos_route",
+                description="按能力(capability)把任务委派给首个 live 引擎，如 inference.llm→agnes/litellm, media.image→agnes, memory.semantic→mem0。对应 FabricHub.route()。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "capability": {"type": "string", "description": "能力标识，如 inference.llm / media.image / memory.semantic / group.orchestration"},
+                        "payload": {"type": "object", "description": "传给引擎的参数(dict)"},
+                    },
+                    "required": ["capability"],
+                },
+            ),
+            self._aos_route_handler,
+        )
+        self.register_tool(
+            MCPTool(
+                name="aos_invoke_engine",
+                description="直接打指定引擎(按 engine_id)，绕过能力路由的「首个 live」选择。隔离引擎走子进程，进程内引擎走 registry。对应 FabricHub.invoke_engine()。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "engine_id": {"type": "string", "description": "引擎 id，如 agnes / ag2 / litellm / mem0 / openclaw"},
+                        "capability": {"type": "string", "description": "能力标识", "default": "inference.llm"},
+                        "payload": {"type": "object", "description": "传给引擎的参数(dict)"},
+                    },
+                    "required": ["engine_id"],
+                },
+            ),
+            self._aos_invoke_engine_handler,
+        )
+
 
     def _openclaw_handler(self, params: Dict[str, Any]) -> Any:
         """通过真实部署的 OpenClaw Gateway 调用 OpenClaw (Fabric OpenClawAdapter)。
@@ -294,6 +340,42 @@ class MCPProtocol:
             "prompts_count": len(self.prompts),
             "timestamp": datetime.now().isoformat(),
         }
+
+    # ---- FabricHub 能力路由 handlers（B 路线成果对外暴露）----
+    def _aos_list_engines_handler(self, params: Dict[str, Any]) -> Any:
+        """列出 AOS 引擎实时状态（对应 FabricHub.health_report）。"""
+        try:
+            hub = _get_hub()
+            return hub.health_report()
+        except Exception as e:  # noqa: BLE001
+            return {"success": False, "error": f"AOS fabric 不可用: {e}"}
+
+    def _aos_route_handler(self, params: Dict[str, Any]) -> Any:
+        """按能力路由（对应 FabricHub.route）。"""
+        capability = params.get("capability")
+        payload = params.get("payload") or {}
+        if not capability:
+            return {"ok": False, "error": "capability 参数必填"}
+        try:
+            hub = _get_hub()
+            res = hub.route(capability, payload)
+            return {"ok": res.ok, "data": res.data, "error": res.error}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+
+    def _aos_invoke_engine_handler(self, params: Dict[str, Any]) -> Any:
+        """直接打指定引擎（对应 FabricHub.invoke_engine）。"""
+        engine_id = params.get("engine_id")
+        capability = params.get("capability") or "inference.llm"
+        payload = params.get("payload") or {}
+        if not engine_id:
+            return {"ok": False, "error": "engine_id 参数必填"}
+        try:
+            hub = _get_hub()
+            res = hub.invoke_engine(engine_id, capability, payload)
+            return {"ok": res.ok, "data": res.data, "error": res.error}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
 
     def set_subagent_registry(self, registry):
         """设置子智能体注册中心引用."""
@@ -470,3 +552,55 @@ class MCPProtocol:
             "resources": list(self.resources.keys()),
             "prompts": list(self.prompts.keys()),
         }
+
+
+# ---------------------------------------------------------------------------
+# 懒加载 FabricHub 单例（供 aos_* MCP 工具 handler 调用）
+# ---------------------------------------------------------------------------
+_HUB_LOCK = threading.Lock()
+_HUB = None
+
+
+def _load_dotenv_best_effort() -> None:
+    """best-effort 加载仓库根 .env（含真实 API key），不覆盖已有 env 变量。
+
+    与 scripts/fabric_scorecard.py 的 _load_env 同口径：拿不到就退回 keyless
+    结构检查，绝不抛。使真机 route 到 agnes/ag2 能拿到真实 key 返回内容。
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        root = os.path.dirname(os.path.dirname(os.path.dirname(here)))
+        env_path = os.path.join(root, ".env")
+        if not os.path.exists(env_path):
+            return
+        with open(env_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except Exception:
+        pass
+
+
+def _get_hub():
+    """懒加载并缓存 FabricHub 单例（带隔离接线，与 scorecard 生产接线一致）。
+
+    - 首次调用才 build：MCP client 的 initialize/tools/list 不触发，秒回；
+      首次 tools/call 到 aos_* 才真正 spawn 隔离引擎(agnes/ag2)。
+    - build 期把 stdout 重定向到 stderr，屏蔽隔离层 [iso] 打印，确保 MCP
+      流纯净（不影响 scorecard——它不重定向，用户仍能在那看到 [iso]）。
+    - best-effort 加载仓库根 .env 的 API key（不覆盖已有 env），使真机
+      route 到 agnes/ag2 能拿到真实 key 返回内容。
+    """
+    global _HUB
+    if _HUB is not None:
+        return _HUB
+    with _HUB_LOCK:
+        if _HUB is None:
+            _load_dotenv_best_effort()
+            with contextlib.redirect_stdout(sys.stderr):
+                from kernel.wiring import build_fabric_hub
+                _HUB = build_fabric_hub(isolate_heavy=True)
+        return _HUB

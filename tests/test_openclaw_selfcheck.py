@@ -34,6 +34,8 @@ def test_health_detail_action_present_when_down():
 
 def test_ensure_gateway_clean_fail_without_binary(monkeypatch):
     a = OpenClawAdapter()
+    # 锁定单元前提：网关未起 + 无二进制，避免依赖外部环境是否真有 openclaw 在跑
+    monkeypatch.setattr(a, "health", lambda: False)
     monkeypatch.setattr(
         "core.fabric.adapters.openclaw_adapter._resolve_openclaw_mjs",
         lambda: None,

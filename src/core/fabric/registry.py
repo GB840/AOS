@@ -48,3 +48,10 @@ class FabricRegistry:
             eid: [c.value for c in a.advertise_capabilities()]
             for eid, a in self._adapters.items()
         }
+
+    def get(self, engine_id: str) -> "BaseAgentAdapter | None":
+        """按 engine_id 取已注册适配器（进程内）。
+
+        隔离引擎(B 路线子进程)由 FabricHub 单独持有，不在此返回。
+        """
+        return self._adapters.get(engine_id)

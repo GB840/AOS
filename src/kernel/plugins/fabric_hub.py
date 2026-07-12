@@ -168,6 +168,33 @@ class FabricHub:
             _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", eid, e)
             return InvokeResult(ok=False, error=f"{eid} invoke failed: {e!r}")
 
+    def invoke_engine(self, engine_id: str, capability: str,
+                      payload: Dict[str, Any]) -> InvokeResult:
+        """直接打指定引擎（绕过能力路由的「首个 live」选择）。
+
+        - 隔离引擎(B 路线子进程)：走 IsolatedEngineHost.invoke；
+        - 进程内引擎：从 registry 取适配器直接 invoke；
+        - 未知引擎 / 异常：返回干净的 InvokeResult(ok=False)，绝不抛。
+        用于 MCP / 外部调用方精确指定目标芯粒（如按 engine_id 委派）。
+        """
+        host = self._isolated.get(engine_id)
+        if host is not None:
+            # IsolatedEngineHost.invoke 返回 dict（子进程 worker 结果）。
+            resp = host.invoke(capability, payload)
+            if isinstance(resp, dict):
+                return InvokeResult(ok=resp.get("ok", False),
+                                    data=resp.get("data"), error=resp.get("error"))
+            return resp
+        adapter = self._registry.get(engine_id)
+        if adapter is None:
+            return InvokeResult(ok=False, error=f"unknown engine {engine_id}")
+        try:
+            return adapter.invoke(InvokeRequest(capability=capability, payload=payload))
+        except Exception as e:  # noqa: BLE001 - 芯粒崩溃隔离，不传染
+            self._errors[engine_id] = f"invoke failed: {e!r}"
+            _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", engine_id, e)
+            return InvokeResult(ok=False, error=f"{engine_id} invoke failed: {e!r}")
+
     def recover(self, eid: str) -> bool:
         """内核重启芯粒：清除故障记录并复探 health()。
 
