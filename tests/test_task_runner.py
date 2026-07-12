@@ -155,6 +155,28 @@ def test_heuristic_plan_splits_on_conjunction():
     assert steps[1]["capability"] == "memory.semantic"
 
 
+def test_parse_plan_handles_real_ag2_groupchat_output():
+    # 真实 AG2 group.chat（summary_method=last_msg）常见输出形态：
+    # 多 Agent 讨论后给一段编号计划。验证解析器能正确桥成 steps[]。
+    ag2_plan = """Here is the plan:
+Step 1: Search the web for today's weather in Beijing.
+Task 2: Summarize the forecast into a short paragraph.
+Step 3: Generate an illustrative image based on the forecast.
+Finally: Save the result to memory."""
+    caps = ["web.search", "inference.llm", "media.image", "memory.semantic"]
+    steps = parse_plan_to_steps(ag2_plan, caps)
+    assert len(steps) == 4
+    assert steps[0]["capability"] == "web.search"
+    assert steps[1]["capability"] == "inference.llm"
+    assert steps[2]["capability"] == "media.image"
+    assert steps[3]["capability"] == "memory.semantic"
+    # 首步带 task，后续步串成流水线
+    assert "in" in steps[0] and "task" in steps[0]["in"]
+    assert steps[1].get("in_from") == "previous"
+    assert steps[2].get("in_from") == "previous"
+    assert steps[3].get("in_from") == "previous"
+
+
 class _FailBench(BaseAgentAdapter):
     """提供 ACI 但 invoke 必失败，用于验证编排芯粒单步容错（C）。"""
     engine_id = "fail_bench"

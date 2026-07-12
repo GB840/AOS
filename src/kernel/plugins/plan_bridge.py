@@ -124,14 +124,24 @@ def _pick_capability(step_text: str, available: List[str]) -> str:
 
 
 def _extract_steps(plan_text: str) -> List[str]:
-    """从自由文本计划里提取有序步骤句（编号 / bullet / Step N 行）。"""
+    """从自由文本计划里提取有序步骤句。
+
+    支持 AG2 group.chat 常见输出形态：
+      - 编号：1. / 1) / Step 1: / Task 1: / Step 1 -
+      - 序号词：First: / Second: / Finally: / Next:
+      - 无序：- / * / •
+    匹配不到任何编号行时退化为按句子/换行切（保底不空转）。
+    """
     lines = [ln.strip() for ln in plan_text.splitlines() if ln.strip()]
     steps: List[str] = []
-    pat = re.compile(r"^(?:step\s*\d+[\.:]?|\d+[\.\)]|[-*•]\s+)\s*(.*)$", re.I)
+    pat = re.compile(
+        r"^(?:step\s*\d+[\.:]?|task\s*\d+[\.:]?|\d+[\.\)]|[-*•]\s+"
+        r"|(?:first|second|third|fourth|fifth|next|then|finally|last)[\:\s-]+)"
+        r"\s*(.*)$", re.I)
     for ln in lines:
         m = pat.match(ln)
         if m:
-            body = m.group(1).strip()
+            body = m.group(1).strip().strip("-*•").strip()
             if body:
                 steps.append(body)
     if not steps:
