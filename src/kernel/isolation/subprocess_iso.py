@@ -28,6 +28,7 @@ import os
 import random
 import socket
 import sys
+import threading
 import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
@@ -223,13 +224,11 @@ def _popen(cmd: list[str], env: dict):
 class IsolatedEngineHost:
     """把「单个 fabric 引擎隔离进子进程」封装成 FabricHub 可直接用的落点。
 
-    内部持有一个 SubprocessIsolationLayer（单例形态；生产可换 SubprocessPool
-    热池）。对外只暴露：
-      - start()        : 拉起子进程，返回 spawn_ms
-      - invoke()       : 经 IPC 调子进程内真实适配器
-      - health()       : 子进程是否存活
-      - recover()      : 杀掉子进程并 respawn（崩溃恢复；返回 recovery_ms）
-      - stop()         : 清理
+    热备(standby)形态（默认开启）：初始化时除主进程外额外预拉起一个**已热身**
+    的热备子进程。主进程崩溃时 recover() 直接提拔热备（毫秒级，远过 3s 恢复闸门），
+    后台线程再冷启动补一个热备——因此稳态崩溃恢复**不依赖重型适配器的 ~18s 冷启动**。
+    这是 Day22-30 B 路线「热进程池缓解冷启动」的最小完整落点（SubprocessPool 是
+    多实例推广形态；本类先解决单引擎的热备切换）。
 
     FabricHub 把被隔离的引擎注册成「进程内代理」(IsolatedAdapterProxy)，能力路由/
     自检零改动即可生效；真正的执行与故障都发生在子进程里 —— 即 Chiplet 故障隔离
@@ -237,16 +236,37 @@ class IsolatedEngineHost:
     """
 
     def __init__(self, engine_id: str, adapter_spec: str,
-                 transport: Optional[str] = None, task_us: float = 0.0) -> None:
+                 transport: Optional[str] = None, task_us: float = 0.0,
+                 standby: bool = True) -> None:
         self.engine_id = engine_id
         self.adapter_spec = adapter_spec
+        self._transport = transport
+        self._task_us = task_us
+        self._standby_enabled = standby
         self._layer = SubprocessIsolationLayer(
             engine_id=engine_id, adapter_spec=adapter_spec,
             transport=transport, task_us=task_us,
         )
+        self._standby: Optional[SubprocessIsolationLayer] = None
+        self._lock = threading.Lock()
+        self._stopping = False
+
+    def _mk_standby(self) -> SubprocessIsolationLayer:
+        return SubprocessIsolationLayer(
+            engine_id=f"{self.engine_id}#standby",
+            adapter_spec=self.adapter_spec,
+            transport=self._transport, task_us=self._task_us,
+        )
 
     def start(self) -> float:
-        return self._layer.start()
+        spawn_ms = self._layer.start()
+        if self._standby_enabled and self._standby is None and not self._stopping:
+            try:
+                self._standby = self._mk_standby()
+                self._standby.start()  # 真正拉起热备子进程（_proc 才非 None）
+            except Exception:  # noqa: BLE001 - 热备失败不阻断主进程服务
+                self._standby = None
+        return spawn_ms
 
     def invoke(self, capability: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._layer.invoke(capability, payload)
@@ -255,10 +275,50 @@ class IsolatedEngineHost:
         return self._layer.health()
 
     def recover(self) -> float:
-        """崩溃恢复：kill + respawn。返回 recovery_ms（应 ≤ GATE_RECOVER_MS）。"""
-        return self._layer.kill_and_recover()
+        """崩溃恢复。
+
+        - 有热备：提拔热备（毫秒级，过 3s 闸门），旧主退出，后台补位。
+          返回切换耗时（毫秒）。
+        - 无热备：冷启动 kill+respawn（重型适配器可能 > 闸门，已知，由预热缓解）。
+        """
+        with self._lock:
+            if self._standby is not None:
+                t0 = time.perf_counter()
+                try:
+                    self._layer.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._layer = self._standby
+                self._standby = None
+                switched_ms = (time.perf_counter() - t0) * 1000.0
+                self._fill_standby_async()
+                return switched_ms
+            return self._layer.kill_and_recover()
+
+    def _fill_standby_async(self) -> None:
+        if not self._standby_enabled or self._stopping:
+            return
+
+        def _work() -> None:
+            try:
+                nb = self._mk_standby()
+                nb.start()  # 真正拉起补位热备子进程
+                with self._lock:
+                    if self._standby is None and not self._stopping:
+                        self._standby = nb
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def stop(self) -> None:
+        self._stopping = True
+        if self._standby is not None:
+            try:
+                self._standby.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._standby = None
         self._layer.stop()
 
     @property
@@ -286,17 +346,20 @@ class SubprocessPool:
     """
 
     def __init__(self, engine_id: str, size: int = 2,
-                 transport: Optional[str] = None, task_us: float = 0.0) -> None:
+                 transport: Optional[str] = None, task_us: float = 0.0,
+                 adapter_spec: Optional[str] = None) -> None:
         self.engine_id = engine_id
         self.size = size
         self.transport = (transport or os.environ.get("AOS_ISO_TRANSPORT")
                           or "pipe").lower()
         self.task_us = task_us
+        self.adapter_spec = adapter_spec
         self._workers: list[SubprocessIsolationLayer] = []
 
     def _mk(self, idx: int) -> SubprocessIsolationLayer:
         return SubprocessIsolationLayer(
             engine_id=f"{self.engine_id}#{idx}",
+            adapter_spec=self.adapter_spec,
             transport=self.transport, task_us=self.task_us,
         )
 

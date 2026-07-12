@@ -201,19 +201,21 @@ class FabricHub:
 
     def add_isolated_engine(self, engine_id: str, adapter_cls,
                             transport: Optional[str] = None,
-                            task_us: float = 0.0) -> str:
+                            task_us: float = 0.0, standby: bool = True) -> str:
         """把一个真实适配器**隔离进独立子进程**，作为 fabric 引擎注册。
 
         这是 Day22-30 B 路线「收口进生产」的落点：
           - 该引擎的 invoke / health 全部在子进程内执行，崩溃不传染宿主内核；
-          - recover(eid) 直接 kill+respawn 子进程（≤3s 闸门，见 SubprocessPool）；
+          - recover(eid) 默认走热备切换（毫秒级，过 3s 恢复闸门，见
+            IsolatedEngineHost.standby），无热备时回退冷启动 kill+respawn；
           - 能力路由/自检逻辑复用现有 route()/resolve_engine()/health_report()，
             零改动（注册的是 IsolatedAdapterProxy）。
         默认 transport 取 AOS_ISO_TRANSPORT（沙箱=tcp，生产=pipe/Named Pipe）。
         """
         caps = list(adapter_cls().advertise_capabilities())
         spec = f"{adapter_cls.__module__}:{adapter_cls.__qualname__}"
-        host = IsolatedEngineHost(engine_id, spec, transport=transport, task_us=task_us)
+        host = IsolatedEngineHost(engine_id, spec, transport=transport,
+                                  task_us=task_us, standby=standby)
         host.start()
         proxy = IsolatedAdapterProxy(engine_id, caps, host)
         self._registry.register(proxy)
