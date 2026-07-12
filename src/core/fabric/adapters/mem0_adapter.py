@@ -17,7 +17,7 @@ from typing import Any
 import logging
 logger = logging.getLogger(__name__)
 
-from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult, extract_text
 from ..capability import Capability
 
 
@@ -124,6 +124,13 @@ class Mem0Adapter(BaseAgentAdapter):
             action = req.payload.get("action", "search")
             opts = dict(req.payload.get("opts", {}))
 
+            # 输入适配：上游产出经 OrchestrationChiplet 投影得到 `text` 字段；
+            # 若调用方只给了结构化 out（图URL/搜索结果）没给显式文本，则从
+            # payload 整体投影。query 缺失时以 text 兜底，避免 mem0 报
+            # "Invalid query empty"（假失败）。
+            text = req.payload.get("text") or extract_text(req.payload)
+            query = req.payload.get("query") or text
+
             # mem0 2.0.11 的 search()/get_all() 不接受顶层 user_id（必须放 filters），
             # 而 add() 接受顶层 user_id（合法）。在此统一平移，保持 hub 合同
             # （memory_recall/memory_store 传 user_id 顶层）不变——mem0 API 再变只动这里。
@@ -133,14 +140,14 @@ class Mem0Adapter(BaseAgentAdapter):
                 kwargs = dict(opts)
                 if user_id is not None:
                     kwargs["user_id"] = user_id
-                r = mem.add(req.payload.get("text", ""), **kwargs)
+                r = mem.add(text, **kwargs)
             elif action == "search":
                 kwargs = dict(opts)
                 if user_id is not None:
                     f = dict(kwargs.get("filters") or {})
                     f["user_id"] = user_id
                     kwargs["filters"] = f
-                r = mem.search(req.payload.get("query", ""), **kwargs)
+                r = mem.search(query, **kwargs)
             elif action == "get":
                 r = mem.get(req.payload.get("memory_id", ""), **opts)
             elif action == "get_all":

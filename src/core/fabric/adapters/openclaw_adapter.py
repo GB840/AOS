@@ -25,7 +25,7 @@ from pathlib import Path
 import logging
 logger = logging.getLogger(__name__)
 
-from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult, extract_text
 from ..capability import Capability
 
 # OpenClaw installs a `openclaw` shim on PATH; on Windows the launcher is .cmd.
@@ -111,7 +111,9 @@ class OpenClawAdapter(BaseAgentAdapter):
         try:
             if req.capability == Capability.CHANNEL_ACCESS:
                 # AOS hands a user message to the real OpenClaw agent turn.
-                text = req.payload.get("text", "")
+                # 文本可显式给，或从上游产出（图片/搜索结果）投影得到——
+                # 否则 openclaw CLI 会因空 -m "" 报 Missing message。
+                text = req.payload.get("text") or extract_text(req.payload)
                 proc = self._run(
                     "agent", "--agent", self._agent, "-m", text, "--json", timeout=600
                 )

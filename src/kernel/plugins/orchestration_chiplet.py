@@ -43,7 +43,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional
 
-from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult, extract_text
 from core.fabric.capability import Capability
 
 
@@ -157,6 +157,14 @@ class OrchestrationChiplet(BaseAgentAdapter):
                                         "error": "依赖的上游步骤尚未成功产出，本步无法获取输入（语义空转已阻止）"})
                     return
                 payload = state.last_success_out
+            # 投影：把上游产出里可读的文本喂给「文本消费型」下游
+            # （openclaw 要 text / mem0 要 text+query）。不覆盖上游已有的显式字段，
+            # 只在缺失时补全，避免「上游有真实产出却被当成空消息 → 假失败」。
+            if isinstance(payload, dict):
+                txt = extract_text(payload)
+                if txt and "text" not in payload:
+                    payload = dict(payload)
+                    payload["text"] = txt
         elif step.get("in_from") == "initial":
             field = step.get("field")
             with state.lock:
