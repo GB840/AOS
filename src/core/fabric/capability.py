@@ -53,6 +53,7 @@ class Capability(str, Enum):
     # kernel<->die IPC hop overhead (Day 8-10 gate). Not advertised by any
     # real engine, so route() isolates it to the benchmark adapter.
     BENCH_PING = "bench.ping"
+    BENCH_ISOLATE = "bench.isolate"    # 崩溃隔离专用合成能力（tests + gate_check）
 
 
 # Declarative, swappable map: the four mandated real-OSS engines -> capabilities

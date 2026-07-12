@@ -19,7 +19,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.fabric import FabricRegistry
-from core.fabric.adapter import BaseAgentAdapter, InvokeRequest
+from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from core.fabric.adapters import (
     AG2Adapter,
     BrowserUseAdapter,
@@ -59,14 +59,17 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
 class FabricHub:
     """能力路由枢纽：按 Capability 把任务委派给 live 的真实 OSS 引擎。"""
 
-    def __init__(self) -> None:
+    def __init__(self, adapters: Optional[tuple] = None) -> None:
         self._registry = FabricRegistry()
         self._errors: Dict[str, str] = {}
+        # 单芯粒故障记录：engine_id -> 最近一次 invoke 失败的 perf_counter 时间戳。
+        # 用于「崩溃恢复」度量（Day11-14 闸门3）：从故障检测到恢复服务的耗时。
+        self._failures: Dict[str, float] = {}
         # 模拟路由层延迟（μs）：默认 0（生产零影响）。
         # 探测时由 scripts/ipc_probe.py 通过 set_route_sim_us() 打开，
         # 用于测量「内核↔芯粒」这一跳的 IPC 开销是否 ≤5%（Day8-10 闸门）。
         self.route_sim_us: float = float(os.environ.get("ROUTE_SIM_US", "0") or "0")
-        for cls in _ADAPTERS:
+        for cls in (adapters or _ADAPTERS):
             try:
                 self._registry.register(cls())
             except Exception as e:  # noqa: BLE001 - 单适配器故障不拖垮枢纽
@@ -95,14 +98,47 @@ class FabricHub:
               trace_id: Optional[str] = None) -> Any:
         """经能力路由把请求委派给首个 live 引擎；无 live 引擎返回失败结果。
 
-        若 route_sim_us>0，则在委派前 sleep 该微秒数，模拟内核↔芯粒这一跳的
+        异常隔离：任一芯粒 invoke 抛异常都会被单独捕获，返回干净的
+        InvokeResult(ok=False)，绝不穿透到调用方/内核/其他芯粒
+        （对应 Chiplet 故障隔离；Day11-14 闸门3 的「不传染」属性）。
+
+        若 route_sim_us>0，则在委派前忙等该微秒数，模拟内核↔芯粒这一跳的
         IPC 延迟（Named Pipe ~20μs），供 ipc_probe 测量开销占比。
         """
         if self.route_sim_us:
             _busy_wait(self.route_sim_us / 1_000_000.0)
-        return self._registry.route(
-            InvokeRequest(capability=capability, payload=payload, trace_id=trace_id)
-        )
+        req = InvokeRequest(capability=capability, payload=payload, trace_id=trace_id)
+        providers = self._registry.providers_for(req.capability)
+        if not providers:
+            return InvokeResult(ok=False, error=f"no live provider for {capability}")
+        adapter = providers[0]
+        try:
+            return adapter.invoke(req)
+        except Exception as e:  # noqa: BLE001 - 芯粒崩溃隔离，不传染
+            eid = adapter.engine_id
+            self._failures[eid] = time.perf_counter()
+            self._errors[eid] = f"invoke failed: {e!r}"
+            _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", eid, e)
+            return InvokeResult(ok=False, error=f"{eid} invoke failed: {e!r}")
+
+    def recover(self, eid: str) -> bool:
+        """模拟内核重启芯粒：清除故障记录并复探 health()。
+
+        进程内(in-process)芯粒对象常驻，重启=复探健康即可恢复服务；
+        子进程(B 路线)此处应 spawn 新进程，本实现预留同一接口。
+        返回是否恢复为 live。
+        """
+        adapter = self._registry._adapters.get(eid)
+        if adapter is None:
+            return False
+        self._failures.pop(eid, None)
+        self._errors.pop(eid, None)
+        return bool(adapter.health())
+
+    def last_failure(self, eid: str) -> Optional[float]:
+        """返回该芯粒最近一次 invoke 失败的 perf_counter 时间戳（无则 None）。
+        供崩溃恢复耗时度量使用。"""
+        return self._failures.get(eid)
 
     def health_report(self) -> Dict[str, Any]:
         """诚实通电自检：total / live / 每个引擎状态 / 注册错误。
