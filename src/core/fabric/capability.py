@@ -70,7 +70,7 @@ class Capability(str, Enum):
 # actually runs (in-process group chat, no Docker needed). The registry is
 # health-gated, so only live engines are routed.
 ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
-    "openclaw": [Capability.CHANNEL_ACCESS, Capability.TOOL_USE, Capability.MEMORY_PERSISTENT],
+    "openclaw": [Capability.CHANNEL_ACCESS],
     "ag2": [Capability.GROUP_ORCHESTRATION, Capability.PLANNING],
     "hermes": [
         Capability.SELF_IMPROVEMENT,

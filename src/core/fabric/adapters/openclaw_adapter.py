@@ -89,11 +89,10 @@ class OpenClawAdapter(BaseAgentAdapter):
         return "openclaw"
 
     def advertise_capabilities(self) -> list[Capability]:
-        return [
-            Capability.CHANNEL_ACCESS,
-            Capability.TOOL_USE,
-            Capability.MEMORY_PERSISTENT,
-        ]
+        # 本适配器只实现 CHANNEL_ACCESS（经 openclaw CLI 把消息交给网关背后的
+        # LLM）。TOOL_USE / MEMORY_PERSISTENT 由 AOS 其它芯粒（ag2 / mem0）
+        # 真实承载，故此处不虚报，避免路由优先选中却立刻 ok=False 再降级。
+        return [Capability.CHANNEL_ACCESS]
 
     def _run(self, *args: str, timeout: int = 600) -> subprocess.CompletedProcess[str]:
         env = dict(os.environ)

@@ -170,9 +170,13 @@ class FabricHub:
 
     def route(self, capability: str, payload: Dict[str, Any],
               trace_id: Optional[str] = None) -> Any:
-        """经能力路由把请求委派给首个 live 引擎；无 live 引擎返回失败结果。
+        """经能力路由把请求委派给 live 引擎，并在供给方之间做**运行时故障转移**：
 
-        异常隔离：任一芯粒 invoke 抛异常都会被单独捕获，返回干净的
+        依偏好（云端优先→本地兜底）逐个尝试，某芯粒 `ok=False` 或抛异常
+        则自动跳到下一个 live 供给方——这正是「云端用不了就本地 / 万物为我所用」
+        的真实执行路径，调用方不感知背后是云还是端。
+
+        异常隔离：任一芯粒 invoke 抛异常都会被单独捕获并记故障时间戳，返回干净的
         InvokeResult(ok=False)，绝不穿透到调用方/内核/其他芯粒
         （对应 Chiplet 故障隔离；Day11-14 闸门3 的「不传染」属性）。
 
@@ -185,15 +189,39 @@ class FabricHub:
         providers = self._registry.providers_for(req.capability)
         if not providers:
             return InvokeResult(ok=False, error=f"no live provider for {capability}")
-        adapter = providers[0]
-        try:
-            return adapter.invoke(req)
-        except Exception as e:  # noqa: BLE001 - 芯粒崩溃隔离，不传染
+        last_res: InvokeResult | None = None
+        attempts: list[str] = []
+        for adapter in providers:
+            try:
+                res = adapter.invoke(req)
+            except Exception as e:  # noqa: BLE001 - 芯粒崩溃隔离，不传染
+                eid = adapter.engine_id
+                self._failures[eid] = time.perf_counter()
+                self._errors[eid] = f"invoke failed: {e!r}"
+                _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", eid, e)
+                attempts.append(f"{eid} raised: {e!r}")
+                continue
+            if res.ok:
+                return res
             eid = adapter.engine_id
             self._failures[eid] = time.perf_counter()
-            self._errors[eid] = f"invoke failed: {e!r}"
-            _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", eid, e)
-            return InvokeResult(ok=False, error=f"{eid} invoke failed: {e!r}")
+            self._errors[eid] = res.error or "ok=False"
+            attempts.append(f"{eid}: {res.error}")
+            last_res = res
+        # 全部失败：返回最后一个芯粒的真实结果（保留其 data，如编排 trace/
+        # ok_steps），错误附注「已协商 N 个芯粒」以体现端云合作耗尽，而非合成
+        # data=None 把下游有用的失败上下文吞掉。
+        if last_res is not None:
+            return InvokeResult(
+                ok=False,
+                data=last_res.data,
+                error=f"all providers failed [{capability}] "
+                      f"after {len(attempts)} attempt(s): " + " | ".join(attempts),
+            )
+        return InvokeResult(
+            ok=False,
+            error=f"all providers raised [{capability}]: " + " | ".join(attempts),
+        )
 
     def invoke_engine(self, engine_id: str, capability: str,
                       payload: Dict[str, Any]) -> InvokeResult:
