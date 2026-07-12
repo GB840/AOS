@@ -57,3 +57,65 @@ def test_fabric_hub_autoloads_env_resolves_agnes():
     assert h.resolve_engine("media.image") == "agnes", \
         "agnes 应因 .env 被自动加载而通电，advertise media.image"
     assert h.resolve_engine("media.video") == "agnes"
+
+
+def test_mem0_invoke_translates_user_id_to_filters_for_search():
+    """Fix：mem0 2.0.11 search() 不接受顶层 user_id（必须放 filters）。
+
+    用 mock 的 Memory 验证 invoke 把 user_id 正确平移，且 add() 仍保留顶层
+    user_id（mem0 2.0 合法）。无需联网/余额。
+    """
+    import types
+
+    captured: dict = {}
+
+    class _FakeMem:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def search(self, query, **kwargs):
+            captured["search"] = (query, kwargs)
+            return {"results": []}
+
+        def add(self, text, **kwargs):
+            captured["add"] = (text, kwargs)
+            return {"results": []}
+
+        def get(self, memory_id, **kwargs):
+            captured["get"] = (memory_id, kwargs)
+            return {}
+
+        def get_all(self, **kwargs):
+            captured["get_all"] = kwargs
+            return {"results": []}
+
+    import core.fabric.adapters.mem0_adapter as m0
+    real_import = m0._import_mem0
+    m0._import_mem0 = lambda: _FakeMem  # type: ignore[assignment]
+    try:
+        from core.fabric.adapter import InvokeRequest
+        from core.fabric.capability import Capability
+        from core.fabric.adapters.mem0_adapter import Mem0Adapter
+
+        a = Mem0Adapter(config={"llm": {}, "embedder": {}, "vector_store": {}})
+
+        # search：user_id 应进 filters，不得作为顶层 kwarg
+        res = a.invoke(InvokeRequest(
+            capability=Capability.MEMORY_SEMANTIC,
+            payload={"action": "search", "query": "hi",
+                     "opts": {"user_id": "u1", "top_k": 5}}))
+        assert res.ok
+        _, sk = captured["search"]
+        assert "user_id" not in sk, "search 不得传顶层 user_id"
+        assert sk.get("filters") == {"user_id": "u1"}, "user_id 应平移进 filters"
+        assert sk.get("top_k") == 5
+
+        # add：user_id 可保留顶层（mem0 2.0 合法）
+        res = a.invoke(InvokeRequest(
+            capability=Capability.MEMORY_SEMANTIC,
+            payload={"action": "add", "text": "fact", "opts": {"user_id": "u1"}}))
+        assert res.ok
+        _, ak = captured["add"]
+        assert ak.get("user_id") == "u1", "add 保留顶层 user_id"
+    finally:
+        m0._import_mem0 = real_import

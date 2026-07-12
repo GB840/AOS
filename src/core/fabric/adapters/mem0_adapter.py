@@ -122,15 +122,34 @@ class Mem0Adapter(BaseAgentAdapter):
             Memory = _import_mem0()
             mem = _build_memory(Memory, self._config)
             action = req.payload.get("action", "search")
-            opts = req.payload.get("opts", {})
+            opts = dict(req.payload.get("opts", {}))
+
+            # mem0 2.0.11 的 search()/get_all() 不接受顶层 user_id（必须放 filters），
+            # 而 add() 接受顶层 user_id（合法）。在此统一平移，保持 hub 合同
+            # （memory_recall/memory_store 传 user_id 顶层）不变——mem0 API 再变只动这里。
+            user_id = opts.pop("user_id", None)
+
             if action == "add":
-                r = mem.add(req.payload.get("text", ""), **opts)
+                kwargs = dict(opts)
+                if user_id is not None:
+                    kwargs["user_id"] = user_id
+                r = mem.add(req.payload.get("text", ""), **kwargs)
             elif action == "search":
-                r = mem.search(req.payload.get("query", ""), **opts)
+                kwargs = dict(opts)
+                if user_id is not None:
+                    f = dict(kwargs.get("filters") or {})
+                    f["user_id"] = user_id
+                    kwargs["filters"] = f
+                r = mem.search(req.payload.get("query", ""), **kwargs)
             elif action == "get":
                 r = mem.get(req.payload.get("memory_id", ""), **opts)
             elif action == "get_all":
-                r = mem.get_all(**opts)
+                kwargs = dict(opts)
+                if user_id is not None:
+                    f = dict(kwargs.get("filters") or {})
+                    f["user_id"] = user_id
+                    kwargs["filters"] = f
+                r = mem.get_all(**kwargs)
             else:
                 return InvokeResult(ok=False, error=f"unknown action {action}")
             return InvokeResult(ok=True, data={"result": r})
