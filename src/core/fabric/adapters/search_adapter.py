@@ -105,20 +105,24 @@ class SearchAdapter(BaseAgentAdapter):
         )
         resp.raise_for_status()
         text = resp.text
+        # 百度结果块 class 名为随机哈希（反爬），不能按 class 抓。
+        # 改为按 <h3> 切块：每块取标题链接 + 标题后纯文本作摘要。
+        blocks = re.split(r"(?=<h3[^>]*>)", text)
         results: list[dict] = []
-        # 标题 + 链接：百度结果块里 <h3 class="t"> 包 <a href>
-        for m in re.finditer(
-            r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', text, re.S
-        ):
-            url, title = m.group(1), re.sub("<.*?>", "", m.group(2))
-            results.append({"title": title.strip(), "url": url, "body": ""})
-        # 摘要：紧随其后的 c-abstract / c-span-last 块
-        snippets = re.findall(
-            r'<div class="c-abstract[^"]*"[^>]*>(.*?)</div>', text, re.S
-        ) or re.findall(r'<div class="c-span-last[^"]*"[^>]*>(.*?)</div>', text, re.S)
-        for i, s in enumerate(snippets[: len(results)]):
-            results[i]["body"] = re.sub("<.*?>", "", s).strip()[:400]
-        results = [r for r in results if r["url"].startswith("http")]
+        for blk in blocks:
+            m = re.search(
+                r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', blk, re.S
+            )
+            if not m:
+                continue
+            url, title = m.group(1), re.sub("<.*?>", "", m.group(2)).strip()
+            if not url.startswith("http"):
+                continue
+            # 摘要：去掉标题后、到下一块前的纯文本（含天气摘要）
+            after = re.sub(r"^.*?</h3>", "", blk, flags=re.S)
+            body = re.sub(r"<.*?>", " ", after)
+            body = re.sub(r"\s+", " ", body).strip()[:400]
+            results.append({"title": title, "url": url, "body": body})
         if not results:
             raise RuntimeError("百度未返回结果（可能被反爬拦截）")
         summary = "\n".join(
@@ -141,19 +145,22 @@ class SearchAdapter(BaseAgentAdapter):
         )
         resp.raise_for_status()
         text = resp.text
+        # 按结果块 b_algo 切分，每块取标题链接 + 后随纯文本摘要（抗结构变化）
+        blocks = re.split(r'(?=<li class="b_algo")', text)
         results: list[dict] = []
-        for m in re.finditer(
-            r'<li class="b_algo"[^>]*>.*?<h2>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-            text, re.S,
-        ):
-            url, title = m.group(1), re.sub("<.*?>", "", m.group(2))
-            results.append({"title": title.strip(), "url": url, "body": ""})
-        snippets = re.findall(
-            r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', text, re.S
-        ) or re.findall(r'<p[^>]*>(.*?)</p>', text, re.S)
-        for i, s in enumerate(snippets[: len(results)]):
-            results[i]["body"] = re.sub("<.*?>", "", s).strip()[:400]
-        results = [r for r in results if r["url"].startswith("http")]
+        for blk in blocks:
+            m = re.search(
+                r'<h2>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', blk, re.S
+            )
+            if not m:
+                continue
+            url, title = m.group(1), re.sub("<.*?>", "", m.group(2)).strip()
+            if not url.startswith("http"):
+                continue
+            after = re.sub(r"^.*?</h2>", "", blk, flags=re.S)
+            body = re.sub(r"<.*?>", " ", after)
+            body = re.sub(r"\s+", " ", body).strip()[:400]
+            results.append({"title": title, "url": url, "body": body})
         if not results:
             raise RuntimeError("Bing 未返回结果（可能被反爬拦截）")
         summary = "\n".join(

@@ -157,3 +157,58 @@ def test_fabric_hub_registers_search():
 
     hub = FabricHub(adapters=(m.SearchAdapter,))
     assert hub.resolve_engine("web.search") == "web-search"
+
+
+class _FakeResp:
+    def __init__(self, text, status=200):
+        self.text = text
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+_BAIDU_HTML = """
+<div class="result-molecule">
+  <h3><a href="http://weather.example/1">北京天气预报15天</a></h3>
+  <div class="c-abstract">今天北京晴，26度，北风3级，空气质量良</div>
+</div>
+<div class="result-molecule">
+  <h3><a href="http://weather.example/2">北京天气实时</a></h3>
+  <div>明天多云转阴，最高28度</div>
+</div>
+"""
+
+_BING_HTML = """
+<li class="b_algo">
+  <h2><a href="http://bing.example/a">Beijing Weather</a></h2>
+  <p class="b_lineclamp2">Today in Beijing: sunny, 26C</p>
+</li>
+<li class="b_algo">
+  <h2><a href="http://bing.example/b">北京 天气</a></h2>
+  <p>明天多云</p>
+</li>
+"""
+
+
+def test_search_baidu_parses_real_html(monkeypatch):
+    # 用样本 HTML 锁死块切解析（百度 class 名为随机哈希，按 <h3> 切块）
+    def _get(url, **kw):
+        return _FakeResp(_BAIDU_HTML)
+    monkeypatch.setattr(m.requests, "get", _get)
+    res = m.SearchAdapter()._search_baidu("北京天气", 5)
+    assert res["count"] == 2
+    assert res["results"][0]["url"].startswith("http")
+    assert "晴" in res["results"][0]["body"]   # 摘要抓到了真实天气文本
+    assert "北京天气预报15天" in res["content"]
+
+
+def test_search_bing_parses_real_html(monkeypatch):
+    def _get(url, **kw):
+        return _FakeResp(_BING_HTML)
+    monkeypatch.setattr(m.requests, "get", _get)
+    res = m.SearchAdapter()._search_bing("北京天气", 5)
+    assert res["count"] == 2
+    assert "sunny" in res["results"][0]["body"]
+    assert "Beijing Weather" in res["content"]
