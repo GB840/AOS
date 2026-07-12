@@ -68,12 +68,24 @@ def _build_kwargs(req: InvokeRequest) -> dict[str, Any]:
         this sandbox, but the OpenAI passthrough is).
       * any other "provider/model" -> hand straight to litellm for native
         routing (openai/anthropic/... when those keys are present).
+
+    Robustness: when this step was fed the *previous* step's whole output dict
+    (OrchestrationChiplet passes context through), that dict may carry a
+    `model` field belonging to a different plane (e.g. agnes-image-2.1-flash
+    from a media step) and a `content` field but no `prompt`. We must NOT let
+    an image/video model name poison the text completion, and we must surface
+    `content` as the prompt.
     """
     payload = req.payload or {}
     model = payload.get("model", LITELLM_CONFIG["default_model"])
-    messages = payload.get("messages") or [
-        {"role": "user", "content": payload.get("prompt", "")}
-    ]
+    # 防御：上游串味的图像/视频模型名不能拿来做文本补全，否则 litellm 报
+    # "LLM Provider NOT provided"。退回文本默认模型。
+    if model and ("image" in model or "video" in model):
+        model = LITELLM_CONFIG["default_model"]
+    messages = payload.get("messages")
+    if not messages:
+        prompt = payload.get("prompt") or payload.get("content") or ""
+        messages = [{"role": "user", "content": prompt}]
     kwargs: dict[str, Any] = {"messages": messages}
 
     if model.startswith("zhipu/"):

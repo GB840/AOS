@@ -113,6 +113,10 @@ _FALLBACK_CAP = "inference.llm"
 
 # AG2 规划器产出的能力标签，如 [web.search] / [media.image]
 _TAG_RE = re.compile(r"\[([a-z][a-z0-9]*(?:\.[a-z0-9]+)+)\]")
+# AG2 输出形如 `N. [tool] <what to do>`：尖括号是格式分隔符，内部才是真实指令，
+# 需**提取内部**而非整段删除（否则指令会丢）。
+_ANGLE_RE = re.compile(r"<[^>]*>")
+_ANGLE_INNER_RE = re.compile(r"<(.*?)>", re.S)
 
 
 def _pick_capability(step_text: str, available: List[str]) -> str:
@@ -171,8 +175,10 @@ def parse_plan_to_steps(plan_text: str, available_caps: List[str]) -> List[Dict[
     steps: List[Dict[str, Any]] = []
     for i, txt in enumerate(steps_text):
         cap = _pick_capability(txt, available_caps)
-        # 剥掉 AG2 明确给出的 [cap] 标签，避免把标签泄漏进下游 step 的入参。
-        clean = _TAG_RE.sub("", txt).strip(" .;-").strip()
+        # 先剥 [cap] 标签；`<what to do>` 内部才是真实指令，提取而非删除。
+        stripped = _TAG_RE.sub("", txt).strip(" .;-").strip()
+        inner = _ANGLE_INNER_RE.search(stripped)
+        clean = inner.group(1).strip() if inner else _ANGLE_RE.sub("", stripped).strip(" .;-").strip()
         if i == 0:
             steps.append({"capability": cap, "in": {"task": clean}})
         else:

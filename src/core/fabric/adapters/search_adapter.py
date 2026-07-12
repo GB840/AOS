@@ -4,15 +4,19 @@
 （带 URL 的条目，count>0）才算成功；返回套话/空结果一律不当成功，跳下一源。
 全部失败才如实报错，交给下游依赖拦截（不会再冒出基于废话的假图）。
 
-源优先级（真实搜索 API 优先，LLM 联网兜底）：
-  1. DuckDuckGo 直连（requests 打 html.duckduckgo.com，免 key）
-  2. Jina 搜索（api.jina.ai/v1/search，免 key 免费 tier）
-  3. 智谱 GLM web_search 工具（ZHIPU_API_KEY；注意：glm-4-flash 免费版不支持
-     该工具、且付费模型需余额，故多数情况会如实跳过，不冒成功）
+源优先级（**中国网络可达的排最前**，墙外的靠后兜底）：
+  1. 百度 HTML 搜索（baidu.com/s，免 key，国内通）
+  2. Bing HTML 搜索（bing.com/search，免 key，国内通）
+  3. DuckDuckGo 直连（html.duckduckgo.com，免 key；国内常被墙，作墙外兜底）
+  4. Jina 搜索（api.jina.ai/v1/search，免 key 免费 tier；国内常被墙）
+  5. 智谱 GLM web_search 工具（ZHIPU_API_KEY；glm-4-flash 免费版不支持该
+     工具、付费模型需余额，故多数情况会如实跳过，不冒成功）
+  *. SearXNG（可选）：若配置了 SEARXNG_URL 环境变量，插入到 Bing 之后作为
+     自托管元搜索兜底。
 
-注：用户仓库里「dgg 库」= DuckDuckGo（ddgs），但 ddgs 9.x 默认后端改 brave 致
-国内超时，故此处用直连 html 端点。Baidu/XFYun 是纯 LLM 聊天端点，标准 API 不
-带联网搜索，未纳入（避免再冒假成功）。
+注：用户仓库里「dgg 库」= DuckDuckGo（ddgs），但 ddgs 9.x 默认后端改 brave
+致国内超时，故此处用直连 html 端点。Baidu/XFYun 是纯 LLM 聊天端点，标准
+API 不带联网搜索，未用作搜索源（避免再冒假成功）。
 """
 from __future__ import annotations
 
@@ -20,7 +24,7 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -61,19 +65,27 @@ class SearchAdapter(BaseAgentAdapter):
             max_results = 5
 
         errors: list[str] = []
-        # 优先级：DuckDuckGo 直连 → Jina → 智谱联网（兜底，多数会如实跳过）
-        for name, fn in (
+        # 优先级：百度/Bing（国内可达）→ DDG/Jina（墙外兜底）→ 智谱（极少可用）
+        sources = [
+            ("baidu", self._search_baidu),
+            ("bing", self._search_bing),
+        ]
+        searxng_url = os.getenv("SEARXNG_URL")
+        if searxng_url:
+            sources.append(("searxng", self._make_searxng(searxng_url)))
+        sources += [
             ("duckduckgo", self._search_ddg),
             ("jina", self._search_jina),
             ("zhipu", self._search_zhipu),
-        ):
+        ]
+        for name, fn in sources:
             try:
                 res = fn(query, max_results)
                 # 不弄虚：必须有真实结果（带 URL 的条目）才算成功
                 if res and res.get("count", 0) > 0:
                     return InvokeResult(ok=True, data={**res, "engine": name})
                 logger.warning("%s 返回但无真实搜索结果，跳过", name)
-                errors.append(f"{name}: 返回无真实结果（模型拒绝/未联网）")
+                errors.append(f"{name}: 返回无真实结果（模型拒绝/未联网/被墙）")
             except Exception as e:  # 单源失败 → 跳下一个，不中断
                 logger.warning("%s 搜索失败: %s", name, e)
                 errors.append(f"{name}: {e}")
@@ -83,7 +95,113 @@ class SearchAdapter(BaseAgentAdapter):
             if errors else "无可用搜索源（未配置任何凭证且离线）",
         )
 
-    # ---- 源 1：DuckDuckGo 直连（绕过 ddgs 9.x 的 brave 后端 bug） ----
+    # ---- 源 1：百度 HTML 搜索（国内可达，免 key） ----
+    def _search_baidu(self, query: str, max_results: int) -> dict:
+        resp = requests.get(
+            "https://www.baidu.com/s",
+            params={"wd": query, "rn": str(max_results)},
+            headers=_UA,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        text = resp.text
+        results: list[dict] = []
+        # 标题 + 链接：百度结果块里 <h3 class="t"> 包 <a href>
+        for m in re.finditer(
+            r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', text, re.S
+        ):
+            url, title = m.group(1), re.sub("<.*?>", "", m.group(2))
+            results.append({"title": title.strip(), "url": url, "body": ""})
+        # 摘要：紧随其后的 c-abstract / c-span-last 块
+        snippets = re.findall(
+            r'<div class="c-abstract[^"]*"[^>]*>(.*?)</div>', text, re.S
+        ) or re.findall(r'<div class="c-span-last[^"]*"[^>]*>(.*?)</div>', text, re.S)
+        for i, s in enumerate(snippets[: len(results)]):
+            results[i]["body"] = re.sub("<.*?>", "", s).strip()[:400]
+        results = [r for r in results if r["url"].startswith("http")]
+        if not results:
+            raise RuntimeError("百度未返回结果（可能被反爬拦截）")
+        summary = "\n".join(
+            f"- {x['title']}: {x['body']}" for x in results[:3] if x.get("body")
+        ) or query
+        return {
+            "content": summary,
+            "query": query,
+            "results": results[:max_results],
+            "count": len(results),
+        }
+
+    # ---- 源 2：Bing HTML 搜索（国内可达，免 key） ----
+    def _search_bing(self, query: str, max_results: int) -> dict:
+        resp = requests.get(
+            "https://www.bing.com/search",
+            params={"q": query, "count": str(max_results)},
+            headers=_UA,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        text = resp.text
+        results: list[dict] = []
+        for m in re.finditer(
+            r'<li class="b_algo"[^>]*>.*?<h2>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+            text, re.S,
+        ):
+            url, title = m.group(1), re.sub("<.*?>", "", m.group(2))
+            results.append({"title": title.strip(), "url": url, "body": ""})
+        snippets = re.findall(
+            r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', text, re.S
+        ) or re.findall(r'<p[^>]*>(.*?)</p>', text, re.S)
+        for i, s in enumerate(snippets[: len(results)]):
+            results[i]["body"] = re.sub("<.*?>", "", s).strip()[:400]
+        results = [r for r in results if r["url"].startswith("http")]
+        if not results:
+            raise RuntimeError("Bing 未返回结果（可能被反爬拦截）")
+        summary = "\n".join(
+            f"- {x['title']}: {x['body']}" for x in results[:3] if x.get("body")
+        ) or query
+        return {
+            "content": summary,
+            "query": query,
+            "results": results[:max_results],
+            "count": len(results),
+        }
+
+    # ---- 源 3（可选）：SearXNG 自托管元搜索 ----
+    def _make_searxng(self, base_url: str):
+        base = base_url.rstrip("/")
+
+        def _search(query: str, max_results: int) -> dict:
+            resp = requests.get(
+                f"{base}/search",
+                params={"q": query, "format": "json"},
+                headers=_UA,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            results = [
+                {
+                    "title": i.get("title", ""),
+                    "url": i.get("url", ""),
+                    "body": (i.get("content") or "")[:400],
+                }
+                for i in data.get("results", [])
+            ]
+            if not results:
+                raise RuntimeError("SearXNG 未返回结果")
+            summary = "\n".join(
+                f"- {x['title']}: {x['body']}" for x in results[:3] if x.get("body")
+            ) or query
+            return {
+                "content": summary,
+                "query": query,
+                "results": results[:max_results],
+                "count": len(results),
+            }
+
+        return _search
+
+    # ---- 源 4：DuckDuckGo 直连（绕过 ddgs 9.x 的 brave 后端 bug） ----
     def _search_ddg(self, query: str, max_results: int) -> dict:
         resp = requests.post(
             "https://html.duckduckgo.com/html/",
@@ -114,7 +232,7 @@ class SearchAdapter(BaseAgentAdapter):
             "count": len(results),
         }
 
-    # ---- 源 2：Jina 搜索（免 key 免费 tier） ----
+    # ---- 源 5：Jina 搜索（免 key 免费 tier） ----
     def _search_jina(self, query: str, max_results: int) -> dict:
         resp = requests.get(
             f"https://api.jina.ai/v1/search?q={requests.utils.quote(query)}&limit={max_results}",
@@ -143,7 +261,7 @@ class SearchAdapter(BaseAgentAdapter):
             "count": len(results),
         }
 
-    # ---- 源 3：智谱 GLM web_search（兜底；免费版不支持，付费需余额） ----
+    # ---- 源 6：智谱 GLM web_search（兜底；免费版不支持，付费需余额） ----
     def _search_zhipu(self, query: str, max_results: int) -> dict:
         api_key = os.getenv("ZHIPU_API_KEY")
         if not api_key:
