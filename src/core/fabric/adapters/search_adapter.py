@@ -1,15 +1,18 @@
-"""多源免费搜索适配器 —— AOS fabric 的 WEB_SEARCH 平面。
+"""多源免费联网搜索适配器 —— AOS fabric 的 WEB_SEARCH 平面。
 
-自动按优先级尝试多个免费/已有凭证的搜索源，任一成功即用：
-  1. 智谱 GLM web_search 工具（ZHIPU_API_KEY，国内网络通，最稳）
-  2. DuckDuckGo 直连（requests 打 html.duckduckgo.com，绕过 ddgs 9.x 偷偷改用
-     brave 后端导致国内超时的 bug）
-  3. Jina 搜索（api.jina.ai/v1/search，免 key 免费 tier 兜底）
+设计原则（与编排芯粒一致）：**不弄虚**。任一源必须返回「真实搜索结果」
+（带 URL 的条目，count>0）才算成功；返回套话/空结果一律不当成功，跳下一源。
+全部失败才如实报错，交给下游依赖拦截（不会再冒出基于废话的假图）。
 
-全部失败才报失败并列出各源错误，交给编排芯粒容错。
+源优先级（真实搜索 API 优先，LLM 联网兜底）：
+  1. DuckDuckGo 直连（requests 打 html.duckduckgo.com，免 key）
+  2. Jina 搜索（api.jina.ai/v1/search，免 key 免费 tier）
+  3. 智谱 GLM web_search 工具（ZHIPU_API_KEY；注意：glm-4-flash 免费版不支持
+     该工具、且付费模型需余额，故多数情况会如实跳过，不冒成功）
 
-用户仓库里「dgg 库」= DuckDuckGo（ddgs），只是其中一个源；还有智谱/讯飞等
-免费联网能力此前完全没接进 fabric 新栈，现一并纳入 fallback。
+注：用户仓库里「dgg 库」= DuckDuckGo（ddgs），但 ddgs 9.x 默认后端改 brave 致
+国内超时，故此处用直连 html 端点。Baidu/XFYun 是纯 LLM 聊天端点，标准 API 不
+带联网搜索，未纳入（避免再冒假成功）。
 """
 from __future__ import annotations
 
@@ -35,7 +38,7 @@ _UA = {
 
 
 class SearchAdapter(BaseAgentAdapter):
-    """多源免费联网搜索：智谱联网优先，DuckDuckGo/Jina 兜底。"""
+    """多源免费联网搜索：真实结果优先，全部失败如实报错。"""
 
     engine_id = "web-search"
 
@@ -58,16 +61,19 @@ class SearchAdapter(BaseAgentAdapter):
             max_results = 5
 
         errors: list[str] = []
-        # 优先级：智谱联网（国内通）→ DuckDuckGo 直连 → Jina
+        # 优先级：DuckDuckGo 直连 → Jina → 智谱联网（兜底，多数会如实跳过）
         for name, fn in (
-            ("zhipu", self._search_zhipu),
             ("duckduckgo", self._search_ddg),
             ("jina", self._search_jina),
+            ("zhipu", self._search_zhipu),
         ):
             try:
                 res = fn(query, max_results)
-                if res and res.get("results"):
+                # 不弄虚：必须有真实结果（带 URL 的条目）才算成功
+                if res and res.get("count", 0) > 0:
                     return InvokeResult(ok=True, data={**res, "engine": name})
+                logger.warning("%s 返回但无真实搜索结果，跳过", name)
+                errors.append(f"{name}: 返回无真实结果（模型拒绝/未联网）")
             except Exception as e:  # 单源失败 → 跳下一个，不中断
                 logger.warning("%s 搜索失败: %s", name, e)
                 errors.append(f"{name}: {e}")
@@ -77,44 +83,7 @@ class SearchAdapter(BaseAgentAdapter):
             if errors else "无可用搜索源（未配置任何凭证且离线）",
         )
 
-    # ---- 源 1：智谱 GLM web_search（国内网络通，最稳） ----
-    def _search_zhipu(self, query: str, max_results: int) -> dict:
-        api_key = os.getenv("ZHIPU_API_KEY")
-        if not api_key:
-            raise RuntimeError("ZHIPU_API_KEY 未配置")
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=api_key,
-            base_url=os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-        )
-        model = os.getenv("ZHIPU_MODEL", "glm-4-flash")
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": f"请联网搜索并简要回答：{query}"}],
-            tools=[{"type": "web_search", "web_search": {"search_result": True}}],
-            timeout=30,
-        )
-        msg = resp.choices[0].message
-        content = (msg.content or "").strip()
-        sources: list[dict] = []
-        for tc in (msg.tool_calls or []):
-            if tc.type == "web_search" and tc.function and tc.function.arguments:
-                try:
-                    data = json.loads(tc.function.arguments)
-                    for s in data.get("search_result", []) or []:
-                        sources.append({"title": s.get("title", ""), "url": s.get("url", "")})
-                except Exception:
-                    pass
-        if not content:
-            raise RuntimeError("智谱联网未返回内容（可能未开通 web_search 权限）")
-        return {
-            "content": content,
-            "query": query,
-            "results": sources or [{"title": "(智谱联网回答)", "url": "", "body": content[:400]}],
-            "count": len(sources),
-        }
-
-    # ---- 源 2：DuckDuckGo 直连（绕过 ddgs 9.x 的 brave 后端 bug） ----
+    # ---- 源 1：DuckDuckGo 直连（绕过 ddgs 9.x 的 brave 后端 bug） ----
     def _search_ddg(self, query: str, max_results: int) -> dict:
         resp = requests.post(
             "https://html.duckduckgo.com/html/",
@@ -145,7 +114,7 @@ class SearchAdapter(BaseAgentAdapter):
             "count": len(results),
         }
 
-    # ---- 源 3：Jina 搜索（免 key 免费 tier） ----
+    # ---- 源 2：Jina 搜索（免 key 免费 tier） ----
     def _search_jina(self, query: str, max_results: int) -> dict:
         resp = requests.get(
             f"https://api.jina.ai/v1/search?q={requests.utils.quote(query)}&limit={max_results}",
@@ -172,4 +141,47 @@ class SearchAdapter(BaseAgentAdapter):
             "query": query,
             "results": results,
             "count": len(results),
+        }
+
+    # ---- 源 3：智谱 GLM web_search（兜底；免费版不支持，付费需余额） ----
+    def _search_zhipu(self, query: str, max_results: int) -> dict:
+        api_key = os.getenv("ZHIPU_API_KEY")
+        if not api_key:
+            raise RuntimeError("ZHIPU_API_KEY 未配置")
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=api_key,
+            base_url=os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+        )
+        model = os.getenv("ZHIPU_MODEL", "glm-4-flash")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": f"请联网搜索并简要回答：{query}"}],
+            tools=[{"type": "web_search", "web_search": {"enable": True, "search_result": True}}],
+            timeout=40,
+        )
+        msg = resp.choices[0].message
+        content = (msg.content or "").strip()
+        sources: list[dict] = []
+        for tc in (msg.tool_calls or []):
+            if tc.type == "web_search" and tc.function and tc.function.arguments:
+                try:
+                    d = json.loads(tc.function.arguments)
+                    for s in d.get("search_result", []) or []:
+                        sources.append({"title": s.get("title", ""), "url": s.get("url", "")})
+                except Exception:
+                    pass
+        # 不弄虚：智谱必须真的返回 web_search 结果才算成功，否则如实失败
+        if not sources:
+            raise RuntimeError(
+                "智谱 web_search 未返回真实结果（glm-4-flash 不支持该工具，或账户无余额）"
+            )
+        if not content:
+            content = " ".join(s.get("title", "") for s in sources[:3])
+        return {
+            "content": content,
+            "query": query,
+            "results": sources[:max_results],
+            "count": len(sources),
         }

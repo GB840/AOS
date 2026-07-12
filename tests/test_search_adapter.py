@@ -54,9 +54,9 @@ def test_search_adapter_returns_content_summary(patch_all_ok):
     )
     assert res.ok is True
     assert "content" in res.data
-    assert "晴" in res.data["content"]
+    assert "DDG结果" in res.data["content"]
     assert res.data["query"] == "北京天气"
-    assert res.data["engine"] == "zhipu"      # 智谱优先
+    assert res.data["engine"] == "duckduckgo"  # 真实搜索 API 优先于 LLM 联网
     assert res.data["count"] == 1
 
 
@@ -68,15 +68,30 @@ def test_search_adapter_accepts_task_field(patch_all_ok):
     assert res.data["query"] == "上海温度"
 
 
-def test_search_adapter_fallback_to_ddg(monkeypatch):
+def test_search_adapter_fallback_to_jina(monkeypatch):
     monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _zhipu_fail)
+    monkeypatch.setattr(m.SearchAdapter, "_search_ddg", _zhipu_fail)  # DDG 也挂
+    monkeypatch.setattr(m.SearchAdapter, "_search_jina", _jina_ok)
+    res = m.SearchAdapter().invoke(
+        InvokeRequest(capability="web.search", payload={"query": "北京天气"})
+    )
+    assert res.ok is True
+    assert res.data["engine"] == "jina"   # DDG/智谱挂 → 跳 Jina
+
+
+def test_search_adapter_skips_zhipu_refusal(monkeypatch):
+    # 智谱返回「套话 + 无真实结果(count=0)」→ 不得冒成功，必须跳 DDG
+    def _zhipu_refusal(self, q, n):
+        return {"content": "很抱歉，我无法直接联网搜索实时信息",
+                "query": q, "results": [], "count": 0}
+    monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _zhipu_refusal)
     monkeypatch.setattr(m.SearchAdapter, "_search_ddg", _ddg_ok)
     monkeypatch.setattr(m.SearchAdapter, "_search_jina", _jina_ok)
     res = m.SearchAdapter().invoke(
         InvokeRequest(capability="web.search", payload={"query": "北京天气"})
     )
     assert res.ok is True
-    assert res.data["engine"] == "duckduckgo"   # 智谱挂 → 跳 DDG
+    assert res.data["engine"] == "duckduckgo"   # 智谱拒绝 → 如实跳过 → DDG
 
 
 def test_search_adapter_all_fail(monkeypatch):
