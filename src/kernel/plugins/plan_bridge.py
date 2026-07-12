@@ -111,8 +111,15 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
 # 兜底：没有任何关键词命中时映射到的通用能力（需当前通电）。
 _FALLBACK_CAP = "inference.llm"
 
+# AG2 规划器产出的能力标签，如 [web.search] / [media.image]
+_TAG_RE = re.compile(r"\[([a-z][a-z0-9]*(?:\.[a-z0-9]+)+)\]")
+
 
 def _pick_capability(step_text: str, available: List[str]) -> str:
+    # 优先认 AG2 明确给出的能力标签（如 [web.search]），最贴合规划意图。
+    m = _TAG_RE.search(step_text)
+    if m and m.group(1) in available:
+        return m.group(1)
     low = step_text.lower()
     for kw, cap in _KEYWORD_CAP_MAP:
         if kw in low and cap in available:
@@ -164,8 +171,10 @@ def parse_plan_to_steps(plan_text: str, available_caps: List[str]) -> List[Dict[
     steps: List[Dict[str, Any]] = []
     for i, txt in enumerate(steps_text):
         cap = _pick_capability(txt, available_caps)
+        # 剥掉 AG2 明确给出的 [cap] 标签，避免把标签泄漏进下游 step 的入参。
+        clean = _TAG_RE.sub("", txt).strip(" .;-").strip()
         if i == 0:
-            steps.append({"capability": cap, "in": {"task": txt}})
+            steps.append({"capability": cap, "in": {"task": clean}})
         else:
             steps.append({"capability": cap, "in_from": "previous"})
     return steps

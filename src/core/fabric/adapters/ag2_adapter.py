@@ -124,9 +124,19 @@ class AG2Adapter(BaseAgentAdapter):
                     data={"engine": "ag2", "group_chat": True, "reply": reply},
                 )
             if req.capability == Capability.PLANNING:
-                reply = self._run_group_chat(
-                    f"Produce a short plan for: {req.payload.get('topic', 'the task')}"
+                topic = req.payload.get("topic", "the task")
+                # 让 AG2 产出「工具调用步骤」而非「团队分工叙述」：
+                # 每行带 AOS 真实能力标签 [web.search] 等，解析器优先认标签。
+                plan_prompt = (
+                    "Plan the following task as concrete executable steps for the "
+                    "AOS agent system. Available tools (use exactly these names as "
+                    "bracketed tags): web.search, action.aci, media.image, media.video, "
+                    "inference.llm, memory.semantic, action.code_exec, channel.access.\n"
+                    "Output each step on its own line as: N. [tool_name] <what to do>\n"
+                    "Do NOT describe a human team; describe tool calls the system will "
+                    f"execute.\nTask: {topic}"
                 )
+                reply = self._run_group_chat(plan_prompt)
                 return InvokeResult(ok=True, data={"engine": "ag2", "plan": reply})
             return InvokeResult(
                 ok=False, error=f"unsupported capability {req.capability.value}"

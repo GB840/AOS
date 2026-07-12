@@ -155,6 +155,16 @@ def test_heuristic_plan_splits_on_conjunction():
     assert steps[1]["capability"] == "memory.semantic"
 
 
+def test_parse_plan_prefers_ag2_capability_tag():
+    # AG2 规划器若产出 [web.search] 这类明确能力标签，解析器优先采用，
+    # 不再被正文里的「图/画」等媒体词误命中。
+    text = "1. [web.search] 搜索北京今日天气\n2. [media.image] 根据天气画示意图"
+    caps = ["web.search", "media.image", "inference.llm"]
+    steps = parse_plan_to_steps(text, caps)
+    assert steps[0]["capability"] == "web.search"
+    assert steps[1]["capability"] == "media.image"
+
+
 def test_parse_plan_handles_real_ag2_groupchat_output():
     # 真实 AG2 group.chat（summary_method=last_msg）常见输出形态：
     # 多 Agent 讨论后给一段编号计划。验证解析器能正确桥成 steps[]。
