@@ -57,6 +57,26 @@ class _Failer(BaseAgentAdapter):
         return InvokeResult(ok=False, error="boom")
 
 
+_PARALLEL_THREADS: list[str] = []
+
+
+class _SlowEcho(BaseAgentAdapter):
+    """故意 sleep 并记录线程名，用于证明 parallel_groups 真·并发。"""
+    engine_id = "slow"
+
+    def advertise_capabilities(self):
+        return ["bench.slow"]
+
+    def health(self):
+        return True
+
+    def invoke(self, req: InvokeRequest) -> InvokeResult:
+        import threading, time
+        _PARALLEL_THREADS.append(threading.current_thread().name)
+        time.sleep(0.05)
+        return InvokeResult(ok=True, data={"x": req.payload.get("x", 0)})
+
+
 def _hub_with_orchestrator():
     hub = FabricHub(adapters=(_Doubler, _Incrementer))
     orch_id = hub.add_orchestrator()
@@ -129,3 +149,69 @@ def test_pipeline_blocks_dependent_step_when_upstream_failed():
     assert res.data["failed_steps"] == 2
     # step1 必须被标记为依赖失败，而非拿着 stale input 冒充当成功
     assert "依赖" in (res.data["trace"][1]["error"] or "")
+
+
+def test_parallel_groups_run_concurrently():
+    """SwarmFlow 的 execute_parallel 其实是顺序循环（swarm_flow.py:266-274）。
+    移植到 FabricHub 的价值在于真·并发：组内步骤经线程池并行执行。"""
+    hub = FabricHub(adapters=(_SlowEcho,))
+    hub.add_orchestrator()
+    _PARALLEL_THREADS.clear()
+    spec = {
+        "initial": {},
+        "steps": [
+            {"capability": "bench.slow", "in": {"x": 1}},
+            {"capability": "bench.slow", "in": {"x": 2}},
+            {"capability": "bench.slow", "in": {"x": 3}},
+            {"capability": "bench.slow", "in": {"x": 4}},
+        ],
+        "parallel_groups": [[0, 1], [2, 3]],
+    }
+    res = hub.route("system.workflow", spec)
+    assert res.ok is True
+    assert res.data["ok_steps"] == 4
+    assert res.data.get("parallel") is True
+    # 并发证据：4 步在 >=2 个不同线程上跑；若退化成顺序，则全在同一线程
+    assert len(set(_PARALLEL_THREADS)) >= 2
+
+
+def test_parallel_groups_then_sequential_remainder():
+    """组间顺序 + 未被组覆盖的步骤在全部组跑完后顺序补跑，且 in_from:previous
+    能正确拿到上游成功输出。"""
+    hub = FabricHub(adapters=(_Doubler, _Incrementer))
+    hub.add_orchestrator()
+    spec = {
+        "initial": {},
+        "steps": [
+            {"capability": "bench.doubler", "in": {"x": 5}},    # 0: 组内
+            {"capability": "bench.increment", "in": {"x": 1}},  # 1: 组内
+            {"capability": "bench.doubler", "in_from": "previous"},  # 2: 顺序补跑
+        ],
+        "parallel_groups": [[0, 1]],
+    }
+    res = hub.route("system.workflow", spec)
+    assert res.ok is True
+    assert res.data["ok_steps"] == 3
+    assert res.data["failed_steps"] == 0
+    # 步2 拿到的 previous 是某成功步输出（dict 含 x）
+    assert isinstance(res.data["final"], dict) and "x" in res.data["final"]
+
+
+def test_parallel_failure_isolated():
+    """并发组内某步失败不影响同组其他步（单步容错在并发下同样生效）。"""
+    hub = FabricHub(adapters=(_Doubler, _Failer))
+    hub.add_orchestrator()
+    spec = {
+        "initial": {},
+        "steps": [
+            {"capability": "bench.doubler", "in": {"x": 5}},  # ok
+            {"capability": "bench.fail", "in": {"x": 1}},     # fail
+        ],
+        "parallel_groups": [[0, 1]],
+    }
+    res = hub.route("system.workflow", spec)
+    assert res.ok is True
+    assert res.data["ok_steps"] == 1
+    assert res.data["failed_steps"] == 1
+    assert res.data["trace"][0]["ok"] is True
+    assert res.data["trace"][1]["ok"] is False

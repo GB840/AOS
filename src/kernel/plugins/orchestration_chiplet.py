@@ -22,15 +22,26 @@
       # 或把 initial 的某字段取出作为入参：
       {"capability": "bench.ping3",
        "in_from": "initial", "field": "seed"}
-    ]
+    ],
+    # 可选：并行 DAG。每组内的步骤经线程池并发执行，组间保持顺序；
+    # 未被任何组覆盖的步骤在全部组跑完后顺序补跑。
+    "parallel_groups": [[0, 1], [2, 3]]
+    #   组内元素可为步骤下标(int)，或步骤 id / capability 字符串。
   }
 
 输出（InvokeResult.data）：
-  {"ok_steps": N, "final": <最后一步输出>, "trace": [每步 engine_id+输出摘要]}
+  {"ok_steps": N, "failed_steps": M, "final": <最后成功步输出>,
+   "trace": [每步 engine_id+输出摘要], "parallel": true?}
+
+注：并发模式下 `in_from:"previous"` 在步骤实际执行时读取「截至此刻最近一次
+成功输出」（组间/组内并发下不保证顺序）。需要严格先后依赖的步骤请放进同一
+顺序补跑段，或拆到不同 parallel_group。
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Callable, Dict, List, Optional
 
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from core.fabric.capability import Capability
@@ -40,8 +51,21 @@ def _as_str(cap) -> str:
     return cap.value if hasattr(cap, "value") else str(cap)
 
 
+class _RunState:
+    """顺序/并发共享的执行状态；所有写操作加锁，保证线程安全。"""
+
+    def __init__(self, initial: Dict[str, Any]) -> None:
+        self.lock = threading.Lock()
+        self.initial = initial
+        self.last_success_out: Optional[Dict[str, Any]] = None
+        self.context: Optional[Dict[str, Any]] = None
+        self.ok_steps = 0
+        self.failed_steps = 0
+        self.trace: List[Dict[str, Any]] = []
+
+
 class OrchestrationChiplet(BaseAgentAdapter):
-    """把多芯粒按序串联成流水线的编排芯粒（用户态，非内核）。"""
+    """把多芯粒按序/并行串联成流水线的编排芯粒（用户态，非内核）。"""
 
     engine_id = "orchestrator"
 
@@ -65,65 +89,111 @@ class OrchestrationChiplet(BaseAgentAdapter):
         steps = spec.get("steps")
         if not isinstance(steps, list) or not steps:
             return InvokeResult(ok=False, error="orchestrator: 缺少 steps[] 流水线定义")
-        initial = spec.get("initial") or {}
-        context = dict(initial)
-        # 最近一次「成功步骤」的输出。用于校验 in_from:"previous" 的依赖链：
-        # 若此前没有任何步骤成功产出，说明上游已断，本步不能再拿 stale/initial
-        # 冒充输入去跑——否则会出现「图生成成功但根本没真去搜索」的语义空转。
-        last_success_out: Optional[Dict[str, Any]] = None
-        trace: list[Dict[str, Any]] = []
-        ok_steps = 0
-        failed_steps = 0
 
+        parallel_groups = spec.get("parallel_groups")
+        if parallel_groups:
+            return self._invoke_parallel(steps, spec, parallel_groups)
+
+        # —— 顺序路径（既有行为，保持不变）——
+        state = _RunState(spec.get("initial") or {})
         for idx, step in enumerate(steps):
-            cap = step.get("capability")
-            if not cap:
-                failed_steps += 1
-                trace.append({"step": idx, "capability": None,
-                              "ok": False, "error": "缺 capability"})
-                continue
-            # 解析本步入参
-            if "in" in step:
-                payload = step["in"]
-            elif step.get("in_from") == "previous":
-                if last_success_out is None:
-                    # 上游从未成功产出 → 依赖断裂，本步无法获取真实输入，判为依赖失败
-                    failed_steps += 1
-                    trace.append({"step": idx, "capability": _as_str(cap),
-                                  "ok": False,
-                                  "error": "依赖的上游步骤尚未成功产出，本步无法获取输入（语义空转已阻止）"})
-                    continue
-                payload = last_success_out
-            elif step.get("in_from") == "initial":
-                field = step.get("field")
-                payload = {field: initial.get(field)} if field else dict(initial)
-            else:
-                payload = {}
-            # 委派给下游芯粒（经同一路由层，故障隔离同样生效）
-            res = self._route_fn(_as_str(cap), payload)
-            if isinstance(res, InvokeResult) and not res.ok:
-                # 单步容错：记录失败、保留上一次成功输出作为后续入参、继续跑
-                failed_steps += 1
-                trace.append({"step": idx, "capability": _as_str(cap),
-                              "ok": False, "error": res.error})
-                continue
-            step_out = res.data if isinstance(res, InvokeResult) else res
-            context = step_out if isinstance(step_out, dict) else {"result": step_out}
-            last_success_out = context  # 记录成功输出，供后续 in_from:previous 依赖
-            ok_steps += 1
-            trace.append({"step": idx, "capability": _as_str(cap),
-                          "ok": True, "out": _brief(step_out)})
+            self._run_step(idx, step, state)
+        return self._finalize(state)
 
-        if ok_steps == 0:
+    def _invoke_parallel(self, steps, spec, parallel_groups) -> InvokeResult:
+        state = _RunState(spec.get("initial") or {})
+        covered: set[int] = set()
+        for group in parallel_groups:
+            idxs = self._resolve_group(group, steps)
+            if not idxs:
+                continue
+            covered.update(idxs)
+            # 组内并发：提交到线程池，等本组全部完成再进下一组（组间顺序）
+            with ThreadPoolExecutor(max_workers=max(1, len(idxs))) as ex:
+                futures = [ex.submit(self._run_step, i, steps[i], state) for i in idxs]
+                for _ in as_completed(futures):
+                    pass  # 结果已在 _run_step 内写入 state
+        # 跑未被任何 parallel_group 覆盖的步骤（顺序补跑）
+        for idx, step in enumerate(steps):
+            if idx in covered:
+                continue
+            self._run_step(idx, step, state)
+        return self._finalize(state, parallel=True)
+
+    @staticmethod
+    def _resolve_group(group, steps) -> List[int]:
+        """把一组描述解析为步骤下标。支持 int 下标 / 步骤 id / capability 字符串。"""
+        idxs: List[int] = []
+        for g in group:
+            if isinstance(g, int):
+                if 0 <= g < len(steps):
+                    idxs.append(g)
+            else:
+                for i, s in enumerate(steps):
+                    if s.get("id") == g or _as_str(s.get("capability")) == g:
+                        idxs.append(i)
+                        break
+        return idxs
+
+    def _run_step(self, idx: int, step: Dict[str, Any], state: _RunState) -> None:
+        """执行单步并就地更新 state（线程安全）。无返回值。"""
+        cap = step.get("capability")
+        if not cap:
+            with state.lock:
+                state.failed_steps += 1
+                state.trace.append({"step": idx, "capability": None,
+                                    "ok": False, "error": "缺 capability"})
+            return
+        # 解析本步入参
+        if "in" in step:
+            payload = step["in"]
+        elif step.get("in_from") == "previous":
+            with state.lock:
+                if state.last_success_out is None:
+                    # 上游从未成功产出 → 依赖断裂，本步无法获取真实输入，判为依赖失败
+                    state.failed_steps += 1
+                    state.trace.append({"step": idx, "capability": _as_str(cap),
+                                        "ok": False,
+                                        "error": "依赖的上游步骤尚未成功产出，本步无法获取输入（语义空转已阻止）"})
+                    return
+                payload = state.last_success_out
+        elif step.get("in_from") == "initial":
+            field = step.get("field")
+            with state.lock:
+                payload = {field: state.initial.get(field)} if field else dict(state.initial)
+        else:
+            payload = {}
+        # 委派给下游芯粒（经同一路由层，故障隔离同样生效）
+        res = self._route_fn(_as_str(cap), payload)
+        if isinstance(res, InvokeResult) and not res.ok:
+            # 单步容错：记录失败、保留上一次成功输出作为后续入参、继续跑
+            with state.lock:
+                state.failed_steps += 1
+                state.trace.append({"step": idx, "capability": _as_str(cap),
+                                    "ok": False, "error": res.error})
+            return
+        step_out = res.data if isinstance(res, InvokeResult) else res
+        out_ctx = step_out if isinstance(step_out, dict) else {"result": step_out}
+        with state.lock:
+            state.last_success_out = out_ctx  # 供后续 in_from:previous 依赖
+            state.context = out_ctx
+            state.ok_steps += 1
+            state.trace.append({"step": idx, "capability": _as_str(cap),
+                                "ok": True, "out": _brief(step_out)})
+
+    @staticmethod
+    def _finalize(state: _RunState, parallel: bool = False) -> InvokeResult:
+        if state.ok_steps == 0:
             return InvokeResult(
                 ok=False,
                 error="orchestrator: 所有步骤均失败（见 trace）",
-                data={"ok_steps": 0, "failed_steps": failed_steps, "trace": trace},
+                data={"ok_steps": 0, "failed_steps": state.failed_steps, "trace": state.trace},
             )
         return InvokeResult(
             ok=True,
-            data={"ok_steps": ok_steps, "failed_steps": failed_steps,
-                  "final": context, "trace": trace},
+            data={"ok_steps": state.ok_steps, "failed_steps": state.failed_steps,
+                  "final": state.context, "trace": state.trace,
+                  **({"parallel": True} if parallel else {})},
         )
 
 
