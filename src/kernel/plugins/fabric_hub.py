@@ -29,6 +29,7 @@ from core.fabric.adapters import (
     Mem0Adapter,
     OpenClawAdapter,
 )
+from kernel.isolation.subprocess_iso import IsolatedEngineHost
 from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 
 _LOG = logging.getLogger("aos.fabric.hub")
@@ -59,12 +60,51 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
 )
 
 
+class IsolatedAdapterProxy(BaseAgentAdapter):
+    """进程内代理：让被隔离到子进程的引擎仍能参与枢纽的能力路由/自检。
+
+    注册进 FabricRegistry 的是它（而非真实适配器实例），所以 resolve_engine /
+    health_report / route 的「能力匹配」逻辑零改动即可生效；真正的 invoke 与
+    health 全部委派给 IsolatedEngineHost（子进程）。这是依赖倒置的干净落点：
+    内核/枢纽只认 ABC，子进程是插在接缝外的实现。
+    """
+
+    def __init__(self, engine_id: str, capabilities: list,
+                 host: IsolatedEngineHost) -> None:
+        self._eid = engine_id
+        self._caps = capabilities
+        self._host = host
+
+    @property
+    def engine_id(self) -> str:
+        return self._eid
+
+    def advertise_capabilities(self) -> list:
+        return list(self._caps)
+
+    def invoke(self, req: InvokeRequest) -> InvokeResult:
+        # req.capability 是字符串（FabricHub.route 以字符串构造 InvokeRequest），
+        # 子进程 worker 内部再转回 Capability 枚举，故此处直接透传字符串。
+        resp = self._host.invoke(req.capability, req.payload)
+        if isinstance(resp, dict):
+            return InvokeResult(ok=resp.get("ok", False),
+                                data=resp.get("data"), error=resp.get("error"))
+        return resp
+
+    def health(self) -> bool:
+        return self._host.health()
+
+
 class FabricHub:
     """能力路由枢纽：按 Capability 把任务委派给 live 的真实 OSS 引擎。"""
 
     def __init__(self, adapters: Optional[tuple] = None) -> None:
         self._registry = FabricRegistry()
         self._errors: Dict[str, str] = {}
+        # 已隔离进子进程的引擎：engine_id -> IsolatedEngineHost。
+        # 被隔离引擎同时以 IsolatedAdapterProxy 注册进 _registry（参与路由），
+        # 但 invoke/health 全部走子进程。recover() 对它们直接 respawn 子进程。
+        self._isolated: Dict[str, IsolatedEngineHost] = {}
         # 单芯粒故障记录：engine_id -> 最近一次 invoke 失败的 perf_counter 时间戳。
         # 用于「崩溃恢复」度量（Day11-14 闸门3）：从故障检测到恢复服务的耗时。
         self._failures: Dict[str, float] = {}
@@ -125,12 +165,17 @@ class FabricHub:
             return InvokeResult(ok=False, error=f"{eid} invoke failed: {e!r}")
 
     def recover(self, eid: str) -> bool:
-        """模拟内核重启芯粒：清除故障记录并复探 health()。
+        """内核重启芯粒：清除故障记录并复探 health()。
 
-        进程内(in-process)芯粒对象常驻，重启=复探健康即可恢复服务；
-        子进程(B 路线)此处应 spawn 新进程，本实现预留同一接口。
+        - 进程内(in-process)芯粒对象常驻，重启=复探健康即可恢复服务；
+        - 子进程(B 路线)芯粒此处直接 kill+respawn 子进程（≤3s 闸门），
+          由 IsolatedEngineHost 完成，其余在途/其他芯粒不受影响。
         返回是否恢复为 live。
         """
+        host = self._isolated.get(eid)
+        if host is not None:
+            host.recover()
+            return host.health()
         adapter = self._registry._adapters.get(eid)
         if adapter is None:
             return False
@@ -154,6 +199,27 @@ class FabricHub:
         self._registry.register(orch)
         return orch.engine_id
 
+    def add_isolated_engine(self, engine_id: str, adapter_cls,
+                            transport: Optional[str] = None,
+                            task_us: float = 0.0) -> str:
+        """把一个真实适配器**隔离进独立子进程**，作为 fabric 引擎注册。
+
+        这是 Day22-30 B 路线「收口进生产」的落点：
+          - 该引擎的 invoke / health 全部在子进程内执行，崩溃不传染宿主内核；
+          - recover(eid) 直接 kill+respawn 子进程（≤3s 闸门，见 SubprocessPool）；
+          - 能力路由/自检逻辑复用现有 route()/resolve_engine()/health_report()，
+            零改动（注册的是 IsolatedAdapterProxy）。
+        默认 transport 取 AOS_ISO_TRANSPORT（沙箱=tcp，生产=pipe/Named Pipe）。
+        """
+        caps = list(adapter_cls().advertise_capabilities())
+        spec = f"{adapter_cls.__module__}:{adapter_cls.__qualname__}"
+        host = IsolatedEngineHost(engine_id, spec, transport=transport, task_us=task_us)
+        host.start()
+        proxy = IsolatedAdapterProxy(engine_id, caps, host)
+        self._registry.register(proxy)
+        self._isolated[engine_id] = host
+        return engine_id
+
     def health_report(self) -> Dict[str, Any]:
         """诚实通电自检：total / live / 每个引擎状态 / 注册错误。
 
@@ -174,6 +240,7 @@ class FabricHub:
                 "live": live,
                 "capabilities": caps,
                 "error": err,
+                "isolated": eid in self._isolated,
             }
             report["total"] += 1
             if live:

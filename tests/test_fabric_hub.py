@@ -38,7 +38,7 @@ def test_registers_all_six_and_reports_total():
     assert rep["total"] == 7
     assert set(rep["adapters"].keys()) == _EXPECTED_ENGINES
     for info in rep["adapters"].values():
-        assert set(info.keys()) == {"live", "capabilities", "error"}
+        assert set(info.keys()) == {"live", "capabilities", "error", "isolated"}
 
 
 def test_resolve_never_returns_dead_engine():
