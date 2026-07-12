@@ -106,10 +106,9 @@ class FabricHub:
     DEFAULT_ADAPTERS = _ADAPTERS
 
     def __init__(self, adapters: Optional[tuple] = None) -> None:
-        # best-effort 加载仓库根 .env：让依赖 key 的引擎（agnes/mem0/litellm）
-        # 在任何调用路径（python -c / smoke / MCP server）都通电，消除「调用方
-        # 忘了 load_dotenv 就全挂」的脆弱性。必须在注册 adapters 之前执行，
-        # 否则 mem0 构造时 build_mem0_config 读不到 key。
+        # best-effort 加载仓库根 .env：让依赖远程 key 的引擎（agnes/litellm）
+        # 在任何调用路径都通电。mem0 默认走本地零成本配置（不依赖 key），本步
+        # 对 mem0 非必需，仅为兼容远程 key 模式。必须在注册 adapters 之前执行。
         try:
             from dotenv import load_dotenv
             from pathlib import Path
@@ -137,11 +136,13 @@ class FabricHub:
         self.route_sim_us: float = float(os.environ.get("ROUTE_SIM_US", "0") or "0")
         for cls in (adapters if adapters is not None else _ADAPTERS):
             try:
-                # mem0 若存在可用 LLM key 则注入 best-effort 配置（否则用默认，
-                # invoke 时若无 key 会优雅失败，由记忆门面降级）。
+                # mem0 默认走本地零成本配置（ollama/sentence-transformers + 本地
+                # chroma），除非 AOS_MEM0_LOCAL=0 才退回远程 key 兼容模式。本机
+                # 无 ollama 时构造仍成功，invoke 时优雅降级由记忆门面兜底。
                 if cls is Mem0Adapter:
                     from core.fabric.adapters.mem0_adapter import build_mem0_config
-                    inst = cls(config=build_mem0_config())
+                    force_local = os.environ.get("AOS_MEM0_LOCAL", "1") != "0"
+                    inst = cls(config=build_mem0_config(force_local=force_local))
                 else:
                     inst = cls()
                 self._registry.register(inst)

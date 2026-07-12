@@ -27,23 +27,55 @@ def _import_mem0():
     return Memory
 
 
-def build_mem0_config() -> dict | None:
-    """Best-effort 构造 mem0 配置：优先复用仓库里已有的 OpenAI 兼容 LLM key
-    （SiliconFlow / Zhipu / Unified），配一个本地 chroma 向量库，让 mem0 在
-    「有 key 即真持久化、无 key 即优雅降级」两种环境下都不崩。
+def build_mem0_config(force_local: bool = False) -> dict | None:
+    """构造 mem0 配置：优先本地零成本，其次复用远程 key，最后降级。
 
-    适配 mem0 2.0 的 config schema（与旧版差异巨大）：
-    - llm/embedder 的 key 字段名是 `api_key`（非旧版的 `openai_api_key`）；
-    - LlmConfig 不接受 `openai_base_url` 参数，OpenAI LLM 只读环境变量
-      `OPENAI_BASE_URL`，故 base 经 env 注入（setdefault，不覆盖官方 base）；
-    - EmbedderConfig 接受 `openai_base_url`，可直接传；
-    - vector_store 用 chroma + 真实路径（Windows 不支持 `:memory:`）。
+    本地模式（force_local=True 或 env AOS_MEM0_LOCAL=1）—— 零成本、不调任何
+    付费 API，全程跑在本机：
+      - llm:      ollama（本机 ollama 服务，模型由 AOS_MEM0_LLM_MODEL 指定，
+                  默认 qwen2.5:7b）
+      - embedder: 默认 ollama（模型由 AOS_MEM0_EMBED_MODEL 指定，默认
+                  nomic-embed-text）；若设 AOS_MEM0_EMBEDDER=huggingface 则改走
+                  本机已装的 sentence-transformers 本地模型（首次自动下载，免费）
+      - vector_store: 本地 chroma（真实路径，Windows 不支持 :memory:）
 
-    返回 None 表示没有可用 key —— 调用方据此走降级。任何异常在上层隔离。
+    非本地（旧行为，保持兼容）：依次尝试 SILICONFLOW/ZHIPU/UNIFIED 远程 key。
+
+    返回 None 表示无可用配置 —— 调用方据此走降级。任何异常在上层隔离。
     """
     import os
     import tempfile
 
+    chroma_path = os.path.join(tempfile.gettempdir(), "mem0_chroma")
+
+    # ---- 本地零成本优先（绝不触碰付费 API） ----
+    if force_local or os.environ.get("AOS_MEM0_LOCAL") == "1":
+        llm_model = os.environ.get("AOS_MEM0_LLM_MODEL", "qwen2.5:7b")
+        ollama_url = os.environ.get("AOS_MEM0_OLLAMA_URL", "http://localhost:11434")
+        emb_choice = os.environ.get("AOS_MEM0_EMBEDDER", "ollama")
+        if emb_choice == "huggingface":
+            emb_cfg: dict[str, Any] = {
+                "provider": "huggingface",
+                "config": {"model": os.environ.get(
+                    "AOS_MEM0_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")},
+            }
+        else:
+            emb_cfg = {
+                "provider": "ollama",
+                "config": {
+                    "model": os.environ.get("AOS_MEM0_EMBED_MODEL", "nomic-embed-text"),
+                    "ollama_base_url": ollama_url,
+                },
+            }
+        return {
+            "llm": {"provider": "ollama",
+                    "config": {"model": llm_model, "ollama_base_url": ollama_url}},
+            "embedder": emb_cfg,
+            "vector_store": {"provider": "chroma",
+                             "config": {"collection_name": "mem0", "path": chroma_path}},
+        }
+
+    # ---- 远程 key（旧行为，保持兼容） ----
     # (env 名, OpenAI 兼容 base_url, llm 模型, embedding 模型)
     candidates = [
         ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1",
@@ -62,7 +94,6 @@ def build_mem0_config() -> dict | None:
         if base:
             os.environ.setdefault("OPENAI_BASE_URL", base)
             os.environ.setdefault("OPENAI_API_KEY", key)
-        chroma_path = os.path.join(tempfile.gettempdir(), "mem0_chroma")
         llm_cfg: dict[str, Any] = {
             "provider": "openai",
             "config": {"model": model, "api_key": key},
