@@ -75,7 +75,8 @@ def test_pipeline_chains_steps_passing_output():
     assert len(res.data["trace"]) == 2
 
 
-def test_pipeline_aborts_on_step_failure():
+def test_pipeline_tolerates_step_failure_and_continues():
+    """Fix C：单步失败不中断整条流水线——记录失败、保留上一步成功输出、继续跑。"""
     hub, _ = _hub_with_orchestrator()
     spec = {
         "initial": {},
@@ -85,5 +86,11 @@ def test_pipeline_aborts_on_step_failure():
         ],
     }
     res = hub.route("system.workflow", spec)
-    assert res.ok is False
-    assert "步骤#1" in (res.error or "")
+    # 成功步(0)照常跑出结果，整条不因步1失败而 abort
+    assert res.ok is True
+    assert res.data["ok_steps"] == 1
+    assert res.data["failed_steps"] == 1
+    # trace 必须逐条标注 ok/error
+    assert res.data["trace"][0]["ok"] is True
+    assert res.data["trace"][1]["ok"] is False
+    assert "no live provider" in (res.data["trace"][1]["error"] or "")

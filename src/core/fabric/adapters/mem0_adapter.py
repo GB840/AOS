@@ -29,43 +29,78 @@ def _import_mem0():
 
 def build_mem0_config() -> dict | None:
     """Best-effort 构造 mem0 配置：优先复用仓库里已有的 OpenAI 兼容 LLM key
-    （SiliconFlow / Zhipu / Unified），配一个内存向量库，让 mem0 在「有 key 即
-    真持久化、无 key 即优雅降级」两种环境下都不崩。
+    （SiliconFlow / Zhipu / Unified），配一个本地 chroma 向量库，让 mem0 在
+    「有 key 即真持久化、无 key 即优雅降级」两种环境下都不崩。
 
-    返回 None 表示没有可用 key —— 调用方据此走降级（memory facade 返回空/False）。
-    注意：本函数只决定「是否有可能初始化」，真正能否连通由 mem0 在 invoke 时决定；
-    任何异常都在上层被隔离，不会拖垮枢纽。
+    适配 mem0 2.0 的 config schema（与旧版差异巨大）：
+    - llm/embedder 的 key 字段名是 `api_key`（非旧版的 `openai_api_key`）；
+    - LlmConfig 不接受 `openai_base_url` 参数，OpenAI LLM 只读环境变量
+      `OPENAI_BASE_URL`，故 base 经 env 注入（setdefault，不覆盖官方 base）；
+    - EmbedderConfig 接受 `openai_base_url`，可直接传；
+    - vector_store 用 chroma + 真实路径（Windows 不支持 `:memory:`）。
+
+    返回 None 表示没有可用 key —— 调用方据此走降级。任何异常在上层隔离。
     """
     import os
+    import tempfile
 
+    # (env 名, OpenAI 兼容 base_url, llm 模型, embedding 模型)
     candidates = [
-        # (env 名, OpenAI 兼容 base_url, 默认模型)
-        ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
-        ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
-        ("UNIFIED_API_KEY", None, "gpt-4o-mini"),
+        ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1",
+         "Qwen/Qwen2.5-7B-Instruct", "BAAI/bge-large-zh-v1.5"),
+        ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4",
+         "glm-4-flash", "embedding-3"),
+        ("UNIFIED_API_KEY", None, "gpt-4o-mini", "text-embedding-3-small"),
     ]
-    for envk, base, model in candidates:
+    for envk, base, model, emb in candidates:
         key = os.environ.get(envk)
         if not key:
             continue
+        # mem0 2.0 的 OpenAI LLM 只认环境变量 OPENAI_BASE_URL（LlmConfig 不接受
+        # openai_base_url 参数），故 base 经 env 注入；setdefault 避免覆盖用户
+        # 可能已有的官方 OPENAI base。
+        if base:
+            os.environ.setdefault("OPENAI_BASE_URL", base)
+            os.environ.setdefault("OPENAI_API_KEY", key)
+        chroma_path = os.path.join(tempfile.gettempdir(), "mem0_chroma")
         llm_cfg: dict[str, Any] = {
             "provider": "openai",
-            "config": {"model": model, "openai_api_key": key},
+            "config": {"model": model, "api_key": key},
         }
         emb_cfg: dict[str, Any] = {
             "provider": "openai",
-            "config": {"model": "text-embedding-3-small", "openai_api_key": key},
+            "config": {"model": emb, "api_key": key,
+                       **({"openai_base_url": base} if base else {})},
         }
-        if base:
-            llm_cfg["config"]["openai_base_url"] = base
-            emb_cfg["config"]["openai_base_url"] = base
         return {
             "llm": llm_cfg,
             "embedder": emb_cfg,
-            "vector_store": {"provider": "memory"},
-            "history_db_path": ":memory:",
+            "vector_store": {
+                "provider": "chroma",
+                "config": {"collection_name": "mem0", "path": chroma_path},
+            },
         }
     return None
+
+
+def _build_memory(Memory, config):
+    """版本兼容地构造 mem0.Memory 实例。
+
+    - mem0 >= 2.0：接受单一 `config` 参数，优先用 `Memory.from_config(dict)`；
+    - 旧版：可能接受 `Memory(**config)` 或 `Memory(config=...)`。
+    config 为 None（无 key）时退回默认 Memory()（invoke 时若无 key 会优雅失败）。
+    """
+    if not config:
+        return Memory()
+    if hasattr(Memory, "from_config"):
+        try:
+            return Memory.from_config(config)
+        except Exception:  # noqa: BLE001 - 退回旧版初始化
+            pass
+    try:
+        return Memory(**config)
+    except TypeError:
+        return Memory(config=config)
 
 
 class Mem0Adapter(BaseAgentAdapter):
@@ -85,7 +120,7 @@ class Mem0Adapter(BaseAgentAdapter):
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         try:
             Memory = _import_mem0()
-            mem = Memory(**self._config)
+            mem = _build_memory(Memory, self._config)
             action = req.payload.get("action", "search")
             opts = req.payload.get("opts", {})
             if action == "add":

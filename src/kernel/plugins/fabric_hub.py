@@ -104,6 +104,20 @@ class FabricHub:
     DEFAULT_ADAPTERS = _ADAPTERS
 
     def __init__(self, adapters: Optional[tuple] = None) -> None:
+        # best-effort 加载仓库根 .env：让依赖 key 的引擎（agnes/mem0/litellm）
+        # 在任何调用路径（python -c / smoke / MCP server）都通电，消除「调用方
+        # 忘了 load_dotenv 就全挂」的脆弱性。必须在注册 adapters 之前执行，
+        # 否则 mem0 构造时 build_mem0_config 读不到 key。
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            for cand in (Path.cwd() / ".env",
+                         Path(__file__).resolve().parents[3] / ".env"):
+                if cand.is_file():
+                    load_dotenv(cand)
+                    break
+        except Exception:  # noqa: BLE001 - 无 python-dotenv / 无 .env 都不致命
+            pass
         self._registry = FabricRegistry()
         self._errors: Dict[str, str] = {}
         # 已隔离进子进程的引擎：engine_id -> IsolatedEngineHost。

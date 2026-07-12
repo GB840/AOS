@@ -37,8 +37,13 @@ def test_registers_all_six_and_reports_total():
     rep = hub.health_report()
     assert rep["total"] == 7
     assert set(rep["adapters"].keys()) == _EXPECTED_ENGINES
+    # health_report 的字段是条件性的：核心字段恒在，隔离引擎额外带 isolation，
+    # 支持 health_detail 的适配器额外带 health_detail。只校验「核心必在 + 无未知字段」。
+    _CORE = {"live", "capabilities", "error", "isolated"}
+    _OPTIONAL = {"isolation", "health_detail"}
     for info in rep["adapters"].values():
-        assert set(info.keys()) == {"live", "capabilities", "error", "isolated"}
+        assert _CORE <= set(info.keys())
+        assert set(info.keys()) <= (_CORE | _OPTIONAL)
 
 
 def test_resolve_never_returns_dead_engine():
