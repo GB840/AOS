@@ -112,7 +112,7 @@ class FabricHub:
         # 探测时由 scripts/ipc_probe.py 通过 set_route_sim_us() 打开，
         # 用于测量「内核↔芯粒」这一跳的 IPC 开销是否 ≤5%（Day8-10 闸门）。
         self.route_sim_us: float = float(os.environ.get("ROUTE_SIM_US", "0") or "0")
-        for cls in (adapters or _ADAPTERS):
+        for cls in (adapters if adapters is not None else _ADAPTERS):
             try:
                 self._registry.register(cls())
             except Exception as e:  # noqa: BLE001 - 单适配器故障不拖垮枢纽
