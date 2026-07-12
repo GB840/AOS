@@ -28,7 +28,7 @@ _EXPECTED_ENGINES = {
     "mem0",
     "browser-use",
     "langfuse",
-    "duckduckgo",
+    "web-search",
     "agnes",
 }
 

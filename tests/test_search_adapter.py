@@ -1,7 +1,8 @@
-"""SearchAdapter（DuckDuckGo / ddgs）测试：免 key 真搜索接入 fabric。
+"""SearchAdapter 多源 fallback 测试：智谱联网优先 → DuckDuckGo 直连 → Jina 兜底。
 
-不真实联网（mock DDGS），只验证：能力注册、产出可被下游消费的 content 摘要、
-plan_bridge 把「搜索/查/找」路由到 web.search、缺 query 优雅降级。
+不真实联网（monkeypatch 各 _search_*），只验证：能力注册、产出可被下游消费的
+content 摘要、fallback 顺序（智谱挂则跳 DDG）、全失败优雅报错、plan_bridge 路由、
+hub 注册。
 """
 from __future__ import annotations
 
@@ -12,53 +13,83 @@ from core.fabric.capability import Capability
 from core.fabric.adapters import search_adapter as m
 
 
-class _FakeDDGS:
-    def __enter__(self):
-        return self
+def _zhipu_ok(self, query, n):
+    return {"content": f"{query} 智谱联网结果：晴 26度",
+            "query": query,
+            "results": [{"title": "天气", "url": "http://z", "body": "晴 26度"}],
+            "count": 1}
 
-    def __exit__(self, *a):
-        return False
 
-    def text(self, q, max_results=5, region="wt-wt"):
-        return [
-            {"title": f"{q} 结果1", "href": "http://e1", "body": "晴 26度"},
-            {"title": f"{q} 结果2", "href": "http://e2", "body": "夜间 15度"},
-        ]
+def _zhipu_fail(self, query, n):
+    raise RuntimeError("ZHIPU_API_KEY 未配置")
 
-    def news(self, *a, **k):
-        return []
+
+def _ddg_ok(self, query, n):
+    return {"content": f"{query} DDG结果", "query": query,
+            "results": [{"title": "r", "url": "http://d", "body": "晴"}], "count": 1}
+
+
+def _jina_ok(self, query, n):
+    return {"content": f"{query} jina结果", "query": query,
+            "results": [{"title": "j", "url": "http://j", "body": "晴"}], "count": 1}
 
 
 @pytest.fixture
-def fake_ddgs(monkeypatch):
-    monkeypatch.setattr(m, "DDGS", _FakeDDGS)
+def patch_all_ok(monkeypatch):
+    monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _zhipu_ok)
+    monkeypatch.setattr(m.SearchAdapter, "_search_ddg", _ddg_ok)
+    monkeypatch.setattr(m.SearchAdapter, "_search_jina", _jina_ok)
     yield
 
 
 def test_search_adapter_advertises_web_search():
     a = m.SearchAdapter()
     assert Capability.WEB_SEARCH in a.advertise_capabilities()
-    # health 反映 ddgs 是否可用（沙箱已装 → True）
     assert a.health() is True
 
 
-def test_search_adapter_returns_content_summary(fake_ddgs):
+def test_search_adapter_returns_content_summary(patch_all_ok):
     res = m.SearchAdapter().invoke(
         InvokeRequest(capability="web.search", payload={"query": "北京天气"})
     )
     assert res.ok is True
     assert "content" in res.data
-    assert "晴" in res.data["content"]          # 下游 media.image 经 in_from:previous 直接消费
+    assert "晴" in res.data["content"]
     assert res.data["query"] == "北京天气"
-    assert res.data["count"] == 2
+    assert res.data["engine"] == "zhipu"      # 智谱优先
+    assert res.data["count"] == 1
 
 
-def test_search_adapter_accepts_task_field(fake_ddgs):
+def test_search_adapter_accepts_task_field(patch_all_ok):
     res = m.SearchAdapter().invoke(
         InvokeRequest(capability="web.search", payload={"task": "上海温度"})
     )
     assert res.ok is True
     assert res.data["query"] == "上海温度"
+
+
+def test_search_adapter_fallback_to_ddg(monkeypatch):
+    monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _zhipu_fail)
+    monkeypatch.setattr(m.SearchAdapter, "_search_ddg", _ddg_ok)
+    monkeypatch.setattr(m.SearchAdapter, "_search_jina", _jina_ok)
+    res = m.SearchAdapter().invoke(
+        InvokeRequest(capability="web.search", payload={"query": "北京天气"})
+    )
+    assert res.ok is True
+    assert res.data["engine"] == "duckduckgo"   # 智谱挂 → 跳 DDG
+
+
+def test_search_adapter_all_fail(monkeypatch):
+    def _fail(self, q, n):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _fail)
+    monkeypatch.setattr(m.SearchAdapter, "_search_ddg", _fail)
+    monkeypatch.setattr(m.SearchAdapter, "_search_jina", _fail)
+    res = m.SearchAdapter().invoke(
+        InvokeRequest(capability="web.search", payload={"query": "x"})
+    )
+    assert res.ok is False
+    assert "所有搜索源均失败" in res.error
 
 
 def test_search_adapter_missing_query():
@@ -82,4 +113,4 @@ def test_fabric_hub_registers_search():
     from kernel.plugins.fabric_hub import FabricHub
 
     hub = FabricHub(adapters=(m.SearchAdapter,))
-    assert hub.resolve_engine("web.search") == "duckduckgo"
+    assert hub.resolve_engine("web.search") == "web-search"
