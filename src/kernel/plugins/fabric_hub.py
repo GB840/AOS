@@ -14,6 +14,8 @@ OSS 适配器（OpenClaw / AG2 / LiteLLM / Mem0 / ACI-Browser / Langfuse）登�
 from __future__ import annotations
 
 import logging
+import os
+import time
 from typing import Any, Dict, List, Optional
 
 from core.fabric import FabricRegistry
@@ -28,6 +30,20 @@ from core.fabric.adapters import (
 )
 
 _LOG = logging.getLogger("aos.fabric.hub")
+
+
+def _busy_wait(seconds: float) -> None:
+    """忙等指定秒数（微秒级精度）。
+
+    仅用于 IPC 开销探测（route_sim_us>0）模拟 Named Pipe 级延迟：
+    Windows 的 time.sleep() 量化粒度约 1ms，无法精确模拟 20μs，故用忙等。
+    生产环境 route_sim_us 恒为 0，此函数绝不触发。
+    """
+    if seconds <= 0:
+        return
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        pass
 
 # 顺序即注册顺序；新增引擎只需在此追加一行 + 在 core.fabric.adapters 落适配器。
 _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
@@ -46,12 +62,21 @@ class FabricHub:
     def __init__(self) -> None:
         self._registry = FabricRegistry()
         self._errors: Dict[str, str] = {}
+        # 模拟路由层延迟（μs）：默认 0（生产零影响）。
+        # 探测时由 scripts/ipc_probe.py 通过 set_route_sim_us() 打开，
+        # 用于测量「内核↔芯粒」这一跳的 IPC 开销是否 ≤5%（Day8-10 闸门）。
+        self.route_sim_us: float = float(os.environ.get("ROUTE_SIM_US", "0") or "0")
         for cls in _ADAPTERS:
             try:
                 self._registry.register(cls())
             except Exception as e:  # noqa: BLE001 - 单适配器故障不拖垮枢纽
                 self._errors[cls.__name__] = repr(e)
                 _LOG.warning("fabric 适配器注册失败 %s: %s", cls.__name__, e)
+
+    # ---- 模拟路由层（仅探测用，生产默认关闭） --------------------
+    def set_route_sim_us(self, micros: float) -> None:
+        """设置模拟路由延迟（微秒）。0 表示关闭。仅用于 IPC 开销探测。"""
+        self.route_sim_us = float(micros)
 
     # ---- 公共 API -------------------------------------------------
     def resolve_engine(self, capability: str) -> Optional[str]:
@@ -68,7 +93,13 @@ class FabricHub:
 
     def route(self, capability: str, payload: Dict[str, Any],
               trace_id: Optional[str] = None) -> Any:
-        """经能力路由把请求委派给首个 live 引擎；无 live 引擎返回失败结果。"""
+        """经能力路由把请求委派给首个 live 引擎；无 live 引擎返回失败结果。
+
+        若 route_sim_us>0，则在委派前 sleep 该微秒数，模拟内核↔芯粒这一跳的
+        IPC 延迟（Named Pipe ~20μs），供 ipc_probe 测量开销占比。
+        """
+        if self.route_sim_us:
+            _busy_wait(self.route_sim_us / 1_000_000.0)
         return self._registry.route(
             InvokeRequest(capability=capability, payload=payload, trace_id=trace_id)
         )

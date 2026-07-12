@@ -49,6 +49,11 @@ class Capability(str, Enum):
     EVOLUTION_GOVERNANCE = "system.evolution"    # coordinates & safely governs other agents
     ECONOMY = "system.economy"                   # agent capability marketplace / exchange
 
+    # Probe-only: synthetic task used by scripts/ipc_probe.py to measure the
+    # kernel<->die IPC hop overhead (Day 8-10 gate). Not advertised by any
+    # real engine, so route() isolates it to the benchmark adapter.
+    BENCH_PING = "bench.ping"
+
 
 # Declarative, swappable map: the four mandated real-OSS engines -> capabilities
 # they are known to provide. EDIT / EXTEND FREELY. This is data, not architecture.
