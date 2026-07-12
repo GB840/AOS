@@ -67,6 +67,10 @@ class OrchestrationChiplet(BaseAgentAdapter):
             return InvokeResult(ok=False, error="orchestrator: 缺少 steps[] 流水线定义")
         initial = spec.get("initial") or {}
         context = dict(initial)
+        # 最近一次「成功步骤」的输出。用于校验 in_from:"previous" 的依赖链：
+        # 若此前没有任何步骤成功产出，说明上游已断，本步不能再拿 stale/initial
+        # 冒充输入去跑——否则会出现「图生成成功但根本没真去搜索」的语义空转。
+        last_success_out: Optional[Dict[str, Any]] = None
         trace: list[Dict[str, Any]] = []
         ok_steps = 0
         failed_steps = 0
@@ -82,10 +86,17 @@ class OrchestrationChiplet(BaseAgentAdapter):
             if "in" in step:
                 payload = step["in"]
             elif step.get("in_from") == "previous":
-                payload = context
+                if last_success_out is None:
+                    # 上游从未成功产出 → 依赖断裂，本步无法获取真实输入，判为依赖失败
+                    failed_steps += 1
+                    trace.append({"step": idx, "capability": _as_str(cap),
+                                  "ok": False,
+                                  "error": "依赖的上游步骤尚未成功产出，本步无法获取输入（语义空转已阻止）"})
+                    continue
+                payload = last_success_out
             elif step.get("in_from") == "initial":
                 field = step.get("field")
-                payload = {field: context[field]} if field else dict(initial)
+                payload = {field: initial.get(field)} if field else dict(initial)
             else:
                 payload = {}
             # 委派给下游芯粒（经同一路由层，故障隔离同样生效）
@@ -98,6 +109,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
                 continue
             step_out = res.data if isinstance(res, InvokeResult) else res
             context = step_out if isinstance(step_out, dict) else {"result": step_out}
+            last_success_out = context  # 记录成功输出，供后续 in_from:previous 依赖
             ok_steps += 1
             trace.append({"step": idx, "capability": _as_str(cap),
                           "ok": True, "out": _brief(step_out)})

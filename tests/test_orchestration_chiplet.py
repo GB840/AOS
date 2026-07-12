@@ -44,6 +44,19 @@ class _Incrementer(BaseAgentAdapter):
         return InvokeResult(ok=True, data={"x": x + 1})
 
 
+class _Failer(BaseAgentAdapter):
+    engine_id = "failer"
+
+    def advertise_capabilities(self):
+        return ["bench.fail"]
+
+    def health(self):
+        return True
+
+    def invoke(self, req: InvokeRequest) -> InvokeResult:
+        return InvokeResult(ok=False, error="boom")
+
+
 def _hub_with_orchestrator():
     hub = FabricHub(adapters=(_Doubler, _Incrementer))
     orch_id = hub.add_orchestrator()
@@ -94,3 +107,25 @@ def test_pipeline_tolerates_step_failure_and_continues():
     assert res.data["trace"][0]["ok"] is True
     assert res.data["trace"][1]["ok"] is False
     assert "no live provider" in (res.data["trace"][1]["error"] or "")
+
+
+def test_pipeline_blocks_dependent_step_when_upstream_failed():
+    """修复语义空转：上游从未成功产出时，in_from:"previous" 的下游步必须判为
+    依赖失败，不能拿 stale/initial 冒充输入去跑（否则出现『图生成成功但没真去
+    搜索』的假成功）。"""
+    hub = FabricHub(adapters=(_Failer,))
+    hub.add_orchestrator()
+    spec = {
+        "initial": {"task": "搜索天气并画示意图"},
+        "steps": [
+            {"capability": "bench.fail", "in": {"x": 1}},
+            {"capability": "bench.fail", "in_from": "previous"},
+        ],
+    }
+    res = hub.route("system.workflow", spec)
+    # 没有任何步骤成功 → 整条失败，不应有假成功
+    assert res.ok is False
+    assert res.data["ok_steps"] == 0
+    assert res.data["failed_steps"] == 2
+    # step1 必须被标记为依赖失败，而非拿着 stale input 冒充当成功
+    assert "依赖" in (res.data["trace"][1]["error"] or "")
