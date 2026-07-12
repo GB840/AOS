@@ -28,6 +28,7 @@ from core.fabric.adapters import (
     Mem0Adapter,
     OpenClawAdapter,
 )
+from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 
 _LOG = logging.getLogger("aos.fabric.hub")
 
@@ -139,6 +140,17 @@ class FabricHub:
         """返回该芯粒最近一次 invoke 失败的 perf_counter 时间戳（无则 None）。
         供崩溃恢复耗时度量使用。"""
         return self._failures.get(eid)
+
+    def add_orchestrator(self) -> str:
+        """注册「编排芯粒」(system.workflow) 为用户态芯粒。
+
+        关键：编排引擎本身是普通 fabric 适配器，与 litellm/mem0 平级，
+        注册进枢纽而非内核——证明工作流堆叠是「封装内容」而非「封装基座」。
+        它复用本枢纽的 route() 作为路由层，不另造调度。
+        """
+        orch = OrchestrationChiplet(route_fn=self.route)
+        self._registry.register(orch)
+        return orch.engine_id
 
     def health_report(self) -> Dict[str, Any]:
         """诚实通电自检：total / live / 每个引擎状态 / 注册错误。

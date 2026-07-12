@@ -54,6 +54,7 @@ class Capability(str, Enum):
     # real engine, so route() isolates it to the benchmark adapter.
     BENCH_PING = "bench.ping"
     BENCH_ISOLATE = "bench.isolate"    # 崩溃隔离专用合成能力（tests + gate_check）
+    WORKFLOW_EXECUTE = "system.workflow"  # 编排芯粒：把多芯粒串成流水线（Day15-21）
 
 
 # Declarative, swappable map: the four mandated real-OSS engines -> capabilities

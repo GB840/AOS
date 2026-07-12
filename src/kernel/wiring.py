@@ -96,7 +96,11 @@ def build_default_kernel(default_grant: bool = False) -> AOSKernel:
     # 2.5) fabric 能力枢纽：把六个真实 OSS 适配器登记为「按能力路由」的单一可信源，
     #      并暴露诚实的通电自检（MASTER_PLAN 阶段 1.2）。内核零依赖，故仅在此接缝构造。
     try:
-        kernel.set_fabric_hub(FabricHub())
+        hub = FabricHub()
+        # 编排芯粒作为用户态芯粒注册进枢纽（非内核），复用枢纽路由层把多芯粒
+        # 串成流水线（Day15-21）。内核只做路由/隔离/资源调度，编排逻辑全外置。
+        hub.add_orchestrator()
+        kernel.set_fabric_hub(hub)
     except Exception as e:  # noqa: BLE001
         print(f"[wiring] fabric 能力枢纽构建失败: {e}")
 
