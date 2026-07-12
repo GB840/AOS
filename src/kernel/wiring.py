@@ -27,6 +27,15 @@ _OSS_ADAPTERS = {
     "langfuse": "core.fabric.adapters.observability_langfuse_adapter:LangfuseAdapter",
 }
 
+# 默认隔离进独立子进程的「重型 / 多模态」引擎（B 路线生产落点）。
+# 这些适配器要么调外部 API（可能 hang），要么拉起重进程（可能 crash 宿主），
+# 必须放进子进程，崩溃不传染内核；recover 走热备切换（毫秒级，过 3s 闸门）。
+# 其余轻量适配器留在进程内。按需增删即调整默认隔离面（注释行展示可选项）。
+_ISOLATED_BY_DEFAULT: Dict[str, str] = {
+    "agnes": "core.fabric.adapters.agnes_adapter:AgnesAdapter",
+    # "ag2": "core.fabric.adapters.ag2_adapter:AG2Adapter",   # 重型 agent 框架，需要时取消注释
+}
+
 
 def _load_oss_adapter(spec: str):
     """按 'module:Class' 延迟导入一个 OSS 适配器，失败返回 None。"""
@@ -40,7 +49,30 @@ def _load_oss_adapter(spec: str):
         return None
 
 
-def build_default_kernel(default_grant: bool = False) -> AOSKernel:
+def build_fabric_hub(isolate_heavy: bool = True) -> "FabricHub":
+    """构造并配置 fabric 能力枢纽。
+
+    - 编排芯粒作为用户态芯粒注册进枢纽（非内核），复用枢纽路由层串流水线；
+    - isolate_heavy=True 时，把 _ISOLATED_BY_DEFAULT 里的重型/多模态引擎
+      隔离进独立子进程（FabricHub.add_isolated_engine），崩溃隔离不传染内核。
+      每个引擎单独 try/except：隔离登记失败退回进程内，不拖垮枢纽。
+    """
+    hub = FabricHub()
+    hub.add_orchestrator()
+    if isolate_heavy:
+        for eid, spec in _ISOLATED_BY_DEFAULT.items():
+            cls = _load_oss_adapter(spec)
+            if cls is None:
+                continue
+            try:
+                hub.add_isolated_engine(eid, cls)
+            except Exception as e:  # noqa: BLE001
+                print(f"[wiring] {eid} 隔离登记失败（退回进程内）: {e}")
+    return hub
+
+
+def build_default_kernel(default_grant: bool = False,
+                          isolate_heavy: bool = True) -> AOSKernel:
     """组装默认内核：登记模型网关 + 四个 OSS 运行时 + MCP 技能总线。
 
     返回的内核已可用：register_agent / send_message / check_permission /
@@ -104,13 +136,11 @@ def build_default_kernel(default_grant: bool = False) -> AOSKernel:
         except Exception as e:
             print(f"[wiring] {engine} 运行时登记失败: {e}")
 
-    # 2.5) fabric 能力枢纽：把六个真实 OSS 适配器登记为「按能力路由」的单一可信源，
+    # 2.5) fabric 能力枢纽：把真实 OSS 适配器登记为「按能力路由」的单一可信源，
     #      并暴露诚实的通电自检（MASTER_PLAN 阶段 1.2）。内核零依赖，故仅在此接缝构造。
+    #      重型/多模态引擎（默认 Agnes）按 B 路线收口进独立子进程，崩溃不传染内核。
     try:
-        hub = FabricHub()
-        # 编排芯粒作为用户态芯粒注册进枢纽（非内核），复用枢纽路由层把多芯粒
-        # 串成流水线（Day15-21）。内核只做路由/隔离/资源调度，编排逻辑全外置。
-        hub.add_orchestrator()
+        hub = build_fabric_hub(isolate_heavy=isolate_heavy)
         kernel.set_fabric_hub(hub)
     except Exception as e:  # noqa: BLE001
         print(f"[wiring] fabric 能力枢纽构建失败: {e}")
@@ -166,4 +196,4 @@ def _inject_kernel_into_brain(kernel: "AOSKernel") -> None:
             print(f"[wiring] brain 网关注入跳过: {e!r}")
 
 
-__all__ = ["build_default_kernel", "AOSKernel"]
+__all__ = ["build_default_kernel", "build_fabric_hub", "AOSKernel"]

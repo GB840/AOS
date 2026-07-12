@@ -10,7 +10,7 @@ This adapter is THIN: it translates AOS capability calls into Agnes HTTP
 calls. AOS never re-implements a model brain - it delegates to the real
 provider, honouring the user's hard rule: real OSS / real APIs + AOS on top.
 
-Config (from .env, injected by start_all.sh / fabric_scorecard_env.py):
+Config (from .env, injected by start_all.sh / fabric_scorecard.py):
   AGNES_API_KEY      (required)
   AGNES_BASE_URL     default https://apihub.agnes-ai.com/v1
   AGNES_VIDEO_RESULT_URL  default {host}/agnesapi  (root-relative per Agnes docs)
