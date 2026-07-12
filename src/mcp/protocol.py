@@ -280,6 +280,21 @@ class MCPProtocol:
             ),
             self._aos_invoke_engine_handler,
         )
+        self.register_tool(
+            MCPTool(
+                name="aos_run_task",
+                description="自主执行闭环：把一句话任务交给 AOS 规划→编排执行。优先用 AG2/cognition.planning 产出计划并解析成 steps，失败降级本地 heuristic；再经 OrchestrationChiplet 逐跳调度隔离引擎。对应 FabricHub.run_task()。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": "一句话任务，如『搜索周末天气并画一张示意图』"},
+                        "planner": {"type": "string", "description": "planner 模式：ag2(默认,尝试用规划引擎,失败降级 heuristic) / heuristic(纯本地,不调外部 LLM)", "default": "ag2"},
+                    },
+                    "required": ["task"],
+                },
+            ),
+            self._aos_run_task_handler,
+        )
 
 
     def _openclaw_handler(self, params: Dict[str, Any]) -> Any:
@@ -374,6 +389,18 @@ class MCPProtocol:
             hub = _get_hub()
             res = hub.invoke_engine(engine_id, capability, payload)
             return {"ok": res.ok, "data": res.data, "error": res.error}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+
+    def _aos_run_task_handler(self, params: Dict[str, Any]) -> Any:
+        """自主执行闭环（对应 FabricHub.run_task）。"""
+        task = params.get("task")
+        planner = params.get("planner") or "ag2"
+        if not task:
+            return {"ok": False, "error": "task 参数必填"}
+        try:
+            hub = _get_hub()
+            return hub.run_task(task, planner=planner)
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": str(e)}
 

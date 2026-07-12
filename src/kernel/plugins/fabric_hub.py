@@ -29,8 +29,10 @@ from core.fabric.adapters import (
     Mem0Adapter,
     OpenClawAdapter,
 )
+from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
 from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
+from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
 
 _LOG = logging.getLogger("aos.fabric.hub")
 
@@ -316,3 +318,70 @@ class FabricHub:
                 "last_recover_ms": host.last_recover_ms,
             }
         return out
+
+    def _known_capabilities(self) -> List[str]:
+        """展开当前枢纽通电引擎声明的能力值列表（去重、排序）。
+
+        供 plan_bridge 仅把步骤映射到『实际通电的能力』，避免编排到死引擎。
+        """
+        caps: set[str] = set()
+        for eid, adapter in self._registry._adapters.items():
+            try:
+                for c in adapter.advertise_capabilities():
+                    caps.add(c.value if hasattr(c, "value") else str(c))
+            except Exception:  # noqa: BLE001
+                continue
+        return sorted(caps)
+
+    def run_task(self, task: str, planner: str = "ag2") -> Dict[str, Any]:
+        """「think→do」自主执行闭环：规划 → 解析成 steps → 编排芯粒逐跳执行。
+
+        这是把路由器变成 agent 的关键一跃（视频观点的落地）：
+          - planner != "heuristic"：优先用 resolve_engine("cognition.planning")
+            找到的规划引擎（默认即 AG2 group.chat）产出文本计划，再桥接成 steps；
+          - 若规划引擎不可用（无 key / 未安装 / 调用失败），**透明降级**到本地
+            heuristic planner（关键词语义切分），保证端到端仍可跑；
+          - 执行阶段复用 OrchestrationChiplet（system.workflow），经统一
+            route() 逐跳委派，故障隔离同样生效（任一芯粒崩溃不传染整条流水线）。
+
+        返回 {task, planner, plan, steps, execution}。
+
+        注意：逻辑上分工（每步不同 capability）被保留；物理上仍是内核经统一
+        route() 调度——不是自治多 Agent，正是视频反对的那类反模式我们没有。
+        """
+        caps = self._known_capabilities()
+        plan_text: Optional[str] = None
+        steps: List[Dict[str, Any]] = []
+        used_planner = planner
+        planner_eid: Optional[str] = None
+        if planner != "heuristic":
+            planner_eid = self.resolve_engine(Capability.PLANNING.value)
+            if planner_eid:
+                res = self.invoke_engine(
+                    planner_eid, Capability.PLANNING.value, {"topic": task}
+                )
+                if isinstance(res, InvokeResult) and res.ok and res.data:
+                    plan_text = (res.data.get("plan") or "").strip() or None
+                    if plan_text:
+                        steps = parse_plan_to_steps(plan_text, caps)
+        if not steps:
+            steps = heuristic_plan(task, caps)
+            used_planner = "heuristic"
+        else:
+            used_planner = planner_eid or planner
+        # 执行阶段：复用统一路由层把 steps 逐跳委派给下游芯粒。
+        exec_res = self.route(
+            Capability.WORKFLOW_EXECUTE.value,
+            {"initial": {"task": task}, "steps": steps},
+        )
+        if isinstance(exec_res, InvokeResult):
+            execution = exec_res.data if exec_res.ok else {"error": exec_res.error}
+        else:
+            execution = exec_res
+        return {
+            "task": task,
+            "planner": used_planner,
+            "plan": plan_text,
+            "steps": steps,
+            "execution": execution,
+        }
