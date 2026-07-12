@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import os
+
 from .kernel import AOSKernel
 from .plugins import FabricAgentRuntime, FabricHub, LiteLLMModelGateway, MCPSkillBus
 
@@ -67,6 +69,15 @@ def build_default_kernel(default_grant: bool = False) -> AOSKernel:
             gateways.append(cloud)
     except Exception as e:
         print(f"[wiring] cloud 网关跳过: {e}")
+
+    # 1.5) Agnes AI 多模态网关（仅配置了 AGNES_API_KEY 时纳入）。
+    #      经 model_id "agnes/agnes-2.0-flash" 直达；缺失 key 时跳过，不影响内核。
+    try:
+        if os.environ.get("AGNES_API_KEY"):
+            from .plugins.agnes_gateway import AgnesModelGateway
+            gateways.append(AgnesModelGateway())
+    except Exception as e:
+        print(f"[wiring] agnes 网关登记失败: {e}")
 
     try:
         if len(gateways) > 1:

@@ -32,6 +32,10 @@ class Capability(str, Enum):
     # Inference plane (the "fuel" the behaviour engines run on)
     LLM_GATEWAY = "inference.llm"              # unified LLM access via LiteLLM
 
+    # Multimodal generation (Agnes AI / OpenAI-compatible media planes)
+    MEDIA_IMAGE = "media.image"                # text-to-image / image-to-image
+    MEDIA_VIDEO = "media.video"                # text-to-video / image-to-video (async)
+
     # Memory
     MEMORY_PERSISTENT = "memory.persistent"
     MEMORY_EPISODIC = "memory.episodic"
@@ -76,5 +80,13 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
         Capability.PLANNING,
         Capability.CODE_EXECUTION,
         Capability.MEMORY_SEMANTIC,
+    ],
+    # Agnes AI: OpenAI-compatible multimodal hub (text / image / video).
+    # Not one of the four mandated OSS engines - a cloud media plane AOS can
+    # route to by capability when configured with AGNES_API_KEY.
+    "agnes": [
+        Capability.LLM_GATEWAY,
+        Capability.MEDIA_IMAGE,
+        Capability.MEDIA_VIDEO,
     ],
 }

@@ -22,6 +22,7 @@ from core.fabric import FabricRegistry
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from core.fabric.adapters import (
     AG2Adapter,
+    AgnesAdapter,
     BrowserUseAdapter,
     LangfuseAdapter,
     LiteLLMAdapter,
@@ -54,6 +55,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
     Mem0Adapter,
     BrowserUseAdapter,
     LangfuseAdapter,
+    AgnesAdapter,   # OpenAI-compatible 多模态平面：文本/图像/视频（需 AGNES_API_KEY）
 )
 
 

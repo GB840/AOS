@@ -18,6 +18,8 @@ _KNOWN_CAPS = (
     "group.orchestration",
     "action.aci",
     "channel.access",
+    "media.image",
+    "media.video",
 )
 _EXPECTED_ENGINES = {
     "openclaw",
@@ -26,13 +28,14 @@ _EXPECTED_ENGINES = {
     "mem0",
     "browser-use",
     "langfuse",
+    "agnes",
 }
 
 
 def test_registers_all_six_and_reports_total():
     hub = FabricHub()
     rep = hub.health_report()
-    assert rep["total"] == 6
+    assert rep["total"] == 7
     assert set(rep["adapters"].keys()) == _EXPECTED_ENGINES
     for info in rep["adapters"].values():
         assert set(info.keys()) == {"live", "capabilities", "error"}
@@ -75,7 +78,7 @@ def test_kernel_delegates_resolve_engine_to_hub():
 
     k.set_fabric_hub(FabricHub())
     rep = k.fabric_health()
-    assert rep is not None and rep["total"] == 6
+    assert rep is not None and rep["total"] == 7
 
     hub = k.fabric_hub
     for cap in _KNOWN_CAPS:
