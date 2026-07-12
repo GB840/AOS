@@ -39,6 +39,39 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
     ("reply", "channel.access"),
     ("chat", "channel.access"),
     ("post", "channel.access"),
+    # 中文动作 / 意图（动词）优先，与英文动词同组、同优先级约定
+    ("搜索", "action.aci"),
+    ("查", "action.aci"),
+    ("找", "action.aci"),
+    ("浏览", "action.aci"),
+    ("网页", "action.aci"),
+    ("代码", "action.code_exec"),
+    ("执行", "action.code_exec"),
+    ("运行", "action.code_exec"),
+    ("脚本", "action.code_exec"),
+    ("发送", "channel.access"),
+    ("消息", "channel.access"),
+    ("通知", "channel.access"),
+    ("回复", "channel.access"),
+    ("聊天", "channel.access"),
+    ("发布", "channel.access"),
+    ("记住", "memory.semantic"),
+    ("存储", "memory.semantic"),
+    ("保存", "memory.semantic"),
+    ("知识", "memory.knowledge"),
+    ("记忆", "memory.semantic"),
+    ("回忆", "memory.semantic"),
+    ("推理", "cognition.reasoning"),
+    ("思考", "cognition.reasoning"),
+    ("分析", "cognition.reasoning"),
+    ("规划", "cognition.planning"),
+    ("总结", "inference.llm"),
+    ("写", "inference.llm"),
+    ("起草", "inference.llm"),
+    ("文本", "inference.llm"),
+    ("回答", "inference.llm"),
+    ("解释", "inference.llm"),
+    ("翻译", "inference.llm"),
     ("remember", "memory.semantic"),
     ("store", "memory.semantic"),
     ("save", "memory.semantic"),
@@ -65,6 +98,14 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
     ("video", "media.video"),
     ("movie", "media.video"),
     ("clip", "media.video"),
+    # 中文媒体类型名词（生成意图）放最后，与英文媒体同组
+    ("图片", "media.image"),
+    ("图", "media.image"),
+    ("画", "media.image"),
+    ("绘制", "media.image"),
+    ("照片", "media.image"),
+    ("视频", "media.video"),
+    ("影片", "media.video"),
 ]
 
 # 兜底：没有任何关键词命中时映射到的通用能力（需当前通电）。
@@ -126,9 +167,11 @@ def heuristic_plan(task: str, available_caps: List[str]) -> List[Dict[str, Any]]
     当 AG2 不可用（无 key / 未安装 / 调用失败）时作为降级 planner，保证
     run_task 端到端仍可跑通——证明「think→do」闭环的 machinery 不依赖外部 LLM。
     """
-    parts = re.split(r"(?:,\s*|\bthen\b|\band then\b|\bafter that\b|\bnext\b)",
-                     task, flags=re.I)
-    parts = [p.strip(" .;") for p in parts if len(p.strip()) > 3]
+    parts = re.split(
+        r"(?:,\s*|\s*，\s*|\s*、\s*|\bthen\b|\band then\b|\bafter that\b|\bnext\b"
+        r"|并|然后|接着|之后再|随后)",
+        task, flags=re.I)
+    parts = [p.strip(" .;") for p in parts if len(p.strip()) > 1]
     if not parts:
         parts = [task]
     steps: List[Dict[str, Any]] = []
