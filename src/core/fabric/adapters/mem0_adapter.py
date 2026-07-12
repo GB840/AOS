@@ -27,6 +27,47 @@ def _import_mem0():
     return Memory
 
 
+def build_mem0_config() -> dict | None:
+    """Best-effort 构造 mem0 配置：优先复用仓库里已有的 OpenAI 兼容 LLM key
+    （SiliconFlow / Zhipu / Unified），配一个内存向量库，让 mem0 在「有 key 即
+    真持久化、无 key 即优雅降级」两种环境下都不崩。
+
+    返回 None 表示没有可用 key —— 调用方据此走降级（memory facade 返回空/False）。
+    注意：本函数只决定「是否有可能初始化」，真正能否连通由 mem0 在 invoke 时决定；
+    任何异常都在上层被隔离，不会拖垮枢纽。
+    """
+    import os
+
+    candidates = [
+        # (env 名, OpenAI 兼容 base_url, 默认模型)
+        ("SILICONFLOW_API_KEY", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
+        ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+        ("UNIFIED_API_KEY", None, "gpt-4o-mini"),
+    ]
+    for envk, base, model in candidates:
+        key = os.environ.get(envk)
+        if not key:
+            continue
+        llm_cfg: dict[str, Any] = {
+            "provider": "openai",
+            "config": {"model": model, "openai_api_key": key},
+        }
+        emb_cfg: dict[str, Any] = {
+            "provider": "openai",
+            "config": {"model": "text-embedding-3-small", "openai_api_key": key},
+        }
+        if base:
+            llm_cfg["config"]["openai_base_url"] = base
+            emb_cfg["config"]["openai_base_url"] = base
+        return {
+            "llm": llm_cfg,
+            "embedder": emb_cfg,
+            "vector_store": {"provider": "memory"},
+            "history_db_path": ":memory:",
+        }
+    return None
+
+
 class Mem0Adapter(BaseAgentAdapter):
     """Thin wrapper over the real Mem0 agent-memory (the "memory" plane)."""
 

@@ -153,3 +153,82 @@ def test_heuristic_plan_splits_on_conjunction():
     assert len(steps) == 2
     assert steps[0]["capability"] == "action.aci"
     assert steps[1]["capability"] == "memory.semantic"
+
+
+class _FailBench(BaseAgentAdapter):
+    """提供 ACI 但 invoke 必失败，用于验证编排芯粒单步容错（C）。"""
+    engine_id = "fail_bench"
+
+    def advertise_capabilities(self):
+        return [Capability.ACI]
+
+    def health(self) -> bool:
+        return True
+
+    def invoke(self, req: InvokeRequest) -> InvokeResult:
+        return InvokeResult(ok=False, error="simulated engine failure")
+
+
+class _MemBench(BaseAgentAdapter):
+    """提供 MEMORY_SEMANTIC 的记忆 bench，记录写入，用于验证 B 记忆门面。"""
+    engine_id = "mem_bench"
+    calls: list = []  # 类级记录，测试开头清空
+
+    def advertise_capabilities(self):
+        return [Capability.MEMORY_SEMANTIC]
+
+    def health(self) -> bool:
+        return True
+
+    def invoke(self, req: InvokeRequest) -> InvokeResult:
+        action = req.payload.get("action", "search")
+        if action == "add":
+            _MemBench.calls.append(req.payload.get("text", ""))
+            return InvokeResult(ok=True, data={"result": {"id": "m1"}})
+        if action == "search":
+            return InvokeResult(ok=True, data={"result": [{"memory": "prior"}]})
+        return InvokeResult(ok=False, error=f"bad action {action}")
+
+
+def test_orchestrator_continues_after_step_failure():
+    # C：单步失败不中断整条流水线，继续跑后续步，逐条报状态
+    hub = _build(_FailBench, _ImageBench)  # action.aci 必挂，media.image 正常
+    out = hub.run_task("search then draw", planner="heuristic")
+    exec_data = out["execution"]
+    assert exec_data["ok_steps"] == 1
+    assert exec_data["failed_steps"] == 1
+    assert len(exec_data["trace"]) == 2
+    assert exec_data["trace"][0]["ok"] is False
+    assert exec_data["trace"][0]["capability"] == "action.aci"
+    assert exec_data["trace"][1]["ok"] is True
+    assert exec_data["trace"][1]["capability"] == "media.image"
+    # 整体仍 ok（有步成功），且 final 取最后成功输出
+    assert out["execution"]["ok_steps"] >= 1
+
+
+def test_memory_facade_routes_to_engine():
+    # B：hub.memory_store / memory_recall 经 fabric 路由到记忆引擎
+    _MemBench.calls.clear()
+    hub = _build(_MemBench)
+    assert hub.memory_store("用户喜欢红色") is True
+    assert len(_MemBench.calls) == 1
+    recalled = hub.memory_recall("用户偏好")
+    assert isinstance(recalled, list) and len(recalled) == 1
+
+
+def test_run_task_persists_memory_after_execution():
+    # B：run_task 执行后会把任务结果写入记忆（best-effort）
+    _MemBench.calls.clear()
+    hub = _build(_MemBench, _ImageBench)
+    out = hub.run_task("画一张图", planner="heuristic")
+    # 执行前 recall 命中（非空）→ initial 注入了 memory；执行后 store 了一次
+    assert out["memory"]["recalled"] >= 1
+    assert out["memory"]["stored"] is True
+    assert any("task" in c for c in _MemBench.calls)
+
+
+def test_memory_facade_graceful_without_engine():
+    # B：无记忆引擎时门面干净降级（不抛、返回空/False）
+    hub = _build(_SearchBench, _ImageBench)  # 无 MEMORY_SEMANTIC 引擎
+    assert hub.memory_recall("anything") == []
+    assert hub.memory_store("anything") is False

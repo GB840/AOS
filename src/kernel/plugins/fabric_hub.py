@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import time
 from typing import Any, Dict, List, Optional
 
@@ -120,7 +121,14 @@ class FabricHub:
         self.route_sim_us: float = float(os.environ.get("ROUTE_SIM_US", "0") or "0")
         for cls in (adapters if adapters is not None else _ADAPTERS):
             try:
-                self._registry.register(cls())
+                # mem0 若存在可用 LLM key 则注入 best-effort 配置（否则用默认，
+                # invoke 时若无 key 会优雅失败，由记忆门面降级）。
+                if cls is Mem0Adapter:
+                    from core.fabric.adapters.mem0_adapter import build_mem0_config
+                    inst = cls(config=build_mem0_config())
+                else:
+                    inst = cls()
+                self._registry.register(inst)
             except Exception as e:  # noqa: BLE001 - 单适配器故障不拖垮枢纽
                 self._errors[cls.__name__] = repr(e)
                 _LOG.warning("fabric 适配器注册失败 %s: %s", cls.__name__, e)
@@ -333,6 +341,43 @@ class FabricHub:
                 continue
         return sorted(caps)
 
+    # ---- 记忆门面（B 路线：把 mem0 接成 hub 会话/长期记忆） ----------
+    def memory_recall(self, query: str, user_id: str = "default",
+                      **opts) -> list:
+        """经 fabric 路由召回记忆（memory.semantic）。
+
+        无通电记忆引擎 / 引擎调用失败 → 返回空列表（绝不抛，不拖垮调用方）。
+        这是「任务间记住偏好」的读取端。
+        """
+        eid = self.resolve_engine(Capability.MEMORY_SEMANTIC.value)
+        if not eid:
+            return []
+        res = self.invoke_engine(
+            eid, Capability.MEMORY_SEMANTIC.value,
+            {"action": "search", "query": query,
+             "opts": {"user_id": user_id, **opts}},
+        )
+        if isinstance(res, InvokeResult) and res.ok:
+            return (res.data or {}).get("result") or []
+        return []
+
+    def memory_store(self, text: str, user_id: str = "default",
+                     **opts) -> bool:
+        """经 fabric 路由持久化记忆（memory.semantic）。
+
+        无通电记忆引擎 / 引擎调用失败（如缺 LLM key）→ 干净返回 False 不抛。
+        这是「任务间记住偏好」的写入端。
+        """
+        eid = self.resolve_engine(Capability.MEMORY_SEMANTIC.value)
+        if not eid:
+            return False
+        res = self.invoke_engine(
+            eid, Capability.MEMORY_SEMANTIC.value,
+            {"action": "add", "text": text,
+             "opts": {"user_id": user_id, **opts}},
+        )
+        return isinstance(res, InvokeResult) and res.ok
+
     def run_task(self, task: str, planner: str = "ag2") -> Dict[str, Any]:
         """「think→do」自主执行闭环：规划 → 解析成 steps → 编排芯粒逐跳执行。
 
@@ -350,6 +395,12 @@ class FabricHub:
         route() 调度——不是自治多 Agent，正是视频反对的那类反模式我们没有。
         """
         caps = self._known_capabilities()
+        # B 路线记忆：执行前召回与该任务相关的历史记忆，注入流水线初始上下文
+        # （下游步骤可用 in_from:"initial"/field 取用；无记忆引擎则空）。
+        recalled = self.memory_recall(task)
+        initial: Dict[str, Any] = {"task": task}
+        if recalled:
+            initial["memory"] = recalled
         plan_text: Optional[str] = None
         steps: List[Dict[str, Any]] = []
         used_planner = planner
@@ -372,16 +423,32 @@ class FabricHub:
         # 执行阶段：复用统一路由层把 steps 逐跳委派给下游芯粒。
         exec_res = self.route(
             Capability.WORKFLOW_EXECUTE.value,
-            {"initial": {"task": task}, "steps": steps},
+            {"initial": initial, "steps": steps},
         )
         if isinstance(exec_res, InvokeResult):
-            execution = exec_res.data if exec_res.ok else {"error": exec_res.error}
+            # 全失败时也保留 trace（执行细节），不只留 error 字符串。
+            execution = (exec_res.data if exec_res.ok
+                         else {"error": exec_res.error, **(exec_res.data or {})})
         else:
             execution = exec_res
+        # B 路线记忆：执行后把本次任务结果持久化（best-effort，失败不抛）。
+        stored = False
+        try:
+            summary = json.dumps(
+                {"task": task, "planner": used_planner,
+                 "ok_steps": (execution or {}).get("ok_steps"),
+                 "failed_steps": (execution or {}).get("failed_steps")},
+                ensure_ascii=False,
+            )
+            stored = self.memory_store(f"[task] {summary}", user_id="default")
+        except Exception:  # noqa: BLE001 - 记忆写入失败绝不拖垮主流程
+            stored = False
         return {
             "task": task,
             "planner": used_planner,
             "plan": plan_text,
             "steps": steps,
             "execution": execution,
+            "memory": {"recalled": len(recalled) if recalled else 0,
+                       "stored": stored},
         }

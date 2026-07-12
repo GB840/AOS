@@ -68,11 +68,16 @@ class OrchestrationChiplet(BaseAgentAdapter):
         initial = spec.get("initial") or {}
         context = dict(initial)
         trace: list[Dict[str, Any]] = []
+        ok_steps = 0
+        failed_steps = 0
 
         for idx, step in enumerate(steps):
             cap = step.get("capability")
             if not cap:
-                return InvokeResult(ok=False, error=f"orchestrator: 步骤#{idx} 缺 capability")
+                failed_steps += 1
+                trace.append({"step": idx, "capability": None,
+                              "ok": False, "error": "缺 capability"})
+                continue
             # 解析本步入参
             if "in" in step:
                 payload = step["in"]
@@ -86,17 +91,27 @@ class OrchestrationChiplet(BaseAgentAdapter):
             # 委派给下游芯粒（经同一路由层，故障隔离同样生效）
             res = self._route_fn(_as_str(cap), payload)
             if isinstance(res, InvokeResult) and not res.ok:
-                return InvokeResult(
-                    ok=False,
-                    error=f"orchestrator: 步骤#{idx}({cap}) 失败: {res.error}",
-                )
+                # 单步容错：记录失败、保留上一次成功输出作为后续入参、继续跑
+                failed_steps += 1
+                trace.append({"step": idx, "capability": _as_str(cap),
+                              "ok": False, "error": res.error})
+                continue
             step_out = res.data if isinstance(res, InvokeResult) else res
             context = step_out if isinstance(step_out, dict) else {"result": step_out}
-            trace.append({"step": idx, "capability": _as_str(cap), "out": _brief(step_out)})
+            ok_steps += 1
+            trace.append({"step": idx, "capability": _as_str(cap),
+                          "ok": True, "out": _brief(step_out)})
 
+        if ok_steps == 0:
+            return InvokeResult(
+                ok=False,
+                error="orchestrator: 所有步骤均失败（见 trace）",
+                data={"ok_steps": 0, "failed_steps": failed_steps, "trace": trace},
+            )
         return InvokeResult(
             ok=True,
-            data={"ok_steps": len(steps), "final": context, "trace": trace},
+            data={"ok_steps": ok_steps, "failed_steps": failed_steps,
+                  "final": context, "trace": trace},
         )
 
 
