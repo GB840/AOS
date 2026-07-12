@@ -55,19 +55,34 @@ def build_fabric_hub(isolate_heavy: bool = True) -> "FabricHub":
     - 编排芯粒作为用户态芯粒注册进枢纽（非内核），复用枢纽路由层串流水线；
     - isolate_heavy=True 时，把 _ISOLATED_BY_DEFAULT 里的重型/多模态引擎
       隔离进独立子进程（FabricHub.add_isolated_engine），崩溃隔离不传染内核。
-      每个引擎单独 try/except：隔离登记失败退回进程内，不拖垮枢纽。
+
+    关键不变量（避免双注册假象）：被隔离的引擎**不会**先被注册成进程内实例再
+    被覆盖——那样隔离是否生效全靠「注册顺序 + 同名 engine_id 覆盖」撑着，
+    极易静默失效（路由打到进程内芯粒却以为隔离了）。这里在构造枢纽时就从默认
+    进程内集合里**排除**待隔离引擎，只注册隔离代理；隔离登记失败才退回进程内。
     """
-    hub = FabricHub()
-    hub.add_orchestrator()
+    isolated: Dict[str, type] = {}
     if isolate_heavy:
         for eid, spec in _ISOLATED_BY_DEFAULT.items():
             cls = _load_oss_adapter(spec)
-            if cls is None:
-                continue
+            if cls is not None:
+                isolated[eid] = cls
+
+    base_adapters = tuple(
+        a for a in FabricHub.DEFAULT_ADAPTERS if a not in set(isolated.values())
+    )
+    hub = FabricHub(adapters=base_adapters)
+    hub.add_orchestrator()
+
+    for eid, cls in isolated.items():
+        try:
+            hub.add_isolated_engine(eid, cls)
+        except Exception as e:  # noqa: BLE001
+            print(f"[wiring] {eid} 隔离登记失败（退回进程内）: {e}")
             try:
-                hub.add_isolated_engine(eid, cls)
-            except Exception as e:  # noqa: BLE001
-                print(f"[wiring] {eid} 隔离登记失败（退回进程内）: {e}")
+                hub._registry.register(cls())
+            except Exception:  # noqa: BLE001 - 退回也失败则放弃该引擎
+                pass
     return hub
 
 

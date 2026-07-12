@@ -16,6 +16,11 @@ if REPO_SRC not in sys.path:
     sys.path.insert(0, REPO_SRC)
 
 import kernel.wiring as wiring  # noqa: E402
+from kernel.isolation._bench_adapter import BenchRealAdapter  # noqa: E402
+from kernel.plugins.fabric_hub import (  # noqa: E402
+    FabricHub,
+    IsolatedAdapterProxy,
+)
 
 BENCH_SPEC = "kernel.isolation._bench_adapter:BenchRealAdapter"
 
@@ -58,3 +63,23 @@ def test_build_default_kernel_wires_isolation(monkeypatch):
     hub = kernel.fabric_hub
     rep = hub.health_report()
     assert rep["adapters"]["bench"]["isolated"] is True
+
+
+def test_no_double_registration_when_engine_in_both_sets(monkeypatch):
+    """复现真实冲突：某引擎既在默认进程内集合，又在隔离集合。
+
+    验证 build_fabric_hub 不会把它注册成「进程内 + 隔离」两份（旧实现靠同名
+    engine_id 覆盖，隔离是否生效全看注册顺序，极易静默失效）。修复后：构建时
+    就从默认集合排除待隔离引擎，注册表里该 eid 只有隔离代理、无进程内副本。
+    """
+    # 让默认集合包含 bench（模拟"既在默认又在隔离"），并把它列入隔离。
+    monkeypatch.setattr(
+        FabricHub, "DEFAULT_ADAPTERS", (BenchRealAdapter,),
+    )
+    monkeypatch.setattr(wiring, "_ISOLATED_BY_DEFAULT", {"bench": BENCH_SPEC})
+
+    hub = wiring.build_fabric_hub(isolate_heavy=True)
+    eids = [e for e in hub._registry._adapters if e == "bench"]
+    assert len(eids) == 1, f"bench 不应双注册，实际条目: {eids}"
+    assert isinstance(hub._registry._adapters["bench"], IsolatedAdapterProxy), \
+        "bench 应只以隔离代理注册，而非进程内实例"

@@ -58,8 +58,6 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
     LangfuseAdapter,
     AgnesAdapter,   # OpenAI-compatible 多模态平面：文本/图像/视频（需 AGNES_API_KEY）
 )
-
-
 class IsolatedAdapterProxy(BaseAgentAdapter):
     """进程内代理：让被隔离到子进程的引擎仍能参与枢纽的能力路由/自检。
 
@@ -97,6 +95,10 @@ class IsolatedAdapterProxy(BaseAgentAdapter):
 
 class FabricHub:
     """能力路由枢纽：按 Capability 把任务委派给 live 的真实 OSS 引擎。"""
+
+    # 进程内默认注册集合；接线层（build_fabric_hub）据此排除待隔离引擎，
+    # 避免同一引擎既进程内又隔离地双注册。
+    DEFAULT_ADAPTERS = _ADAPTERS
 
     def __init__(self, adapters: Optional[tuple] = None) -> None:
         self._registry = FabricRegistry()
