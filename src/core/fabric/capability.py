@@ -47,6 +47,9 @@ class Capability(str, Enum):
     ACI = "action.aci"                           # agent computer interface: hands on the machine
     TOOL_USE = "action.tool_use"
 
+    # Search (key-free web search plane, e.g. DuckDuckGo / ddgs)
+    WEB_SEARCH = "web.search"
+
     # System / meta
     SAFETY = "system.safety"
     OBSERVABILITY = "system.observability"

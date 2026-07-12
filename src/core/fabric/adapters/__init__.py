@@ -6,6 +6,7 @@ from .litellm_adapter import LiteLLMAdapter
 from .mem0_adapter import Mem0Adapter
 from .observability_langfuse_adapter import LangfuseAdapter
 from .openclaw_adapter import OpenClawAdapter
+from .search_adapter import SearchAdapter
 
 __all__ = [
     "AG2Adapter",
@@ -15,4 +16,5 @@ __all__ = [
     "LiteLLMAdapter",
     "Mem0Adapter",
     "OpenClawAdapter",
+    "SearchAdapter",
 ]

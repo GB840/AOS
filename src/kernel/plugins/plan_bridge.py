@@ -22,10 +22,10 @@ from typing import Any, Dict, List, Optional, Tuple
 # 代表用户真实意图，应优先于媒体类型名词（image/photo/video）。
 _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
     # 动作 / 意图（动词）优先
-    ("search", "action.aci"),
-    ("web", "action.aci"),
+    ("search", "web.search"),
+    ("web", "web.search"),
     ("browse", "action.aci"),
-    ("find", "action.aci"),
+    ("find", "web.search"),
     ("click", "action.aci"),
     ("navigate", "action.aci"),
     ("code", "action.code_exec"),
@@ -40,11 +40,11 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
     ("chat", "channel.access"),
     ("post", "channel.access"),
     # 中文动作 / 意图（动词）优先，与英文动词同组、同优先级约定
-    ("搜索", "action.aci"),
-    ("查", "action.aci"),
-    ("找", "action.aci"),
+    ("搜索", "web.search"),
+    ("查", "web.search"),
+    ("找", "web.search"),
     ("浏览", "action.aci"),
-    ("网页", "action.aci"),
+    ("网页", "web.search"),
     ("代码", "action.code_exec"),
     ("执行", "action.code_exec"),
     ("运行", "action.code_exec"),

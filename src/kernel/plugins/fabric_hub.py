@@ -29,6 +29,7 @@ from core.fabric.adapters import (
     LiteLLMAdapter,
     Mem0Adapter,
     OpenClawAdapter,
+    SearchAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -59,6 +60,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
     Mem0Adapter,
     BrowserUseAdapter,
     LangfuseAdapter,
+    SearchAdapter,  # 免 key 真实联网搜索（DuckDuckGo / ddgs，"dgg 库"）
     AgnesAdapter,   # OpenAI-compatible 多模态平面：文本/图像/视频（需 AGNES_API_KEY）
 )
 class IsolatedAdapterProxy(BaseAgentAdapter):

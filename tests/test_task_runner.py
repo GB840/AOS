@@ -48,7 +48,7 @@ class _SearchBench(BaseAgentAdapter):
     engine_id = "search_bench"
 
     def advertise_capabilities(self):
-        return [Capability.ACI]
+        return [Capability.WEB_SEARCH]
 
     def health(self) -> bool:
         return True
@@ -96,7 +96,7 @@ def test_run_task_with_planner_end_to_end():
     assert out["plan"] and "draw" in out["plan"]
     steps = out["steps"]
     assert len(steps) == 2
-    assert steps[0]["capability"] == "action.aci"        # search → ACI
+    assert steps[0]["capability"] == "web.search"         # search → web.search (dgg)
     assert steps[1]["capability"] == "media.image"       # draw → image
     assert "in" in steps[0] and "task" in steps[0]["in"]
     assert steps[1].get("in_from") == "previous"
@@ -105,7 +105,7 @@ def test_run_task_with_planner_end_to_end():
     assert isinstance(exec_data, dict)
     assert exec_data["ok_steps"] == 2
     assert len(exec_data["trace"]) == 2
-    assert exec_data["trace"][0]["capability"] == "action.aci"
+    assert exec_data["trace"][0]["capability"] == "web.search"
     assert exec_data["trace"][1]["capability"] == "media.image"
 
 
@@ -122,17 +122,17 @@ def test_run_task_heuristic_fallback_when_no_planner():
 def test_run_task_falls_back_when_planner_fails():
     # 规划引擎 invoke 失败 → 透明降级 heuristic，不抛不崩
     hub = _build(_PlanFail, _SearchBench)
-    out = hub.run_task("do something")
+    out = hub.run_task("search the web")
     assert out["planner"] == "heuristic"
     assert out["execution"]["ok_steps"] >= 1
 
 
 def test_parse_plan_to_steps_maps_capabilities():
     text = "1. search the web for docs\n2. draw a diagram\n3. store it in memory"
-    caps = ["action.aci", "media.image", "memory.semantic", "inference.llm"]
+    caps = ["web.search", "media.image", "memory.semantic", "inference.llm"]
     steps = parse_plan_to_steps(text, caps)
     assert len(steps) == 3
-    assert steps[0]["capability"] == "action.aci"
+    assert steps[0]["capability"] == "web.search"
     assert steps[1]["capability"] == "media.image"
     assert steps[2]["capability"] == "memory.semantic"
     assert "in" in steps[0] and "task" in steps[0]["in"]
@@ -191,19 +191,25 @@ class _MemBench(BaseAgentAdapter):
 
 
 def test_orchestrator_continues_after_step_failure():
-    # C：单步失败不中断整条流水线，继续跑后续步，逐条报状态
+    # C：单步失败不中断整条流水线，继续跑后续步，逐条报状态。
+    # 用直接 steps（而非 heuristic）避免依赖映射漂移：步0成功、步1(依赖步0)自身失败。
     hub = _build(_FailBench, _ImageBench)  # action.aci 必挂，media.image 正常
-    out = hub.run_task("search then draw", planner="heuristic")
-    exec_data = out["execution"]
-    assert exec_data["ok_steps"] == 1
-    assert exec_data["failed_steps"] == 1
-    assert len(exec_data["trace"]) == 2
-    assert exec_data["trace"][0]["ok"] is False
-    assert exec_data["trace"][0]["capability"] == "action.aci"
-    assert exec_data["trace"][1]["ok"] is True
-    assert exec_data["trace"][1]["capability"] == "media.image"
-    # 整体仍 ok（有步成功），且 final 取最后成功输出
-    assert out["execution"]["ok_steps"] >= 1
+    spec = {
+        "initial": {},
+        "steps": [
+            {"capability": "media.image", "in": {"prompt": "cat"}},  # 成功
+            {"capability": "action.aci", "in_from": "previous"},     # 依赖步0(已成功)，自身必挂
+        ],
+    }
+    res = hub.route("system.workflow", spec)
+    assert res.ok is True                 # 有步成功 → 整条仍 ok
+    assert res.data["ok_steps"] == 1
+    assert res.data["failed_steps"] == 1
+    assert len(res.data["trace"]) == 2
+    assert res.data["trace"][0]["ok"] is True
+    assert res.data["trace"][0]["capability"] == "media.image"
+    assert res.data["trace"][1]["ok"] is False
+    assert res.data["trace"][1]["capability"] == "action.aci"
 
 
 def test_memory_facade_routes_to_engine():

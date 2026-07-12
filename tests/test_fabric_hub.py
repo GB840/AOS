@@ -28,6 +28,7 @@ _EXPECTED_ENGINES = {
     "mem0",
     "browser-use",
     "langfuse",
+    "duckduckgo",
     "agnes",
 }
 
@@ -35,7 +36,7 @@ _EXPECTED_ENGINES = {
 def test_registers_all_six_and_reports_total():
     hub = FabricHub()
     rep = hub.health_report()
-    assert rep["total"] == 7
+    assert rep["total"] == 8
     assert set(rep["adapters"].keys()) == _EXPECTED_ENGINES
     # health_report 的字段是条件性的：核心字段恒在，隔离引擎额外带 isolation，
     # 支持 health_detail 的适配器额外带 health_detail。只校验「核心必在 + 无未知字段」。
@@ -83,7 +84,7 @@ def test_kernel_delegates_resolve_engine_to_hub():
 
     k.set_fabric_hub(FabricHub())
     rep = k.fabric_health()
-    assert rep is not None and rep["total"] == 7
+    assert rep is not None and rep["total"] == 8
 
     hub = k.fabric_hub
     for cap in _KNOWN_CAPS:
