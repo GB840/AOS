@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sys
+import pytest
 from unittest import mock
 
 sys.path.insert(0, "D:/AOS/src")
@@ -134,3 +135,23 @@ def test_registered_in_fabric_hub():
         assert "media.video" in advertised["agnes"]
         assert hub.resolve_engine("media.image") == "agnes"
         assert hub.resolve_engine("media.video") == "agnes"
+
+
+def test_agnes_is_default_gateway_when_key_present():
+    """wiring 把 Agnes 排到网关链最前：默认（空 model_id）对话落到 Agnes。
+
+    复刻 build_default_kernel 的网关组装（跳过重型 brain 注入），断言
+    AgnesModelGateway 在 CompositeModelGateway 中排首。
+    """
+    import os
+    if not os.environ.get("AGNES_API_KEY"):
+        pytest.skip("需要 AGNES_API_KEY 才纳入 Agnes 网关")
+    from kernel.plugins.agnes_gateway import AgnesModelGateway
+    from kernel.plugins.litellm_gateway import LiteLLMModelGateway
+    from kernel.plugins.composite_gateway import CompositeModelGateway
+
+    gateways = [AgnesModelGateway(), LiteLLMModelGateway()]
+    gw = CompositeModelGateway(gateways)
+    assert gw.list_models()[0].model_id.startswith("agnes")
+    # 默认空 model_id 经 _ordered 落到链首（Agnes）
+    assert gw._ordered("")[0] is gateways[0]

@@ -48,9 +48,18 @@ def build_default_kernel(default_grant: bool = False) -> AOSKernel:
     """
     kernel = AOSKernel()
 
-    # 1) 模型网关：mistralrs 主（本地三端点）→ litellm 兜底（云 100+ 模型）→ cloud 最后兜底（DeepRoute）
-    #    对齐对账表 L4"mistralrs → litellm → 云"三级回退链。
+    # 1) 模型网关回退链：Agnes AI 主（多模态优先）→ mistralrs（本地）→
+    #    litellm（云 100+ 模型兜底）→ cloud（DeepRoute 最后兜底）。
+    #    Agnes 置首：默认对话/推理走 agnes-2.0-flash，纯文本兜底下探 litellm/zhipu。
     gateways = []
+    _agnes_gw = None
+    try:
+        if os.environ.get("AGNES_API_KEY"):
+            from .plugins.agnes_gateway import AgnesModelGateway
+            _agnes_gw = AgnesModelGateway()
+            gateways.append(_agnes_gw)
+    except Exception as e:
+        print(f"[wiring] agnes 网关登记失败: {e}")
     try:
         from .plugins.mistralrs_gateway import MistralRSModelGateway
         mrs = MistralRSModelGateway()
@@ -69,15 +78,6 @@ def build_default_kernel(default_grant: bool = False) -> AOSKernel:
             gateways.append(cloud)
     except Exception as e:
         print(f"[wiring] cloud 网关跳过: {e}")
-
-    # 1.5) Agnes AI 多模态网关（仅配置了 AGNES_API_KEY 时纳入）。
-    #      经 model_id "agnes/agnes-2.0-flash" 直达；缺失 key 时跳过，不影响内核。
-    try:
-        if os.environ.get("AGNES_API_KEY"):
-            from .plugins.agnes_gateway import AgnesModelGateway
-            gateways.append(AgnesModelGateway())
-    except Exception as e:
-        print(f"[wiring] agnes 网关登记失败: {e}")
 
     try:
         if len(gateways) > 1:
