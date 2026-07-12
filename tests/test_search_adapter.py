@@ -38,8 +38,15 @@ def _jina_ok(self, query, n):
             "results": [{"title": "j", "url": "http://j", "body": "晴"}], "count": 1}
 
 
+def _anysearch_ok(self, query, n):
+    return {"content": f"{query} AnySearch结果：晴 26度 [天气](http://a1)",
+            "query": query,
+            "results": [{"title": "天气", "url": "http://a1", "body": ""}], "count": 1}
+
+
 @pytest.fixture
 def patch_all_ok(monkeypatch):
+    monkeypatch.setattr(m.SearchAdapter, "_search_anysearch", _anysearch_ok)
     monkeypatch.setattr(m.SearchAdapter, "_search_baidu", _baidu_ok)
     monkeypatch.setattr(m.SearchAdapter, "_search_bing", _bing_ok)
     monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _zhipu_ok)
@@ -60,9 +67,9 @@ def test_search_adapter_returns_content_summary(patch_all_ok):
     )
     assert res.ok is True
     assert "content" in res.data
-    assert "百度结果" in res.data["content"]
+    assert "AnySearch结果" in res.data["content"]  # 第0源（质量最高）优先
     assert res.data["query"] == "北京天气"
-    assert res.data["engine"] == "baidu"  # 国内可达源优先
+    assert res.data["engine"] == "anysearch"  # AnySearch 排第一
     assert res.data["count"] == 1
 
 
@@ -75,9 +82,10 @@ def test_search_adapter_accepts_task_field(patch_all_ok):
 
 
 def test_search_adapter_fallback_to_jina(monkeypatch):
-    # 百度/Bing/DDG 挂 → 跳 Jina
+    # AnySearch/百度/Bing/DDG 挂 → 跳 Jina
     def _fail(self, q, n):
         raise RuntimeError("boom")
+    monkeypatch.setattr(m.SearchAdapter, "_search_anysearch", _fail)
     monkeypatch.setattr(m.SearchAdapter, "_search_baidu", _fail)
     monkeypatch.setattr(m.SearchAdapter, "_search_bing", _fail)
     monkeypatch.setattr(m.SearchAdapter, "_search_ddg", _fail)
@@ -94,6 +102,9 @@ def test_search_adapter_skips_zhipu_refusal(monkeypatch):
     def _zhipu_refusal(self, q, n):
         return {"content": "很抱歉，我无法直接联网搜索实时信息",
                 "query": q, "results": [], "count": 0}
+    def _fail(self, q, n):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(m.SearchAdapter, "_search_anysearch", _fail)
     monkeypatch.setattr(m.SearchAdapter, "_search_baidu", _baidu_ok)
     monkeypatch.setattr(m.SearchAdapter, "_search_bing", _bing_ok)
     monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _zhipu_refusal)
@@ -109,7 +120,7 @@ def test_search_adapter_skips_zhipu_refusal(monkeypatch):
 def test_search_adapter_all_fail(monkeypatch):
     def _fail(self, q, n):
         raise RuntimeError("boom")
-    for name in ("_search_baidu", "_search_bing", "_search_zhipu",
+    for name in ("_search_anysearch", "_search_baidu", "_search_bing", "_search_zhipu",
                  "_search_ddg", "_search_jina"):
         monkeypatch.setattr(m.SearchAdapter, name, _fail)
     res = m.SearchAdapter().invoke(
@@ -212,3 +223,78 @@ def test_search_bing_parses_real_html(monkeypatch):
     assert res["count"] == 2
     assert "sunny" in res["results"][0]["body"]
     assert "Beijing Weather" in res["content"]
+
+
+# ---- AnySearch（第0源：实时外脑） ----
+class _FakePostResp:
+    """模拟 requests.post 返回（JSON-RPC 形态）。"""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_search_anysearch_parses_jsonrpc(monkeypatch):
+    # 锁死：AnySearch 返回 JSON-RPC，从 text 抽真实链接
+    def _post(url, **kw):
+        assert url == "https://api.anysearch.com/mcp"
+        body = kw["json"]
+        assert body["method"] == "tools/call"
+        assert body["params"]["name"] == "search"
+        assert body["params"]["arguments"]["query"] == "北京天气"
+        return _FakePostResp({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {"content": [{
+                "type": "text",
+                "text": "北京今日晴 26度\n- [15天预报](http://a1)\n- [实时天气](http://a2)",
+            }]},
+        })
+    monkeypatch.setattr(m.requests, "post", _post)
+    res = m.SearchAdapter()._search_anysearch("北京天气", 5)
+    assert res["count"] == 2
+    assert res["results"][0]["url"].startswith("http")
+    assert "晴" in res["content"]
+    assert res["query"] == "北京天气"
+
+
+def test_search_anysearch_api_error_raises(monkeypatch):
+    def _post(url, **kw):
+        return _FakePostResp({"jsonrpc": "2.0", "id": 1,
+                              "error": {"message": "invalid api key"}})
+    monkeypatch.setattr(m.requests, "post", _post)
+    with pytest.raises(RuntimeError):
+        m.SearchAdapter()._search_anysearch("x", 5)
+
+
+def test_search_anysearch_no_links_falls_through(monkeypatch):
+    # AnySearch 返回套话（无链接）→ 不得冒成功，必须跳百度
+    def _post(url, **kw):
+        return _FakePostResp({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {"content": [{"type": "text",
+                                    "text": "抱歉，我无法联网搜索实时信息。"}]},
+        })
+    monkeypatch.setattr(m.requests, "post", _post)
+    monkeypatch.setattr(m.SearchAdapter, "_search_baidu", _baidu_ok)
+    monkeypatch.setattr(m.SearchAdapter, "_search_bing", _bing_ok)
+    monkeypatch.setattr(m.SearchAdapter, "_search_ddg", _ddg_ok)
+    monkeypatch.setattr(m.SearchAdapter, "_search_jina", _jina_ok)
+    monkeypatch.setattr(m.SearchAdapter, "_search_zhipu", _zhipu_ok)
+    res = m.SearchAdapter().invoke(
+        InvokeRequest(capability="web.search", payload={"query": "北京天气"})
+    )
+    assert res.ok is True
+    assert res.data["engine"] == "baidu"   # AnySearch 无链接 → 如实跳过 → 百度
+
+
+def test_search_adapter_anysearch_is_first_source(patch_all_ok):
+    res = m.SearchAdapter().invoke(
+        InvokeRequest(capability="web.search", payload={"query": "北京天气"})
+    )
+    assert res.ok is True
+    assert res.data["engine"] == "anysearch"  # 第0源排第一

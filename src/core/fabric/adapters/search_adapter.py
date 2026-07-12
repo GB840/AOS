@@ -4,7 +4,10 @@
 （带 URL 的条目，count>0）才算成功；返回套话/空结果一律不当成功，跳下一源。
 全部失败才如实报错，交给下游依赖拦截（不会再冒出基于废话的假图）。
 
-源优先级（**中国网络可达的排最前**，墙外的靠后兜底）：
+源优先级（**质量最高的实时 API 排最前，国内可达的 HTML 兜底在后**）：
+  0. AnySearch 统一实时搜索（api.anysearch.com/mcp，JSON-RPC；免 key 匿名
+     1000次/日，配 ANYSEARCH_API_KEY 提额。返回结构化 Markdown + 真实链接，
+     是 agent 的「实时外脑」，质量最高，排第一）。
   1. 百度 HTML 搜索（baidu.com/s，免 key，国内通）
   2. Bing HTML 搜索（bing.com/search，免 key，国内通）
   3. DuckDuckGo 直连（html.duckduckgo.com，免 key；国内常被墙，作墙外兜底）
@@ -13,6 +16,9 @@
      工具、付费模型需余额，故多数情况会如实跳过，不冒成功）
   *. SearXNG（可选）：若配置了 SEARXNG_URL 环境变量，插入到 Bing 之后作为
      自托管元搜索兜底。
+
+注：AnySearch 是云端 API，若用户网络不可达（被墙/超时）会快速失败并降级到
+百度/Bing，不阻塞链路；无可用凭证时它也只是其中一个源，不影响其余源。
 
 注：用户仓库里「dgg 库」= DuckDuckGo（ddgs），但 ddgs 9.x 默认后端改 brave
 致国内超时，故此处用直连 html 端点。Baidu/XFYun 是纯 LLM 聊天端点，标准
@@ -65,8 +71,10 @@ class SearchAdapter(BaseAgentAdapter):
             max_results = 5
 
         errors: list[str] = []
-        # 优先级：百度/Bing（国内可达）→ DDG/Jina（墙外兜底）→ 智谱（极少可用）
+        # 优先级：AnySearch（实时外脑，质量最高）→ 百度/Bing（国内可达）
+        #          → DDG/Jina（墙外兜底）→ 智谱（极少可用）
         sources = [
+            ("anysearch", self._search_anysearch),
             ("baidu", self._search_baidu),
             ("bing", self._search_bing),
         ]
@@ -94,6 +102,66 @@ class SearchAdapter(BaseAgentAdapter):
             error=("所有搜索源均失败：" + " | ".join(errors))
             if errors else "无可用搜索源（未配置任何凭证且离线）",
         )
+
+    # ---- 源 0：AnySearch 统一实时搜索（api.anysearch.com/mcp，JSON-RPC） ----
+    # 设计定位：agent 的「实时外脑」。免 key 匿名 1000 次/日，配 ANYSEARCH_API_KEY
+    # 提额。返回结构化 Markdown（含真实链接），质量远高于 HTML  scraping。
+    # 若网络不可达（被墙/超时）快速失败 → 由下方百度/Bing 兜底，不阻塞链路。
+    def _search_anysearch(self, query: str, max_results: int) -> dict:
+        api_key = os.getenv("ANYSEARCH_API_KEY")
+        endpoint = os.getenv("ANYSEARCH_ENDPOINT", "https://api.anysearch.com/mcp")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Anysearch-Client": "aos-fabric/1.0",
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "search",
+                "arguments": {"query": query, "max_results": min(max_results, 10)},
+            },
+        }
+        resp = requests.post(endpoint, json=payload, headers=headers, timeout=25)
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            msg = data["error"]
+            raise RuntimeError(f"AnySearch 错误: {msg.get('message', msg)}")
+        result = data.get("result", {})
+        text = ""
+        for item in result.get("content", []):
+            if item.get("type") == "text":
+                text = item.get("text", "") or ""
+                break
+        if not text:
+            raise RuntimeError("AnySearch 返回空内容")
+        # 不弄虚：必须从返回文本中抽到真实链接才算有结果（喂下游 media.image 用）
+        links = re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", text)
+        seen: set[str] = set()
+        results: list[dict] = []
+        for title, url in links:
+            if url in seen:
+                continue
+            seen.add(url)
+            results.append({"title": (title.strip() or url), "url": url, "body": ""})
+        # 再补裸 URL（AnySearch 有时直接给出链接而非 markdown 链接）
+        for url in re.findall(r"(?<!\()(https?://[^\s)\]]+)", text):
+            if url in seen:
+                continue
+            seen.add(url)
+            results.append({"title": url, "url": url, "body": ""})
+        if not results:
+            raise RuntimeError("AnySearch 返回但无真实链接（可能是模型套话）")
+        return {
+            "content": text[:2000],
+            "query": query,
+            "results": results[:max_results],
+            "count": len(results),
+        }
 
     # ---- 源 1：百度 HTML 搜索（国内可达，免 key） ----
     def _search_baidu(self, query: str, max_results: int) -> dict:
