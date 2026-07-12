@@ -14,6 +14,9 @@
     UCIe-S 低延迟互连。需要宿主支持 CreateNamedPipe（沙箱常被禁，故见下）。
   - "tcp"（验证用）：127.0.0.1 loopback，沙箱/CI 无 Named Pipe 时用来跑通
     整套隔离 machinery 并拿到真实闸门数字。两者 RTT 量级相近（数十 μs）。
+  - 自动退避：隔离层启动时会探测 Named Pipe 是否可用（_pipe_supported），
+    不可用则透明退 tcp——保留真实主机 pipe 优先，又免去手动设
+    AOS_ISO_TRANSPORT 的麻烦（本环境无需该变量即可隔离）。
 
 用法（见 scripts/subprocess_iso_probe.py）：
     layer = SubprocessIsolationLayer(engine_id="bench_iso", transport="pipe")
@@ -41,6 +44,31 @@ GATE_RECOVER_MS = 3000.0
 _AOS_SRC = os.environ.get("AOS_SRC", "D:/AOS/src")
 _CONNECT_TIMEOUT = 30.0
 _MAX_SPAWN_ATTEMPTS = 3
+
+# Named Pipe 可用性探测结果缓存：本环境（如部分 pwsh / 沙箱）CreateNamedPipe
+# 被禁时，自动退 tcp，避免隔离「假阴性」退回进程内。真实 Windows 主机支持则仍
+# 优先 pipe（UCIe-S 低延迟互连）。
+_PIPE_SUPPORTED: Optional[bool] = None
+
+
+def _pipe_supported() -> bool:
+    """探测本环境是否支持 multiprocessing 的 AF_PIPE（Windows Named Pipe）。
+
+    通过「建一个立即关闭的 Listener」判断，毫秒级、无副作用；结果缓存。
+    不支持（抛异常）即退回 tcp 传输。
+    """
+    global _PIPE_SUPPORTED
+    if _PIPE_SUPPORTED is not None:
+        return _PIPE_SUPPORTED
+    try:
+        from multiprocessing.connection import Listener
+        probe = "aos_pipe_probe_" + uuid.uuid4().hex[:8]
+        with Listener(probe, family="AF_PIPE") as _l:
+            pass
+        _PIPE_SUPPORTED = True
+    except Exception:  # noqa: BLE001 - 任何异常都视为不可用
+        _PIPE_SUPPORTED = False
+    return _PIPE_SUPPORTED
 
 
 class SubprocessIsolationLayer:
@@ -121,6 +149,10 @@ class SubprocessIsolationLayer:
         （最多 _MAX_SPAWN_ATTEMPTS 次）。这是生产级健壮性，与 500ms 性能闸门
         无关——闸门测的是稳态延迟，此处只是「就绪等待」不计入单次请求。
         """
+        # 本环境 Named Pipe 不可用时透明退 tcp（真实主机仍优先 pipe/UCIe-S）。
+        if self.transport == "pipe" and not _pipe_supported():
+            print(f"[iso] 本环境不支持 Named Pipe，{self.engine_id} 自动改用 tcp 传输")
+            self.transport = "tcp"
         last_err: Optional[Exception] = None
         for _ in range(_MAX_SPAWN_ATTEMPTS):
             try:
@@ -268,6 +300,8 @@ class IsolatedEngineHost:
 
     def start(self) -> float:
         spawn_ms = self._layer.start()
+        # 同步实际生效的传输（pipe 自动退 tcp 时，热备层必须跟着用 tcp）。
+        self._transport = self._layer.transport
         if self._standby_enabled and self._standby is None and not self._stopping:
             try:
                 self._standby = self._mk_standby()
@@ -396,6 +430,9 @@ class SubprocessPool:
             w = self._mk(i)
             w.start()
             self._workers.append(w)
+        # 同步实际生效的传输（pipe 自动退 tcp 时保持一致）。
+        if self._workers:
+            self.transport = self._workers[0].transport
         return (time.perf_counter() - t0) * 1000.0
 
     def acquire(self) -> tuple[SubprocessIsolationLayer, float]:

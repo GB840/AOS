@@ -4,7 +4,8 @@
 （子进程），而非进程内。用轻量 BenchRealAdapter 替代真实重型适配器，避免
 18s 冷启动与网络依赖导致 flaky；验证的是「接线契约」而非具体引擎。
 
-运行：AOS_ISO_TRANSPORT=tcp 下子进程走 tcp loopback（沙箱无 Named Pipe）。
+传输：隔离层会自动探测 Named Pipe 可用性，不可用时透明退 tcp，故无需手动
+设 AOS_ISO_TRANSPORT（沙箱 / 部分 pwsh 主机均可直接跑通）。
 """
 from __future__ import annotations
 
