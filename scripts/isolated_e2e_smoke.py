@@ -65,6 +65,14 @@ def main() -> int:
     assert child_pid != os.getpid(), "PID 等于宿主 → 隔离失效"
     print(f"[check] 隔离子进程 PID={child_pid} ≠ 宿主 PID={os.getpid()}（进程外铁证）")
 
+    # 2b) 隔离可观测快照（生产运维直接吃这份数据判断健康度）
+    iso = rep["adapters"]["agnes"].get("isolation", {})
+    print(f"[observe] 隔离可观测：standby_ready={iso.get('standby_ready')} "
+          f"spawn_ms={iso.get('spawn_ms')} rtt_us={iso.get('rtt_us')} "
+          f"last_recover_ms={iso.get('last_recover_ms')}")
+    assert iso.get("standby_ready") is True, "默认热备应已热身就绪"
+    assert hub.isolation_summary()["agnes"]["subprocess_pid"] == child_pid
+
     # 3) 直接打隔离子进程里的 Agnes 真对话（绕过能力路由，精确命中 agnes）。
     #    route() 按能力选第一个 live 引擎，会落到进程内 litellm；这里直接调
     #    隔离宿主，才能验证「隔离 Agnes 真在子进程里出真实回复」。

@@ -107,6 +107,8 @@ class FabricHub:
         # 被隔离引擎同时以 IsolatedAdapterProxy 注册进 _registry（参与路由），
         # 但 invoke/health 全部走子进程。recover() 对它们直接 respawn 子进程。
         self._isolated: Dict[str, IsolatedEngineHost] = {}
+        # 隔离引擎的最近一次恢复耗时（毫秒）：recover() 时记录，供可观测。
+        self._recover_ms: Dict[str, float] = {}
         # 单芯粒故障记录：engine_id -> 最近一次 invoke 失败的 perf_counter 时间戳。
         # 用于「崩溃恢复」度量（Day11-14 闸门3）：从故障检测到恢复服务的耗时。
         self._failures: Dict[str, float] = {}
@@ -176,7 +178,8 @@ class FabricHub:
         """
         host = self._isolated.get(eid)
         if host is not None:
-            host.recover()
+            ms = host.recover()
+            self._recover_ms[eid] = ms
             return host.health()
         adapter = self._registry._adapters.get(eid)
         if adapter is None:
@@ -246,6 +249,15 @@ class FabricHub:
                 "error": err,
                 "isolated": eid in self._isolated,
             }
+            if eid in self._isolated:
+                host = self._isolated[eid]
+                report["adapters"][eid]["isolation"] = {
+                    "subprocess_pid": host.subprocess_pid,
+                    "standby_ready": host.standby_ready,
+                    "spawn_ms": host.spawn_ms,
+                    "rtt_us": host.rtt_us,
+                    "last_recover_ms": host.last_recover_ms,
+                }
             report["total"] += 1
             if live:
                 report["live"] += 1
@@ -255,3 +267,20 @@ class FabricHub:
     def advertised(self) -> Dict[str, List[str]]:
         """快照：引擎 id -> 它声明的能力列表。"""
         return self._registry.snapshot()
+
+    def isolation_summary(self) -> Dict[str, Any]:
+        """隔离引擎的可观测快照：子进程 PID / 热备就绪 / 三闸门数字 / 上次恢复耗时。
+
+        运维/监控直接吃这份数据，判断隔离引擎「健康到什么程度」，而非仅知道
+        它 isolated=True。与 health_report 中每个隔离引擎的 isolation 块同源。
+        """
+        out: Dict[str, Any] = {}
+        for eid, host in self._isolated.items():
+            out[eid] = {
+                "subprocess_pid": host.subprocess_pid,
+                "standby_ready": host.standby_ready,
+                "spawn_ms": host.spawn_ms,
+                "rtt_us": host.rtt_us,
+                "last_recover_ms": host.last_recover_ms,
+            }
+        return out

@@ -3,9 +3,11 @@
 用法（在仓库根目录 D:/AOS 下，用系统 Python 3.14）：
     py -3.14 -m scripts.fabric_scorecard
 或  python scripts/fabric_scorecard.py
+    python scripts/fabric_scorecard.py --isolation   # 按生产默认接线（Agnes/AG2 隔离）跑
 
 等价于 GET /api/fabric/health 的逻辑，但可在不启动服务时本地跑。
-输出 JSON，便于 CI / 主机巡检。
+输出 JSON，便于 CI / 主机巡检。--isolation 会额外打印隔离可观测快照
+（子进程 PID / 热备就绪 / 三闸门数字 / 上次恢复耗时）。
 """
 from __future__ import annotations
 
@@ -35,18 +37,30 @@ def _load_env(path: str = ".env") -> bool:
 
 
 from kernel.plugins.fabric_hub import FabricHub
+from kernel.wiring import build_fabric_hub
 
 
 def main() -> int:
+    use_isolation = "--isolation" in sys.argv[1:]
     used_env = _load_env()
-    hub = FabricHub()
+    if use_isolation:
+        # 按生产默认接线构建：Agnes/AG2 隔离进子进程，反映真实内核拓扑。
+        hub = build_fabric_hub(isolate_heavy=True)
+    else:
+        hub = FabricHub()
     report = hub.health_report()
     print(json.dumps(report, ensure_ascii=False, indent=2))
     tag = "with .env keys" if used_env else "keyless (no .env)"
+    iso_n = sum(1 for a in report["adapters"].values() if a.get("isolated"))
     print(
-        f"\nSUMMARY: {report['live']}/{report['total']} engines live [{tag}]",
+        f"\nSUMMARY: {report['live']}/{report['total']} engines live "
+        f"[{tag}]  isolated={iso_n}",
         file=sys.stderr,
     )
+    if use_isolation:
+        import pprint
+        print("\nISOLATION OBSERVABILITY:", file=sys.stderr)
+        pprint.pprint(hub.isolation_summary(), stream=sys.stderr)
     return 0
 
 

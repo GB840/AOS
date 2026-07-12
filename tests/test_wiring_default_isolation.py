@@ -96,3 +96,36 @@ def test_isolated_engine_exposes_subprocess_pid(monkeypatch):
     pid = host.subprocess_pid
     assert pid is not None, "隔离引擎子进程未拉起，subprocess_pid 应为非 None"
     assert pid != os.getpid(), "subprocess_pid 等于宿主 PID → 隔离失效（没真进子进程）"
+
+
+def test_health_report_exposes_isolation_details(monkeypatch):
+    """health_report 对隔离引擎应含可观测块：PID / 热备就绪 / 三闸门数字。
+
+    这是 B 路线生产可观测的落点——运维看报告能判断隔离引擎「健康到什么程度」，
+    而非仅知道 isolated=True。
+    """
+    monkeypatch.setattr(wiring, "_ISOLATED_BY_DEFAULT", {"bench": BENCH_SPEC})
+    hub = wiring.build_fabric_hub(isolate_heavy=True)
+    iso = hub.health_report()["adapters"]["bench"].get("isolation")
+    assert iso is not None, "隔离引擎 health_report 应含 isolation 可观测块"
+    assert iso["subprocess_pid"] is not None
+    assert iso["standby_ready"] is True, "默认开启热备，standby_ready 应为 True"
+    assert iso["spawn_ms"] is not None and iso["spawn_ms"] > 0
+    # isolation_summary() 应返回同一份同源快照
+    assert hub.isolation_summary()["bench"]["subprocess_pid"] == iso["subprocess_pid"]
+
+
+def test_recover_records_recovery_time(monkeypatch):
+    """recover 隔离引擎后应记录恢复耗时（热备切换毫秒级），并在报告里可见。
+
+    锁死「恢复耗时被记录且过 3s 闸门」——防止热备切换退化成冷启动却无人知晓。
+    """
+    monkeypatch.setattr(wiring, "_ISOLATED_BY_DEFAULT", {"bench": BENCH_SPEC})
+    hub = wiring.build_fabric_hub(isolate_heavy=True)
+    ok = hub.recover("bench")
+    assert ok is True
+    iso = hub.health_report()["adapters"]["bench"]["isolation"]
+    assert iso["last_recover_ms"] is not None, "recover 后应记录恢复耗时"
+    assert iso["last_recover_ms"] <= 3000.0, "恢复耗时超 3s 闸门"
+    # 热备提拔 + 后台补位，主进程应已恢复 live
+    assert hub.health_report()["adapters"]["bench"]["live"] is True

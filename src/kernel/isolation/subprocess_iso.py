@@ -257,6 +257,7 @@ class IsolatedEngineHost:
         self._standby: Optional[SubprocessIsolationLayer] = None
         self._lock = threading.Lock()
         self._stopping = False
+        self._last_recover_ms: Optional[float] = None
 
     def _mk_standby(self) -> SubprocessIsolationLayer:
         return SubprocessIsolationLayer(
@@ -298,9 +299,12 @@ class IsolatedEngineHost:
                 self._layer = self._standby
                 self._standby = None
                 switched_ms = (time.perf_counter() - t0) * 1000.0
+                self._last_recover_ms = switched_ms
                 self._fill_standby_async()
                 return switched_ms
-            return self._layer.kill_and_recover()
+            ms = self._layer.kill_and_recover()
+            self._last_recover_ms = ms
+            return ms
 
     def _fill_standby_async(self) -> None:
         if not self._standby_enabled or self._stopping:
@@ -340,6 +344,16 @@ class IsolatedEngineHost:
     def subprocess_pid(self) -> Optional[int]:
         """隔离子进程 PID（进程外铁证）；热备提拔后指向当前主层。"""
         return self._layer.pid
+
+    @property
+    def standby_ready(self) -> bool:
+        """热备子进程是否已热身就绪（可毫秒级提拔，不依赖冷启动）。"""
+        return self._standby is not None and self._standby.health()
+
+    @property
+    def last_recover_ms(self) -> Optional[float]:
+        """最近一次 recover 的切换/恢复耗时（毫秒）；未恢复过为 None。"""
+        return self._last_recover_ms
 
 
 class SubprocessPool:
