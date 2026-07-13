@@ -29,14 +29,35 @@ PROVIDER_PREFERENCE: dict[str, int] = {
 }
 _DEFAULT_PREF = 50
 
+# 路由策略：把 Auriko 的成本套利内核原生借进 AOS。
+# - preference：默认，按 PROVIDER_PREFERENCE 排序（云端优先→本地兜底）。
+# - cost：成本优先（provider_cost 越小越先，单位相对分）。
+# - latency：延迟优先（provider_latency 越小越先）。
+# - quality：质量优先（provider_quality 越大越先）。
+ROUTE_STRATEGY = "preference"
+PROVIDER_COST: dict[str, float] = {}       # engine_id -> 相对成本（低优先）
+PROVIDER_LATENCY: dict[str, float] = {}   # engine_id -> 相对延迟（低优先）
+PROVIDER_QUALITY: dict[str, float] = {}   # engine_id -> 质量分（高优先）
+
 
 def _pref(engine_id: str) -> int:
     return PROVIDER_PREFERENCE.get(engine_id, _DEFAULT_PREF)
 
 
 class FabricRegistry:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        strategy: str | None = None,
+        provider_cost: dict[str, float] | None = None,
+        provider_latency: dict[str, float] | None = None,
+        provider_quality: dict[str, float] | None = None,
+    ) -> None:
         self._adapters: dict[str, BaseAgentAdapter] = {}
+        # 实例级策略，避免改全局影响其它枢纽；默认读模块级 ROUTE_STRATEGY。
+        self.strategy = strategy or ROUTE_STRATEGY
+        self._cost = provider_cost if provider_cost is not None else dict(PROVIDER_COST)
+        self._latency = provider_latency if provider_latency is not None else dict(PROVIDER_LATENCY)
+        self._quality = provider_quality if provider_quality is not None else dict(PROVIDER_QUALITY)
 
     def register(self, adapter: BaseAgentAdapter) -> None:
         self._adapters[adapter.engine_id] = adapter
@@ -46,6 +67,19 @@ class FabricRegistry:
         """能力统一成字符串：兼容 Capability 枚举(API 内部)与字符串(API 入参)。"""
         return cap.value if hasattr(cap, "value") else str(cap)
 
+    def _sort_key(self, a: BaseAgentAdapter) -> float:
+        """依当前策略对 live 供给方排序（返回越小越优先）。"""
+        eid = a.engine_id
+        if self.strategy == "cost":
+            # 成本套利：最便宜的供给方排最前（Auriko 内核）。
+            return self._cost.get(eid, 50.0)
+        if self.strategy == "latency":
+            return self._latency.get(eid, 50.0)
+        if self.strategy == "quality":
+            # 质量优先：分数越大越靠前 → 取负。
+            return -self._quality.get(eid, 50.0)
+        return float(_pref(eid))
+
     def providers_for(self, cap: Capability) -> list[BaseAgentAdapter]:
         cap_str = self._cap_to_str(cap)
         live = [
@@ -54,8 +88,10 @@ class FabricRegistry:
             if cap_str in {self._cap_to_str(c) for c in a.advertise_capabilities()}
             and a.health()
         ]
-        # 按供给方偏好排序：云端优先、本地兜底（体现端云合作）。
-        return sorted(live, key=lambda a: _pref(a.engine_id))
+        # 依当前策略（preference / cost / latency / quality）排序。
+        # route() 仍会在排序后的供给方之间做运行时故障转移——即 Auriko 的
+        # 「首选路由失败自动 fallback 到次优」语义，由端云合作机制统一承载。
+        return sorted(live, key=self._sort_key)
 
     def route(self, req: InvokeRequest) -> InvokeResult:
         """按能力路由，并在 live 供给方之间做**运行时故障转移**：

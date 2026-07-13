@@ -173,6 +173,15 @@ log.txt
 external/
 !external/.gitkeep
 
+# 生态开源仓库（ExploreYC / Sim / Timbal）已 gitignore：
+# 它们是完整开源源码的本地参考副本（用于逐字对照），但整仓入 AOS 的 git
+# 会撑爆仓库、拖垮 push（Sim 单仓 238MB / 1.3万文件）。保留「磁盘完整 +
+# 一键复现」：本地已存在、CLONE.sh 一条命令重新拉取。集成契约见
+# references/ecosystem/INTEGRATIONS.md（该文件入库）。
+references/ecosystem/exploreyc/
+references/ecosystem/sim/
+references/ecosystem/timbal/
+
 # =============================================================================
 # Test fixtures (keep some, remove others)
 # =============================================================================

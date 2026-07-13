@@ -3,6 +3,7 @@ from .aci_browser_adapter import BrowserUseAdapter
 from .ag2_adapter import AG2Adapter
 from .agnes_adapter import AgnesAdapter
 from .litellm_adapter import LiteLLMAdapter
+from .mcp_client_adapter import MCPClientAdapter
 from .mem0_adapter import Mem0Adapter
 from .observability_langfuse_adapter import LangfuseAdapter
 from .openclaw_adapter import OpenClawAdapter
@@ -14,6 +15,7 @@ __all__ = [
     "BrowserUseAdapter",
     "LangfuseAdapter",
     "LiteLLMAdapter",
+    "MCPClientAdapter",
     "Mem0Adapter",
     "OpenClawAdapter",
     "SearchAdapter",

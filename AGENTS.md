@@ -154,3 +154,25 @@
 - **绘图**：openclaw 是**本地自托管网关**（127.0.0.1:18789，MIT 免费）。`openclaw gateway run` 或 adapter 的
   `ensure_gateway()` 自起。openclaw dead 唯一根因＝网关没跑。
 - **搜索**：AnySearch（免 key）+ 百度/Bing HTML（国内最稳）已多源兜底，不花钱。
+
+## 8. 生态集成（万物为我所用 —— 5 款真实产品经 MCP 接入）
+
+AOS 不重造轮子：任何支持 **MCP** 的真实产品都能经**通用 MCP 客户端芯粒**
+（`src/core/fabric/adapters/mcp_client_adapter.py`）成为 AOS 供给方，其 tools 经
+`capability_map` 映射成 AOS 能力，由 registry 统一路由与故障转移。已核实真实存在、
+均支持 MCP 的 5 款产品接入方案见 **`references/ecosystem/INTEGRATIONS.md`**（含真实仓库
+路径、LICENSE 核验状态、env 一键接入清单）。要点：
+
+- **AnySearch**（搜索层）：✅ 已真接（SearchAdapter 第 0 源 + 可经 MCP 注册）。
+- **ExploreYC**（数据层，MIT）：📚 完整源码已入仓 `references/ecosystem/exploreyc/`；
+  AOS 已加 `DATA_QUERY` 能力，经其 API/导出数据接成 `data.query` 芯粒。
+- **Sim**（构建层，Apache-2.0）：📚 源码已入仓；其可视化 DAG 与 AOS `OrchestrationChiplet.steps[]`
+  同构，可作 AOS 流水线的可视化构建/审查工作台。
+- **Auriko**（成本层）：⚠️ SDK 开源（Apache-2.0，PyPI `auriko`）但套利网关算法未公开——
+  **其策略内核已原生借进 AOS**（registry `ROUTE_STRATEGY=cost|latency|quality` + 故障转移），
+  不依赖其托管服务，零绑定。
+- **Timbal**（生产层，Apache-2.0）：📚 源码已入仓；AOS 原型可经其 Python 框架上线生产，两端 MCP 互通。
+
+> 接入铁律：能用完整开源就用完整的（如 Sim/Timbal/ExploreYC 全量仓库入仓对照）；
+> 只开源 SDK 不公开核心的（Auriko），借其*架构*而非*依赖*。全部经 `references/`
+> 真实源逐字对照，不凭记忆编述。

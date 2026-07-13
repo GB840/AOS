@@ -149,6 +149,13 @@ class FabricHub:
             except Exception as e:  # noqa: BLE001 - 单适配器故障不拖垮枢纽
                 self._errors[cls.__name__] = repr(e)
                 _LOG.warning("fabric 适配器注册失败 %s: %s", cls.__name__, e)
+        # 环境变量驱动的 MCP Server 自动注册：让任意支持 MCP 的外部服务
+        # （AnySearch / ExploreYC / Sim / Auriko / Timbal 等）配置即接，
+        # 无需改代码。AOS_MCP_SERVERS 为 JSON 数组，每项：
+        #   {"url": "...", "engine_id": "mcp-xxx",
+        #    "capability_map": {"tool_name": "data.query"},  # 可选
+        #    "auth_token": "..."}                              # 可选
+        self._register_env_mcp_servers()
 
     # ---- 模拟路由层（仅探测用，生产默认关闭） --------------------
     def set_route_sim_us(self, micros: float) -> None:
@@ -249,6 +256,61 @@ class FabricHub:
             self._errors[engine_id] = f"invoke failed: {e!r}"
             _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", engine_id, e)
             return InvokeResult(ok=False, error=f"{engine_id} invoke failed: {e!r}")
+
+    # ---- 外部 MCP Server 即插即用 ---------------------------------
+    def register_mcp_server(
+        self,
+        server_url: str,
+        engine_id: Optional[str] = None,
+        capability_map: Optional[dict] = None,
+        auth_token: Optional[str] = None,
+        timeout: float = 10.0,
+    ) -> Optional[str]:
+        """把一个外部 MCP Server 注册成 AOS 芯粒。
+
+        这是「万物为我所用」的协议级落点：任何支持 MCP 的服务（已验证
+        AnySearch / ExploreYC / Sim / Auriko / Timbal 均支持）都能成为 AOS
+        供给方，其 tools 经 capability_map 映射成 AOS 能力，由 registry 统一
+        路由与故障转移。返回注册的 engine_id；失败返回 None 并记错误。
+        """
+        try:
+            from core.fabric.adapters.mcp_client_adapter import MCPClientAdapter
+            eid = engine_id or f"mcp-{server_url.rstrip('/').split('/')[-1]}"
+            adapter = MCPClientAdapter(
+                server_url=server_url,
+                engine_id=eid,
+                capability_map=capability_map,
+                auth_token=auth_token,
+                timeout=timeout,
+            )
+            self._registry.register(adapter)
+            return eid
+        except Exception as e:  # noqa: BLE001 - 远端/网络故障不拖垮枢纽
+            self._errors[f"mcp:{server_url}"] = repr(e)
+            _LOG.warning("MCP Server 注册失败 %s: %s", server_url, e)
+            return None
+
+    def _register_env_mcp_servers(self) -> None:
+        raw = os.environ.get("AOS_MCP_SERVERS")
+        if not raw:
+            return
+        try:
+            servers = json.loads(raw)
+        except json.JSONDecodeError as e:
+            _LOG.warning("AOS_MCP_SERVERS 非法 JSON: %s", e)
+            return
+        if not isinstance(servers, list):
+            return
+        for spec in servers:
+            if not isinstance(spec, dict) or not spec.get("url"):
+                continue
+            self.register_mcp_server(
+                server_url=spec["url"],
+                engine_id=spec.get("engine_id"),
+                capability_map=spec.get("capability_map"),
+                auth_token=spec.get("auth_token"),
+                timeout=spec.get("timeout", 10.0),
+            )
 
     def recover(self, eid: str) -> bool:
         """内核重启芯粒：清除故障记录并复探 health()。

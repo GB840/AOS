@@ -50,6 +50,9 @@ class Capability(str, Enum):
     # Search (key-free web search plane, e.g. DuckDuckGo / ddgs)
     WEB_SEARCH = "web.search"
 
+    # Data layer (structured external datasets, e.g. ExploreYC YC/a16z portfolio)
+    DATA_QUERY = "data.query"
+
     # System / meta
     SAFETY = "system.safety"
     OBSERVABILITY = "system.observability"
