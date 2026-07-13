@@ -1,9 +1,23 @@
 # AGENTS.md — AOS 宪法（Single Source of Truth）
 
-> 本文件是 AOS 项目对所有 AI 编码工具（Claude Code / Cursor / Codex / Windsurf / Aider / Gemini CLI 等）
-> 的**唯一权威规则源**。遵循 [agents.md](https://agents.md) 开放标准。
-> IDE 专用规则（`.cursor/rules/*.mdc`、`.windsurfrules`）与 `CLAUDE.md` 均**引用**本文件，
-> 不得与本文件冲突。改规则只改这一处。
+> 本文件是 AOS 项目对所有 AI 编码工具（Claude Code / Cursor / Codex / Windsurf / Aider / Gemini CLI…）的
+> **唯一权威规则源**。格式遵循 [agents.md](https://agents.md) 开放标准（纯 Markdown、无强制 schema，
+> 推荐含 Dev tips / Testing / PR 三段；本文件以中文同类项承载）。
+> IDE 专用规则（`.cursor/rules/*.mdc`、`.windsurfrules`）与 `CLAUDE.md` 均**引用**本文件，冲突以本文件为准。
+
+## 开源标准依据（逐字对照见 `references/standards/`）
+
+本项目的规则**不是凭空写的**，而是锚定以下三个行业开放标准的**真实完整源文件**
+（已于 2026-07-13 从上游克隆，可逐字复核；克隆基准 commit 见 `references/standards/CONTRAST.md`）：
+
+| 标准 | 本地完整源路径 | 上游 | 授权真实状态 |
+|------|----------------|------|--------------|
+| AGENTS.md 开放标准 | `references/standards/agents-md/` | github.com/agentsmd/agents.md | ✅ MIT（含 LICENSE 文件） |
+| Qoder-Rules 规范库 | `references/standards/qoder-rules/` | github.com/lvzhaobo/qoder-rules | ⚠️ 仓库未随附 LICENSE 文件 |
+| Karpathy 四原则 | `references/standards/andrej-karpathy-skills/` | github.com/multica-ai/andrej-karpathy-skills | ⚠️ SKILL.md 声明 MIT，仓库根无 LICENSE 文件 |
+
+逐条映射见 **`references/standards/CONTRAST.md`**。本目录的开放标准原文是"对照基准"，本 AGENTS.md 是
+"本项目唯一执行规则源"；运行时代码事实 > 本文件 > 开源原文。
 
 ---
 
@@ -20,9 +34,16 @@
 这四条是 AOS 存在的理由。任何改动若违背，无论技术多漂亮，都是错的：
 
 1. **万物为我所用** — 任何引擎/模型/工具都是可插拔的供给方，核心逻辑不依赖任何具体一家。
+   > 对照：Qoder 规则2「复用现有代码和 API」、规则13「只用真实存在的库」
+   > （`references/standards/qoder-rules/core/requirements-spec.zh-CN.md` 规则2 / 13）
 2. **端云合作** — 同一能力可由多个供给方提供；**云端优先 → 本地兜底**是路由层的机制，不是口号。
+   > 对照：AGENTS.md「云端用不了就本地」哲学（`references/standards/agents-md/README.md`）；
+   > 本项目 `route()` 已实现跨供给方运行时故障转移（`src/core/fabric/registry.py` / `fabric_hub.py`）
 3. **一样用不了就换别样** — 云端挂了自动降级本地，一个源失败自动跳下一个，全程不中断。
+   > 对照：同上，机制层已落地（见 `tests/test_route_failover.py`）
 4. **不绑定、零成本可跑** — 搜索、记忆、推理、绘图**全部有开源本地方案**，不充值也能端到端跑通。
+   > 对照：Qoder 规则3「最小化新增依赖」、规则13「只用真实库」
+   > （`references/standards/qoder-rules/core/requirements-spec.zh-CN.md` 规则3 / 13）
    > 铁律：**永远不要因为"要花钱/要充值"而放弃一个能力**。先找开源/本地方案（ollama / sentence-transformers /
    > chroma / 百度·Bing HTML / AnySearch 等）。付费 key 只是"可选增强"，绝不能是"必需"。
 
@@ -61,11 +82,17 @@
 ## 4. 诚实纪律（不可协商，用户会亲自复核）
 
 1. **不弄虚作假**。真跑、贴可复核的原始证据（真实 stdout / 测试耗时 / git hash），不罗列结论蒙混。
+   > 对照：Karpathy 原则4 Goal-Driven Execution（用可验证结果说话，而非描述意图）
 2. **提交必当场核验**：`git commit` 后立刻 `git log -1 --format="%H %s"` 确认 hash 真进 git，再向用户报告。
    （曾虚报未落地的 hash，血训。）
+   > 对照：Karpathy 原则4「定义成功标准，循环直到验证通过」
 3. **回应"虚"质疑铁律**：绝不辩解，直接真跑贴原始证据。常见误判根因＝**用户主机代码未同步**，须点出并给主机复现命令。
-4. **先思考再编码**（Karpathy Agentic Engineering）：先说假设、亮取舍、给最简方案，再动手。见第 6 节。
+4. **先思考再编码**（Karpathy 原则1 Think Before Coding）：先说假设、亮取舍、给最简方案，再动手。
+   > 原文见 `references/standards/andrej-karpathy-skills/CLAUDE.md` §1 / `SKILL.md` §1
 5. **改动最小化（Surgical）**：只碰该改的，不顺手"美化"无关代码，不重构没坏的东西。每一行 diff 都能追溯到需求。
+   > 对照：Karpathy 原则3 Surgical Changes + Qoder 规则5「仅修改请求的内容」
+   > （`references/standards/andrej-karpathy-skills/CLAUDE.md` §3；
+   > `references/standards/qoder-rules/core/requirements-spec.zh-CN.md` 规则5）
 
 ---
 
@@ -88,8 +115,14 @@
 **质量门（提交前自检）：**
 - `ruff check src/ tests/` → 0 error
 - `mypy src/ --ignore-missing-imports` → 0 error
-- 相关子集 `pytest tests/<相关文件>` 全绿；不确定回归时跑更大范围。已知 legacy 债勿误修：
-  `test_database::test_persistence_bridge_on_unified_db`、`test_memory`（no such table）——不 import fabric_hub，与新栈无关。
+- 相关子集 `pytest tests/<相关文件>` 全绿；不确定回归时跑更大范围。
+  > 对照：Qoder testing 规则1「测试完整性」、规则3「测试分层」
+  > （`references/standards/qoder-rules/quality/testing-spec.zh-CN.md` 规则1 / 3）
+  > 覆盖率基线不倒退 ↔ Qoder testing 规则2「覆盖率目标」
+- 真实可跑不弄虚 ↔ Qoder 规则10「确保代码成功编译」、规则6「验证 API 存在」、规则13「只用真实库」
+  （`references/standards/qoder-rules/core/requirements-spec.zh-CN.md` 规则10 / 6 / 13）
+- 已知 legacy 债勿误修：`test_database::test_persistence_bridge_on_unified_db`、`test_memory`
+  （no such table）——不 import fabric_hub，与新栈无关。
 
 ---
 
@@ -103,10 +136,13 @@
    └──────────── 不通过则回炉 ────────────┘
 ```
 
-- **先思考再编码**：动手前先扒真实代码确认现状，别凭记忆写（记忆会骗人）。
-- **追求简单**：能 50 行别写 200 行；不做没要求的抽象/配置/防御。
-- **可验证目标**：把"修 bug"翻译成"先写复现测试→让它过"；强成功标准才能独立循环。
+- **先思考再编码**（Karpathy 原则1）：动手前先扒真实代码确认现状，别凭记忆写（记忆会骗人）。
+- **追求简单**（Karpathy 原则2 Simplicity First）：能 50 行别写 200 行；不做没要求的抽象/配置/防御。
+- **可验证目标**（Karpathy 原则4）：把"修 bug"翻译成"先写复现测试→让它过"；强成功标准才能独立循环。
 - **中文直白沟通**：给具体文件路径、可执行命令、真机验证结果，别堆术语长文档；能自己合理决定的先做。
+
+> 四原则完整原文见 `references/standards/andrej-karpathy-skills/CLAUDE.md` 与 `SKILL.md`，
+> 本节的精炼版逐条对应其 §1–§4。
 
 ---
 

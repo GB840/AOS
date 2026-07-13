@@ -1,5 +1,9 @@
 # AOS 项目规则（Windsurf Cascade 自动读取）
 # 完整宪法见根目录 AGENTS.md，本文件为精简摘要，冲突以 AGENTS.md 为准。
+# 本文件规则依据三个行业开放标准的真实完整源（已落地，可逐字对照），见 references/standards/ 与 CONTRAST.md：
+#   - agents-md/               AGENTS.md 开放标准（MIT）
+#   - qoder-rules/             Qoder-Rules 规范库（含 tools/spec-lint.py 验证工具）
+#   - andrej-karpathy-skills/  Karpathy 四原则（CLAUDE.md / SKILL.md）
 
 ## 定位
 AOS = 单内核 FabricHub + 多芯粒的 agent 运行时。价值在「多步编排 + 故障隔离 + 统一路由 + 端云合作」，不是模型多聪明。
