@@ -1,0 +1,27 @@
+---
+description: FabricHub / 芯粒 / 路由 / 适配器 编码铁律
+globs: src/core/fabric/**/*.py,src/kernel/plugins/**/*.py,src/mcp/**/*.py
+alwaysApply: false
+---
+
+# Fabric 层编码铁律（改这些目录时自动生效）
+
+## 路由（registry.route / fabric_hub.route）
+- 依 `PROVIDER_PREFERENCE` 排序（云端优先→本地兜底），遍历所有 live 供给方。
+- 某方 ok=False 或抛异常 → **自动跳下一个**，绝不只试第一个。
+- 全部失败 → 返回**最后一个供给方的真实结果**（保留 data 如 trace/ok_steps），错误里附注协商次数。绝不合成 data=None 吞掉上游上下文。
+- 单个芯粒 invoke 抛异常必须被隔离捕获，返回干净 InvokeResult(ok=False)，不传染内核/其他芯粒。
+
+## 适配器（BaseAgentAdapter 子类）
+- `advertise_capabilities()` 只声明**真能实现**的能力，不虚报（openclaw 只 CHANNEL_ACCESS）。
+- 输入映射用 `extract_text()` 投影上游产出（`src/core/fabric/adapter.py`），容错 payload 缺 text/query。
+- mem0：`build_mem0_config(force_local=True)` 默认走 ollama/sentence-transformers + 本地 chroma，配置里绝不含 api_key。
+
+## 编排（OrchestrationChiplet）
+- steps[] 逐跳经 hub 路由；`in_from:previous` 取上一步整个输出字典，并注入 text 字段。
+- `parallel_groups` 组内 ThreadPoolExecutor 并发、组间顺序。
+
+## mem0 2.0 schema 陷阱
+- 初始化 `Memory.from_config(cfg)`，**绝不** `Memory(**config)`。
+- search/get_all 不接受顶层 user_id，必须 `filters={'user_id':...}`；add 接受顶层 user_id。
+- vector_store 用 chroma + 真实路径（Windows 不支持 :memory:）。

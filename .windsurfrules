@@ -1,0 +1,36 @@
+# AOS 项目规则（Windsurf Cascade 自动读取）
+# 完整宪法见根目录 AGENTS.md，本文件为精简摘要，冲突以 AGENTS.md 为准。
+
+## 定位
+AOS = 单内核 FabricHub + 多芯粒的 agent 运行时。价值在「多步编排 + 故障隔离 + 统一路由 + 端云合作」，不是模型多聪明。
+
+## 命门哲学（违反即"做歪了"）
+1. 万物为我所用：引擎/模型/工具皆可插拔，核心不绑定任何一家。
+2. 端云合作：同一能力多供给方，云端优先→本地兜底是路由机制。
+3. 一样用不了就换别样：云端挂自动降级本地，一源失败自动跳下一个。
+4. 不绑定、零成本：搜索/记忆/推理/绘图全有开源本地方案。永远不要因"要花钱"放弃能力，付费 key 只是可选增强。
+
+## 真架构（勿按 legacy 理解）
+- FabricHub（src/kernel/plugins/fabric_hub.py）是唯一内核，管路由/记忆/上下文主权。
+- 芯粒＝隔离计算单元，重型引擎跑独立子进程，崩溃不传染。
+- 按 Capability 发现引擎不按名字。所有适配器实现 BaseAgentAdapter。
+- 对外＝标准 MCP server（src/mcp/protocol.py）。
+- 新功能一律进 FabricHub，别往 legacy 双轨（brain/deerflow/swarm/hermes）加料。
+
+## 反模式（见到就改）
+- 路由只取 providers[0] 就停 → 必须遍历所有 live 供给方故障转移。
+- 能力焊死付费 key → mem0 默认 AOS_MEM0_LOCAL=1 走本地。
+- 虚报能力 / 故障转移丢上游 data → 禁止。
+
+## 诚实纪律（用户会亲自复核）
+- 真跑贴原始证据，不弄虚。提交后立刻 git log -1 核验 hash 再报告。
+- 被质疑"虚"时直接真跑贴证据，不辩解；常见根因＝主机代码未同步。
+- 改动最小化，每行 diff 可追溯需求。
+
+## 环境事实
+- 测试：C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe + PYTHONPATH=D:/AOS/src。
+- .env 在 D:\AOS\.env，含真实 key，绝不提交。
+- git push 由用户主机跑；沙箱与主机共享 .git，AI commit 自动进主机仓库，无需 patch。
+
+## 工作法（Karpathy Agentic Engineering）
+架构设计→任务拆解→代理执行→人工审查。先思考再编码（先扒真实代码别凭记忆），追求简单，可验证目标，中文直白给路径命令。

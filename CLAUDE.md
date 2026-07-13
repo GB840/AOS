@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+> **AOS 项目宪法见 @AGENTS.md** — 架构原则、命门哲学、诚实纪律、环境事实、开发规范全在那里，
+> 是唯一权威源。本文件只补充通用的 LLM 编码行为准则，**如与 AGENTS.md 冲突，以 AGENTS.md 为准**。
+
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
