@@ -23,7 +23,10 @@ PROVIDER_PREFERENCE: dict[str, int] = {
     "ag2": 20,         # 规划/推理（可走云或本地）
     "litellm": 20,     # 推理网关（云模型优先）
     "search": 30,      # 搜索（含 anysearch 云 + 国内 HTML 兜底）
+    "web-fetch": 30,   # URL 内容抓取（与搜索同层级）
     "browseruse": 40,
+    "code-exec": 40,   # 本地代码执行（subprocess 隔离，零依赖）
+    "file-io": 40,     # 文件读写（workspace 内）
     "langfuse": 50,
     "mem0": 90,        # 记忆默认本地零成本兜底（AOS_MEM0_LOCAL=1）
 }

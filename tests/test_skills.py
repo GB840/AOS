@@ -8,13 +8,20 @@ Unit tests for AOS skills system (src/skills/base.py).
 - search() 返回 dict list, 修正断言访问方式
 """
 
+import importlib.util
+import pathlib
+
 import pytest
 
-# 直接导入 base 模块中的类型; 如果 skills/__init__.py 级联导入失败, 标记整个模块 skip
-try:
-    from src.skills.base import Skill, SkillRegistry, SkillMeta
-except Exception as _exc:
-    pytest.skip(f"src.skills.base not importable: {_exc}", allow_module_level=True)
+# 直接加载 base.py, 绕过 skills/__init__.py 的 40+ 重型模块级联导入.
+# 这样测试只依赖 base.py 本身 (dataclasses + logging), 毫秒级完成.
+_base_path = pathlib.Path(__file__).resolve().parent.parent / "src" / "skills" / "base.py"
+_spec = importlib.util.spec_from_file_location("_skills_base", _base_path)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+Skill = _mod.Skill
+SkillRegistry = _mod.SkillRegistry
+SkillMeta = _mod.SkillMeta
 
 
 @pytest.fixture(autouse=True)

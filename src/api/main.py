@@ -549,18 +549,70 @@ class KernelChatRequest(BaseModel):
     engine: str = Field("litellm", description="AgentRuntime 引擎")
     model: str = Field("mistralrs_general",
                        description="内核 ModelGateway 模型 id")
+    mode: str = Field("auto", description="auto=自动检测, chat=纯LLM对话, task=think→do闭环")
+
+
+class RunTaskRequest(BaseModel):
+    task: str = Field(..., description="自然语言任务，如 搜索Python最新版本并写代码打印结果")
+    planner: str = Field("heuristic", description="规划器: heuristic=本地关键词切分, ag2=LLM规划")
+    session_id: Optional[str] = Field(None, description="会话ID，传入则记住之前对话，支持多轮连续交互")
+
+
+def _looks_like_task(message: str) -> bool:
+    """自动检测用户消息是否需要 think→do 闭环执行。
+
+    判断依据：消息中是否包含工具触发词或多步连接词。
+    命中任一即走 task 模式——宁可多走一次 run_task（LLM 会兜底），
+    也不漏掉需要执行的真实任务。
+    """
+    msg_lower = message.lower()
+    # 工具触发词：搜索/执行代码/写代码/读文件/写文件
+    tool_keywords = [
+        "搜索", "搜一下", "查一下", "查找", "search",
+        "执行代码", "运行代码", "跑代码", "run code", "exec",
+        "写代码", "写一段", "write code", "generate code",
+        "读文件", "写文件", "打开文件", "read file", "write file",
+        "帮我查", "帮我写", "帮我搜索",
+    ]
+    # 多步连接词：出现这些通常意味着需要编排多步
+    multi_step_keywords = [
+        "然后", "接着", "之后再", "随后", "and then", "after that",
+    ]
+    for kw in tool_keywords:
+        if kw in msg_lower:
+            return True
+    for kw in multi_step_keywords:
+        if kw in msg_lower:
+            return True
+    return False
 
 
 @app.post("/api/v1/chat")
 async def kernel_chat(request: KernelChatRequest):
     """v1.0 内核路由：/api/v1/chat → bridge.chat() → AOSKernel.send_message。
 
-    通过 bridge.chat() 走完整内核链路：权限检查 → Agent 路由 → Runtime 分发
-    → Fitness 记录。不再直接访问 _model_gateway 私有成员。
+    mode="chat": 纯 LLM 对话，文本进文本出。
+    mode="task": think→do 闭环 — 规划→步骤→逐跳执行真实工具（搜索/代码/浏览器）。
+    mode="auto"（默认）: 自动检测——含工具触发词或多步连接词时走 task，否则走 chat。
     """
     bridge = getattr(app.state, "bridge", None)
     if bridge is None:
         raise HTTPException(status_code=503, detail="kernel not mounted")
+
+    # 自动路由：mode 未指定或为 "auto" 时，自动检测
+    effective_mode = request.mode
+    if effective_mode in ("auto", "chat") and _looks_like_task(request.message):
+        effective_mode = "task"
+
+    # ---- think→do 闭环：任务执行模式 ----
+    if effective_mode == "task":
+        result = await asyncio.to_thread(
+            bridge.run_task, task=request.message, planner="heuristic",
+            session_id=request.session_id,
+        )
+        return result
+
+    # ---- 默认：纯 LLM 对话 ----
     try:
         resp = await asyncio.to_thread(
             bridge.chat,
@@ -580,6 +632,23 @@ async def kernel_chat(request: KernelChatRequest):
     except Exception as e:
         logger.error("Kernel chat error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.post("/api/v1/run_task")
+async def kernel_run_task(request: RunTaskRequest):
+    """v1.0 think→do 闭环：规划 → steps[] → OrchestrationChiplet 逐跳执行。
+
+    与 /api/v1/chat 的区别：chat 只调一次 LLM；run_task 把任务拆成多步，
+    每步路由到真实工具（搜索/代码执行/浏览器…），上一步产出喂下一步。
+    """
+    bridge = getattr(app.state, "bridge", None)
+    if bridge is None:
+        raise HTTPException(status_code=503, detail="kernel not mounted")
+    result = await asyncio.to_thread(
+        bridge.run_task, task=request.task, planner=request.planner,
+        session_id=request.session_id,
+    )
+    return result
 
 
 @app.get("/api/v1/health")

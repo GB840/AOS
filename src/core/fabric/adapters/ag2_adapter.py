@@ -26,12 +26,43 @@ logger = logging.getLogger(__name__)
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
-# Lazy import: only required when a real group chat is actually run.
-try:
-    import autogen
+# autogen(ag2) 的 import 在某些环境下会**卡死**（不是报错，是阻塞），
+# 故不能用顶层 `try: import autogen / except` 兜底——except 抓不住「卡死」，
+# 整条 `import kernel.wiring` 链会被拖垮。改为惰性 + 超时线程守卫：
+# 首次真正要跑 group chat 时才导入，6s 内没返回就判不可用，模块导入瞬时完成。
+_AG2_AVAILABLE = False
+_AUTOGEN_MODULE = None
+
+
+def _ensure_autogen(timeout: float = 6.0):
+    """惰性导入 autogen；卡死 / 失败都返回 None（绝不阻塞调用方线程）。
+
+    用 daemon 线程跑 import，主线程 join 超时即放弃——这样即便 autogen
+    在 import 时卡死，也不会让 API 进程 / 内核构建挂起，只是该能力不可用。
+    """
+    global _AG2_AVAILABLE, _AUTOGEN_MODULE
+    if _AUTOGEN_MODULE is not None:
+        return _AUTOGEN_MODULE
+    if _AG2_AVAILABLE:
+        return _AUTOGEN_MODULE
+    import threading
+    import importlib
+
+    box: dict = {}
+    def _run() -> None:
+        try:
+            box["m"] = importlib.import_module("autogen")
+        except Exception:  # noqa: BLE001 - 任一导入错误都视为不可用
+            box["err"] = True
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive() or "err" in box:
+        _AG2_AVAILABLE = False
+        return None
+    _AUTOGEN_MODULE = box["m"]
     _AG2_AVAILABLE = True
-except Exception:  # pragma: no cover - import guard
-    _AG2_AVAILABLE = False
+    return _AUTOGEN_MODULE
 
 
 def _llm_config() -> dict[str, Any]:
@@ -80,7 +111,8 @@ class AG2Adapter(BaseAgentAdapter):
         return [Capability.GROUP_ORCHESTRATION, Capability.PLANNING]
 
     def _run_group_chat(self, task: str) -> str:
-        if not _AG2_AVAILABLE:
+        autogen = _ensure_autogen()
+        if autogen is None:
             raise RuntimeError("ag2 (autogen) is not importable in this environment")
         cfg = self._llm_config
 

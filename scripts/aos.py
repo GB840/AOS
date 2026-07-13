@@ -3,6 +3,7 @@
 
 用法:
   python scripts/aos.py chat "你好"              # 和AI聊天
+  python scripts/aos.py task "搜索Python最新版本并写代码打印"  # think→do闭环
   python scripts/aos.py evolve --agents 5 --tasks 10  # 进化循环
   python scripts/aos.py status                     # 系统健康
   python scripts/aos.py memory add "img.jpg"       # 存入记忆
@@ -26,7 +27,10 @@ if os.path.exists(_ENV_PATH):
                 os.environ.setdefault(_k, _v)
 os.environ.setdefault("AOS_TOKEN_SECRET", "aos-cli-dev-" + os.urandom(8).hex())
 
-from kernel.system import build_default_system
+try:
+    from kernel.system import build_default_system
+except Exception:
+    build_default_system = None
 from kernel.types import AgentSpec, Message
 from kernel.evolution import FitnessTracker, AgentDNA, Gene, Breeder
 from kernel.ecology import NaturalSelection, ResourceEconomy
@@ -59,6 +63,71 @@ def cmd_chat(args):
     else:
         print(f"[error] {r.error}")
     print(f"\n— {elapsed:.1f}s, model=zhipu/glm-4-flash")
+
+
+def cmd_task(args):
+    """think→do 闭环：规划→步骤→逐跳执行真实工具
+
+    直接用 fabric hub，不经过 build_default_system()，避免 brain.py
+    重型初始化（cognee/orm 等）拖慢启动。task 命令只需要 fabric 能力路由。
+    """
+    task = " ".join(args.task) if isinstance(args.task, list) else args.task
+    from kernel.wiring import build_fabric_hub
+    hub = build_fabric_hub(isolate_heavy=False)
+    if hub is None:
+        print("[error] fabric 能力枢纽构建失败")
+        return
+    print(f"▶ 任务: {task}")
+    if getattr(args, "session", None):
+        print(f"▶ 会话: {args.session}")
+    print()
+    t0 = time.monotonic()
+    result = hub.run_task(task, planner=args.planner, session_id=getattr(args, "session", None))
+    elapsed = time.monotonic() - t0
+
+    planner_used = result.get("planner", "?")
+    steps = result.get("steps", [])
+    execution = result.get("execution", {})
+
+    print(f"▶ 规划器: {planner_used}  步骤数: {len(steps)}  耗时: {elapsed:.1f}s\n")
+
+    # 打印每步执行结果
+    trace = execution.get("trace", [])
+    for t in trace:
+        idx = t.get("step", "?")
+        cap = t.get("capability", "?")
+        ok = t.get("ok", False)
+        status = "✓" if ok else "✗"
+        if ok:
+            out = t.get("out", "")
+            if isinstance(out, dict):
+                # 优先显示 content / output
+                txt = out.get("content") or out.get("output") or str(out)
+            else:
+                txt = str(out)
+            preview = txt[:200] if isinstance(txt, str) else str(txt)[:200]
+            print(f"  [{idx}] {status} {cap}")
+            if preview.strip():
+                print(f"      → {preview}")
+        else:
+            err = t.get("error", "")
+            print(f"  [{idx}] {status} {cap}")
+            if err:
+                print(f"      → ERROR: {err}")
+
+    ok_steps = execution.get("ok_steps", 0)
+    failed_steps = execution.get("failed_steps", 0)
+    print(f"\n▶ 完成: {ok_steps} 成功, {failed_steps} 失败")
+
+    # 显示自然语言总结
+    response = result.get("response", "")
+    if response:
+        print(f"\n▶ 回答: {response}")
+
+    # 显示会话信息
+    session_info = result.get("session")
+    if session_info:
+        print(f"▶ 会话: {session_info.get('id')} (第{session_info.get('turns')}轮)")
 
 
 def cmd_evolve(args):
@@ -255,6 +324,12 @@ def main():
     p_chat = sub.add_parser("chat", help="AI对话")
     p_chat.add_argument("prompt", nargs="+", help="要发送的消息")
     p_chat.set_defaults(func=cmd_chat)
+
+    p_task = sub.add_parser("task", help="think→do闭环执行")
+    p_task.add_argument("task", nargs="+", help="自然语言任务")
+    p_task.add_argument("--planner", default="heuristic", help="规划器: heuristic/ag2")
+    p_task.add_argument("--session", default=None, help="会话ID，支持多轮连续对话")
+    p_task.set_defaults(func=cmd_task)
 
     p_evo = sub.add_parser("evolve", help="活体进化循环")
     p_evo.add_argument("--agents", type=int, default=3)

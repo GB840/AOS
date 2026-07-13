@@ -165,6 +165,32 @@ class V5Bridge:
         return response
 
     # ═══════════════════════════════════════════════════════════════
+    # think→do 闭环：run_task — 规划→解析步骤→逐跳执行真实工具
+    # ═══════════════════════════════════════════════════════════════
+
+    def run_task(self, task: str, planner: str = "heuristic", session_id: str = None) -> Dict[str, Any]:
+        """think→do 自主执行：规划 → steps[] → OrchestrationChiplet 逐跳执行。
+
+        与 chat() 的区别：chat 只调一次 LLM（文本进文本出）；
+        run_task 把任务拆成多步，每步路由到真实工具（搜索/代码执行/浏览器…），
+        上一步产出喂下一步，端到端完成「想→做」闭环。
+
+        参数：
+          task: 用户自然语言任务，如 "搜索 Python 最新版本并写代码打印结果"
+          planner: "heuristic"（本地关键词切分，零依赖）或 "ag2"（LLM 规划）
+          session_id: 会话 ID，传入则记住之前对话，支持多轮连续交互
+        """
+        hub = self.kernel.fabric_hub
+        if hub is None:
+            return {"ok": False, "error": "fabric 能力枢纽未挂载"}
+        try:
+            result = hub.run_task(task, planner=planner, session_id=session_id)
+            return result
+        except Exception as e:
+            logger.error("run_task 失败: %s", e, exc_info=True)
+            return {"ok": False, "error": str(e), "task": task}
+
+    # ═══════════════════════════════════════════════════════════════
     # 缺口 2: JWT RS256 → AuthBridge
     # ═══════════════════════════════════════════════════════════════
 

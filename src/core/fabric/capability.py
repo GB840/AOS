@@ -49,11 +49,13 @@ class Capability(str, Enum):
 
     # Action
     CODE_EXECUTION = "action.code_exec"
+    FILE_ACCESS = "action.file_access"           # read/write/list files in workspace
     ACI = "action.aci"                           # agent computer interface: hands on the machine
     TOOL_USE = "action.tool_use"
 
     # Search (key-free web search plane, e.g. DuckDuckGo / ddgs)
     WEB_SEARCH = "web.search"
+    WEB_FETCH = "web.fetch"  # fetch & extract content from a URL
 
     # Data layer (structured external datasets, e.g. ExploreYC YC/a16z portfolio)
     DATA_QUERY = "data.query"

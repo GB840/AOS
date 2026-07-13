@@ -145,7 +145,7 @@ class AgnesAdapter(BaseAgentAdapter):
         if payload.get("messages"):
             messages = payload["messages"]
         else:
-            prompt = payload.get("prompt") or payload.get("content") or ""
+            prompt = payload.get("prompt") or payload.get("content") or payload.get("task") or ""
             messages = [{"role": "user", "content": prompt}]
         body: dict[str, Any] = {"model": model, "messages": messages}
         if payload.get("opts"):

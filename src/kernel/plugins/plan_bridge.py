@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 # 步骤语义关键词 -> capability 候选（按优先级）。解析时取「当前通电能力中
 # 最靠前匹配」的那个，保证编排到的引擎一定 live。
@@ -21,9 +21,25 @@ from typing import Any, Dict, List, Optional, Tuple
 # 会被 "photo" 误命中成 media.image。动作动词（search/find/run/send/write…）
 # 代表用户真实意图，应优先于媒体类型名词（image/photo/video）。
 _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
+    # 复合短语优先（解决单字歧义："写代码"=生成 vs "执行代码"=执行）
+    ("写代码打印", "action.code_exec"),
+    ("写代码执行", "action.code_exec"),
+    ("写代码运行", "action.code_exec"),
+    ("写一段代码并执行", "action.code_exec"),
+    ("生成代码并执行", "action.code_exec"),
+    ("写代码", "inference.llm"),
+    ("写一段", "inference.llm"),
+    ("生成代码", "inference.llm"),
+    ("编写代码", "inference.llm"),
+    ("编写", "inference.llm"),
+    ("改成", "inference.llm"),
+    ("修改代码", "inference.llm"),
+    ("改写", "inference.llm"),
+    ("重构", "inference.llm"),
     # 动作 / 意图（动词）优先
     ("search", "web.search"),
     ("web", "web.search"),
+    ("fetch", "web.fetch"),
     ("browse", "action.aci"),
     ("find", "web.search"),
     ("click", "action.aci"),
@@ -33,6 +49,10 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
     ("script", "action.code_exec"),
     ("run", "action.code_exec"),
     ("compile", "action.code_exec"),
+    ("read file", "action.file_access"),
+    ("write file", "action.file_access"),
+    ("open file", "action.file_access"),
+    ("list file", "action.file_access"),
     ("send", "channel.access"),
     ("message", "channel.access"),
     ("notify", "channel.access"),
@@ -45,10 +65,20 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
     ("找", "web.search"),
     ("浏览", "action.aci"),
     ("网页", "web.search"),
+    ("读取链接", "web.fetch"),
+    ("读网页", "web.fetch"),
+    ("打开链接", "web.fetch"),
+    ("抓取", "web.fetch"),
+    ("链接", "web.fetch"),
     ("代码", "action.code_exec"),
     ("执行", "action.code_exec"),
     ("运行", "action.code_exec"),
     ("脚本", "action.code_exec"),
+    ("读文件", "action.file_access"),
+    ("写文件", "action.file_access"),
+    ("打开文件", "action.file_access"),
+    ("保存文件", "action.file_access"),
+    ("列目录", "action.file_access"),
     ("发送", "channel.access"),
     ("消息", "channel.access"),
     ("通知", "channel.access"),
@@ -186,11 +216,42 @@ def parse_plan_to_steps(plan_text: str, available_caps: List[str]) -> List[Dict[
     return steps
 
 
+def _bridge_prompt(prev_cap: str, next_cap: str, next_task: str) -> str:
+    """为 LLM 桥接步生成上下文感知的 prompt。
+
+    当前后两步能力不同（如搜索→代码执行），中间需要 LLM 把上游产出
+    转换成下游可消费的输入（如搜索结果→Python 代码）。
+    """
+    if next_cap == "action.code_exec":
+        return (f"根据以上结果，写一段Python代码来完成以下任务：{next_task}。"
+                f"从上游结果中提取关键数据（如版本号、名称、数值等），用代码处理或打印。"
+                f"只输出```python代码块```，不要多余解释。")
+    if next_cap == "channel.access":
+        return f"根据以上结果，撰写一条要发送的消息，主题：{next_task}"
+    if next_cap == "memory.semantic":
+        return f"根据以上结果，提取要记忆的关键信息：{next_task}"
+    if next_cap == "media.image":
+        return f"根据以上结果，生成一段英文图像描述提示词：{next_task}"
+    if next_cap == "media.video":
+        return f"根据以上结果，生成一段视频描述提示词：{next_task}"
+    if next_cap == "web.search":
+        return f"根据以上结果，提取一个简洁的搜索关键词：{next_task}"
+    if next_cap == "web.fetch":
+        return f"根据以上结果，提取一个最相关的URL链接（只要URL本身）：{next_task}"
+    if next_cap == "action.file_access":
+        return f"根据以上结果，生成文件操作指令（格式：action=read/write/list, path=文件路径, content=内容）：{next_task}"
+    return f"根据以上结果，为以下任务生成具体内容：{next_task}"
+
+
 def heuristic_plan(task: str, available_caps: List[str]) -> List[Dict[str, Any]]:
     """纯本地规划（无 LLM）：把任务按语义/连词拆成步骤，映射到通电能力。
 
     当 AG2 不可用（无 key / 未安装 / 调用失败）时作为降级 planner，保证
     run_task 端到端仍可跑通——证明「think→do」闭环的 machinery 不依赖外部 LLM。
+
+    桥接增强：当连续两步能力不同（如搜索→代码执行）且 inference.llm 通电时，
+    自动在中间插入一个 LLM 推理步骤，把上游产出转换成下游可消费的输入。
+    这是「想」的接缝——没有它，搜索结果直接喂给代码执行器会因提取不到代码而失败。
     """
     parts = re.split(
         r"(?:,\s*|\s*，\s*|\s*、\s*|\bthen\b|\band then\b|\bafter that\b|\bnext\b"
@@ -199,11 +260,29 @@ def heuristic_plan(task: str, available_caps: List[str]) -> List[Dict[str, Any]]
     parts = [p.strip(" .;") for p in parts if len(p.strip()) > 1]
     if not parts:
         parts = [task]
+
+    # 先把每段映射到能力，再决定是否插入桥接
+    part_caps = [(p, _pick_capability(p, available_caps)) for p in parts]
+    has_llm = "inference.llm" in available_caps
+
     steps: List[Dict[str, Any]] = []
-    for i, p in enumerate(parts):
-        cap = _pick_capability(p, available_caps)
+    for i, (p, cap) in enumerate(part_caps):
         if i == 0:
             steps.append({"capability": cap, "in": {"task": p}})
         else:
+            prev_cap = part_caps[i - 1][1]
+            # 能力不同 + LLM 可用 → 插入桥接推理步
+            # 例外：下游是 action.code_exec 且上游是 inference.llm 时不插桥接——
+            # CodeExecutionAdapter 自带 _extract_code 能从 LLM 输出提取代码，
+            # 桥接反而会让 LLM 重新生成代码（可能引入 bug）。
+            # 但上游是 web.search 等非 LLM 源时仍需桥接（搜索结果不是代码，
+            # 需要 LLM 基于搜索结果生成代码）。
+            skip_bridge = (cap == "action.code_exec" and prev_cap == "inference.llm")
+            if prev_cap != cap and has_llm and not skip_bridge:
+                steps.append({
+                    "capability": "inference.llm",
+                    "in_from": "previous",
+                    "prompt": _bridge_prompt(prev_cap, cap, p),
+                })
             steps.append({"capability": cap, "in_from": "previous"})
     return steps

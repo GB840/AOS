@@ -78,13 +78,14 @@ def _build_kwargs(req: InvokeRequest) -> dict[str, Any]:
     """
     payload = req.payload or {}
     model = payload.get("model", LITELLM_CONFIG["default_model"])
-    # 防御：上游串味的图像/视频模型名不能拿来做文本补全，否则 litellm 报
+    # 防御：上游串味的模型名不能拿来做文本补全，否则 litellm 报
     # "LLM Provider NOT provided"。退回文本默认模型。
-    if model and ("image" in model or "video" in model):
+    # 拦截：image/video 媒体模型 + agnes 文本模型（agnes 不是 litellm 认的 provider）
+    if model and ("image" in model or "video" in model or "agnes" in model):
         model = LITELLM_CONFIG["default_model"]
     messages = payload.get("messages")
     if not messages:
-        prompt = payload.get("prompt") or payload.get("content") or ""
+        prompt = payload.get("prompt") or payload.get("content") or payload.get("task") or ""
         messages = [{"role": "user", "content": prompt}]
     kwargs: dict[str, Any] = {"messages": messages}
 

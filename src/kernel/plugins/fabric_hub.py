@@ -26,11 +26,14 @@ from core.fabric.adapters import (
     AG2Adapter,
     AgnesAdapter,
     BrowserUseAdapter,
+    CodeExecutionAdapter,
+    FileAdapter,
     LangfuseAdapter,
     LiteLLMAdapter,
     Mem0Adapter,
     OpenClawAdapter,
     SearchAdapter,
+    WebFetchAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -38,6 +41,45 @@ from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
 
 _LOG = logging.getLogger("aos.fabric.hub")
+
+# 会话上下文存储（进程内缓存 + 磁盘持久化）。
+# key=session_id, value=[{"task": "...", "response": "..."}, ...]
+# 设计：内存缓存提速热会话；磁盘 JSON 落盘让 CLI 跨进程也能记住对话。
+# 每个会话最多保留最近 5 轮，避免无限增长拖慢上下文注入。
+_SESSIONS: Dict[str, List[Dict[str, str]]] = {}
+_SESSION_MAX_TURNS = 5
+_SESSION_DIR = Path("data/workspaces/fabric/sessions")
+
+
+def _session_path(session_id: str) -> Path:
+    return _SESSION_DIR / f"{session_id}.json"
+
+
+def _load_session(session_id: str) -> List[Dict[str, str]]:
+    """加载会话历史：先查内存缓存，没有再读磁盘。"""
+    if session_id in _SESSIONS:
+        return _SESSIONS[session_id]
+    p = _session_path(session_id)
+    if p.exists():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                _SESSIONS[session_id] = data
+                return data
+        except Exception:  # noqa: BLE001
+            pass
+    return []
+
+
+def _save_session(session_id: str, history: List[Dict[str, str]]) -> None:
+    """保存会话历史到内存和磁盘。"""
+    _SESSIONS[session_id] = history
+    try:
+        _SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        _session_path(session_id).write_text(
+            json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        _LOG.warning("会话保存失败: %s", e)
 
 
 def _busy_wait(seconds: float) -> None:
@@ -54,15 +96,24 @@ def _busy_wait(seconds: float) -> None:
         pass
 
 # 顺序即注册顺序；新增引擎只需在此追加一行 + 在 core.fabric.adapters 落适配器。
-_ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
-    OpenClawAdapter,
-    AG2Adapter,
-    LiteLLMAdapter,
-    Mem0Adapter,
-    BrowserUseAdapter,
-    LangfuseAdapter,
-    SearchAdapter,  # 免 key 真实联网搜索（DuckDuckGo / ddgs，"dgg 库"）
-    AgnesAdapter,   # OpenAI-compatible 多模态平面：文本/图像/视频（需 AGNES_API_KEY）
+# 过滤 None：core.fabric.adapters 包对导入失败的适配器置 None，这里剔除，
+# 避免 __init__ 里 `cls()` 对 None 抛 TypeError（单适配器故障不拖垮枢纽）。
+_ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
+    a
+    for a in (
+        OpenClawAdapter,
+        AG2Adapter,
+        LiteLLMAdapter,
+        Mem0Adapter,
+        BrowserUseAdapter,
+        LangfuseAdapter,
+        SearchAdapter,       # 免 key 真实联网搜索（DuckDuckGo / ddgs，"dgg 库"）
+        WebFetchAdapter,     # URL 内容抓取（stdlib urllib，零依赖）
+        AgnesAdapter,        # OpenAI-compatible 多模态平面：文本/图像/视频（需 AGNES_API_KEY）
+        CodeExecutionAdapter,  # 本地沙箱代码执行（subprocess 隔离，零依赖）
+        FileAdapter,           # 文件读写（workspace 内，路径遍历防护）
+    )
+    if a is not None
 )
 class IsolatedAdapterProxy(BaseAgentAdapter):
     """进程内代理：让被隔离到子进程的引擎仍能参与枢纽的能力路由/自检。
@@ -136,6 +187,8 @@ class FabricHub:
         # 用于测量「内核↔芯粒」这一跳的 IPC 开销是否 ≤5%（Day8-10 闸门）。
         self.route_sim_us: float = float(os.environ.get("ROUTE_SIM_US", "0") or "0")
         for cls in (adapters if adapters is not None else _ADAPTERS):
+            if cls is None:
+                continue
             try:
                 # mem0 默认走本地零成本配置（ollama/sentence-transformers + 本地
                 # chroma），除非 AOS_MEM0_LOCAL=0 才退回远程 key 兼容模式。本机
@@ -558,7 +611,7 @@ class FabricHub:
         )
         return isinstance(res, InvokeResult) and res.ok
 
-    def run_task(self, task: str, planner: str = "ag2") -> Dict[str, Any]:
+    def run_task(self, task: str, planner: str = "ag2", session_id: str = None) -> Dict[str, Any]:
         """「think→do」自主执行闭环：规划 → 解析成 steps → 编排芯粒逐跳执行。
 
         这是把路由器变成 agent 的关键一跃（视频观点的落地）：
@@ -577,7 +630,25 @@ class FabricHub:
         caps = self._known_capabilities()
         # B 路线记忆：执行前召回与该任务相关的历史记忆，注入流水线初始上下文
         # （下游步骤可用 in_from:"initial"/field 取用；无记忆引擎则空）。
-        recalled = self.memory_recall(task)
+        # 记忆召回加超时（5s），避免 mem0 在某些平台上慢初始化拖垮整个闭环。
+        recalled: list = []
+        if os.environ.get("AOS_TASK_MEMORY", "1") != "0":
+            import threading
+            result_box: list = [[]]
+            def _do_recall():
+                try:
+                    result_box[0] = self.memory_recall(task)
+                except Exception:
+                    result_box[0] = []
+            t = threading.Thread(target=_do_recall, daemon=True)
+            t.start()
+            t.join(timeout=5)
+            recalled = result_box[0]
+        # 会话上下文：加载历史，但不注入到 task 文本里（会污染 heuristic_plan
+        # 的连词切分，导致历史文本被当成额外步骤）。改为规划后注入首步 payload。
+        session_history: List[Dict[str, str]] = []
+        if session_id:
+            session_history = _load_session(session_id)
         initial: Dict[str, Any] = {"task": task}
         if recalled:
             initial["memory"] = recalled
@@ -600,6 +671,18 @@ class FabricHub:
             used_planner = "heuristic"
         else:
             used_planner = planner_eid or planner
+        # 会话上下文：规划完成后，把历史注入首步 payload，让 LLM 能看到之前对话。
+        # 不影响规划（连词切分），只在执行时让首步 LLM 拿到完整上下文。
+        if session_history and steps:
+            recent = session_history[-_SESSION_MAX_TURNS:]
+            history_text = "\n".join(
+                f"用户: {h['task']}\n助手: {h['response'][:300]}"
+                for h in recent
+            )
+            first_in = steps[0].get("in", {})
+            original_task_text = first_in.get("task", "")
+            first_in["task"] = f"{original_task_text}\n\n[之前的会话上下文]\n{history_text}"
+            steps[0]["in"] = first_in
         # 执行阶段：复用统一路由层把 steps 逐跳委派给下游芯粒。
         exec_res = self.route(
             Capability.WORKFLOW_EXECUTE.value,
@@ -612,23 +695,99 @@ class FabricHub:
         else:
             execution = exec_res
         # B 路线记忆：执行后把本次任务结果持久化（best-effort，失败不抛）。
+        # 加超时（5s），避免 mem0 慢写入拖垮响应。
         stored = False
-        try:
+        if os.environ.get("AOS_TASK_MEMORY", "1") != "0":
+            import threading
+            store_box = [False]
             summary = json.dumps(
                 {"task": task, "planner": used_planner,
                  "ok_steps": (execution or {}).get("ok_steps"),
                  "failed_steps": (execution or {}).get("failed_steps")},
                 ensure_ascii=False,
             )
-            stored = self.memory_store(f"[task] {summary}", user_id="default")
-        except Exception:  # noqa: BLE001 - 记忆写入失败绝不拖垮主流程
-            stored = False
+            def _do_store():
+                try:
+                    store_box[0] = self.memory_store(
+                        f"[task] {summary}", "default")
+                except Exception:
+                    store_box[0] = False
+            t = threading.Thread(target=_do_store, daemon=True)
+            t.start()
+            t.join(timeout=5)
+            stored = store_box[0]
+        # 最终 LLM 总结步：把所有步骤执行结果喂给 LLM，生成自然语言回答。
+        # 策略：
+        #   - 单步成功：直接用原始输出，跳过 LLM 总结（省 1 次 LLM 调用）
+        #   - 多步或有失败：调 LLM 总结，让用户看到人话
+        #   - LLM 不可用：返回原始 trace（不编造）
+        response_text = ""
+        if isinstance(execution, dict):
+            trace = execution.get("trace", [])
+            ok_count = execution.get("ok_steps", 0)
+            total = len(trace)
+
+            if ok_count == 1 and total == 1:
+                # 单步成功 → 直接用输出，不调 LLM
+                t = trace[0]
+                out = t.get("out", "")
+                if isinstance(out, dict):
+                    response_text = out.get("content") or out.get("output") or ""
+                else:
+                    response_text = str(out) if out else ""
+            elif ok_count > 0:
+                # 多步 → 调 LLM 总结
+                llm_eid = self.resolve_engine(Capability.LLM_GATEWAY.value)
+                if llm_eid:
+                    parts = []
+                    for t in trace:
+                        cap = t.get("capability", "?")
+                        ok = t.get("ok", False)
+                        out = t.get("out", "")
+                        if isinstance(out, dict):
+                            txt = out.get("content") or out.get("output") or ""
+                        else:
+                            txt = str(out) if out else ""
+                        status = "成功" if ok else "失败"
+                        parts.append(f"步骤[{t.get('step')}] {cap} {status}: {txt[:500]}")
+                    trace_text = "\n".join(parts)
+                    summary_prompt = (
+                        f"用户任务: {task}\n\n"
+                        f"执行结果:\n{trace_text}\n\n"
+                        f"请用简洁的自然语言总结执行结果，直接回答用户的问题。"
+                        f"如果代码有输出，包含输出值。不要编造未执行的内容。"
+                    )
+                    try:
+                        llm_res = self.invoke_engine(
+                            llm_eid, Capability.LLM_GATEWAY.value,
+                            {"prompt": summary_prompt},
+                        )
+                        if isinstance(llm_res, InvokeResult) and llm_res.ok:
+                            response_text = (llm_res.data or {}).get("content", "")
+                    except Exception:  # noqa: BLE001
+                        response_text = ""
+
+        # 会话上下文：存储本轮对话（原始 task + 回答），供下一轮注入。
+        session_turns = 0
+        if session_id:
+            history = _load_session(session_id)
+            history.append({
+                "task": task,  # 原始任务，不含注入的历史
+                "response": response_text,
+            })
+            # 截断超长历史，只保留最近 N 轮
+            if len(history) > _SESSION_MAX_TURNS:
+                history = history[-_SESSION_MAX_TURNS:]
+            _save_session(session_id, history)
+            session_turns = len(history)
         return {
             "task": task,
             "planner": used_planner,
             "plan": plan_text,
             "steps": steps,
             "execution": execution,
+            "response": response_text,  # 自然语言总结（LLM 不可用时为空）
             "memory": {"recalled": len(recalled) if recalled else 0,
                        "stored": stored},
+            "session": {"id": session_id, "turns": session_turns} if session_id else None,
         }

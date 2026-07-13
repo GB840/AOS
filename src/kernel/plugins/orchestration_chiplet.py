@@ -165,6 +165,13 @@ class OrchestrationChiplet(BaseAgentAdapter):
                 if txt and "text" not in payload:
                     payload = dict(payload)
                     payload["text"] = txt
+            # 桥接 prompt：当步骤带 "prompt" 字段时，把 prompt 指令与上游产出
+            # 合并成 LLM 可消费的 payload。这是 think→do 闭环里「想」的接缝——
+            # 让 LLM 能看到上游搜索/执行结果，并按指令为下游生成代码/消息等。
+            step_prompt = step.get("prompt")
+            if step_prompt:
+                prev_text = extract_text(payload) if isinstance(payload, dict) else str(payload)
+                payload = {"prompt": f"{step_prompt}\n\n上游产出:\n{prev_text}"}
         elif step.get("in_from") == "initial":
             field = step.get("field")
             with state.lock:
