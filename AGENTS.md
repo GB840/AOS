@@ -176,3 +176,29 @@ AOS 不重造轮子：任何支持 **MCP** 的真实产品都能经**通用 MCP 
 > 接入铁律：能用完整开源就用完整的（如 Sim/Timbal/ExploreYC 全量仓库入仓对照）；
 > 只开源 SDK 不公开核心的（Auriko），借其*架构*而非*依赖*。全部经 `references/`
 > 真实源逐字对照，不凭记忆编述。
+
+## 9. 用 codebase-memory-mcp 审视整个 AOS（代码理解能力）
+
+**目标**：把真实开源工具 codebase-memory-mcp（DeusData，纯 C / 零依赖 / MIT，158 种
+语言 tree-sitter）**弄进 AOS 仓库**，让任何人 clone 本项目后都能用它直接审视整个代码库——
+这是「万物为我所用 / 把真实开源工具弄进来」的范例。完整 how-to 见
+**`third_party/codebase-memory-mcp/README.md`**。
+
+- **能力**：`code.understanding`（`src/core/fabric/capability.py`），由 stdio MCP 客户端
+  （`src/core/fabric/adapters/mcp_stdio_adapter.py`）接真实二进制，经
+  `src/core/fabric/adapters/codebase_memory_mcp_adapter.py` 把其 14 个真实工具统一映射。
+- **即插即用**：`FabricHub` 构建时自动探测并注册（`register_codebase_mcp` +
+  `_register_env_codebase_mcp`）——装好二进制（`third_party/codebase-memory-mcp/install.ps1`）
+  即通电；二进制缺失时**优雅跳过，绝不谎报 live**。
+- **别人怎么审视 AOS**：
+  1. `powershell -ExecutionPolicy Bypass -File third_party/codebase-memory-mcp/install.ps1`
+     （装二进制到 `bin/`，或改用手动 scoop/winget/npm，`AOS_CODEBASE_MCP_BIN` 指向它）
+  2. `powershell -ExecutionPolicy Bypass -File scripts/index_aos_codebase.ps1`
+     （索引整个 AOS，产物 `.codebase-memory/graph.db.zst` 可提交、别人 clone 后直接加载）
+  3. 直接 CLI 查：`codebase-memory-mcp cli get_architecture '{"project":"AOS"}'`
+     或经 AOS 运行时：`hub.route(Capability.CODE_UNDERSTANDING, {"tool":"get_architecture",...})`
+- **诚实注记**：AOS 早期有两个**冒用 codebase-memory-mcp 之名**的 legacy skill
+  （`src/skills/codebase_memory.py`、`src/skills/codebase_memory_mcp.py`），实为自研正则
+  玩具索引器、从未调用真工具。现已将 `codebase_memory_mcp.py` 改为真实后端薄代理（可用走真
+  工具、不可用诚实报错，不再造假），`codebase_memory.py` 也已纠正冒充声明。真正的集成在
+  本节所述的新栈——以 stdio MCP 接原版二进制。

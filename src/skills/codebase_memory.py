@@ -1,25 +1,12 @@
 """
-Codebase Memory MCP Skill Module - 代码库知识图谱
+Codebase Memory Skill Module - 轻量本地索引器（LEGACY，非 DeusData 工具）
 
-Codebase Memory MCP 是 DeusData 团队开发的高性能代码智能 MCP 服务器。
-核心价值：将代码库索引成可查询的知识图谱，让AI能够"理解"代码结构。
-
-技术原理:
-- 基于 Tree-Sitter 的 AST 分析（毫秒级索引）
-- 持久化知识图谱（函数、类、调用链、继承关系）
-- Hybrid LSP 增强解析（参数绑定、返回类型推断）
-- 14个 MCP 工具接口
-
-核心能力:
-- 语义搜索、调用链追踪、架构分析、变更影响分析
-- 100% 本地处理，隐私安全
-- 零依赖、单二进制、极低资源消耗
-
-性能数据:
-- 普通项目：毫秒级索引
-- Linux内核（2800万行）：3分钟
-- Token节省：10倍
-- 工具调用减少：2.1倍
+诚实声明：本文件是 AOS 早期自研的一个**轻量本地索引器**（基于正则/简单解析），
+NOT DeusData 的 codebase-memory-mcp。之前文档曾误称其为「DeusData 团队开发的高
+性能代码智能 MCP 服务器 / 基于 Tree-Sitter / 14 个 MCP 工具」——那是错误标注，
+已纠正。真正的 DeusData 工具以 stdio MCP 接入 AOS 新栈（code.understanding 能力，
+见 third_party/codebase-memory-mcp/README.md 与 src/skills/codebase_memory_mcp.py 的
+薄代理）。本文件保留为 legacy 本地兜底，供无真实工具环境时的轻量检索。
 """
 
 import os
@@ -52,16 +39,16 @@ CODEBASE_TOOLS = {
 
 class CodebaseMemorySkill(Skill):
     """
-    Codebase Memory MCP 技能
-    
-    将代码库索引成知识图谱，提供14个代码分析工具接口。
-    支持增强模式：使用内置AST分析和语义搜索能力。
+    Codebase Memory 技能（legacy 本地索引器）
+
+    轻量本地索引/检索，非 DeusData 的 codebase-memory-mcp。
+    真实工具以 stdio MCP 接入 AOS 新栈（code.understanding 能力）。
     """
     
     NAME = "codebase_memory"
-    DESCRIPTION = "Codebase Memory MCP — 将代码库索引成知识图谱，提供语义搜索、调用链追踪、架构分析等14个代码分析工具"
+    DESCRIPTION = "Codebase Memory（legacy 轻量本地索引器，非 DeusData 工具；真实工具见 third_party/codebase-memory-mcp/）"
     VERSION = "1.0.0"
-    AUTHOR = "DeusData"
+    AUTHOR = "AOS（legacy 本地索引器）"
     LICENSE = "MIT"
     CATEGORY = "development"
     TAGS = ["code", "memory", "mcp", "knowledge_graph", "ast", "search"]

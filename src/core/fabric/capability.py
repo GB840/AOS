@@ -33,6 +33,10 @@ class Capability(str, Enum):
     # Inference plane (the "fuel" the behaviour engines run on)
     LLM_GATEWAY = "inference.llm"              # unified LLM access via LiteLLM
 
+    # Code understanding (codebase-memory-mcp: real stdio MCP server, tree-sitter
+    # knowledge graph over the codebase — see third_party/codebase-memory-mcp/)
+    CODE_UNDERSTANDING = "code.understanding"  # index / search / trace / architecture
+
     # Multimodal generation (Agnes AI / OpenAI-compatible media planes)
     MEDIA_IMAGE = "media.image"                # text-to-image / image-to-image
     MEDIA_VIDEO = "media.video"                # text-to-video / image-to-video (async)

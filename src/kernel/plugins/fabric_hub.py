@@ -17,6 +17,7 @@ import logging
 import os
 import json
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.fabric import FabricRegistry
@@ -156,6 +157,10 @@ class FabricHub:
         #    "capability_map": {"tool_name": "data.query"},  # 可选
         #    "auth_token": "..."}                              # 可选
         self._register_env_mcp_servers()
+        # codebase-memory-mcp 是 stdio-only 的 MCP server（纯 C / 零依赖 / MIT），
+        # 现有 register_mcp_server 只接 HTTP(SSE)，接不上它。这里单独接 stdio
+        # 传输，并把真实工具「弄进」AOS：二进制缺失时优雅跳过，绝不谎报 live。
+        self._register_env_codebase_mcp()
         # 默认通电编排芯粒：让 system.workflow 能力在构建后即 live，
         # run_task 的底层编排才不会因「no live provider」空转。
         # （之前只有显式 add_orchestrator() 才挂，health_report 里
@@ -319,6 +324,66 @@ class FabricHub:
                 auth_token=spec.get("auth_token"),
                 timeout=spec.get("timeout", 10.0),
             )
+
+    # ---- codebase-memory-mcp（stdio MCP）即插即用 -----------------
+    def register_codebase_mcp(
+        self,
+        bin_path: str,
+        repo_path: Optional[str] = None,
+        engine_id: str = "codebase-memory-mcp",
+        timeout: float = 60.0,
+    ) -> Optional[str]:
+        """把 codebase-memory-mcp（真实 stdio MCP server）注册成 AOS 芯粒。
+
+        这是「把真实开源工具弄进 AOS」的落点：AOS 不重写它的脑子，只是用
+        stdio MCP 客户端把它接成 `code.understanding` 能力供给方。返回 engine_id；
+        失败返回 None 并记错误（绝不谎报 live）。
+        """
+        try:
+            from core.fabric.adapters.codebase_memory_mcp_adapter import (
+                build_codebase_mcp_adapter,
+            )
+            adapter = build_codebase_mcp_adapter(
+                bin_path,
+                repo_path or self._project_root(),
+                engine_id=engine_id,
+                timeout=timeout,
+            )
+            self._registry.register(adapter)
+            return engine_id
+        except Exception as e:  # noqa: BLE001 - 二进制缺失/握手失败不拖垮枢纽
+            self._errors[f"codebase-mcp:{bin_path}"] = repr(e)
+            _LOG.warning("codebase-memory-mcp 注册失败 %s: %s", bin_path, e)
+            return None
+
+    def _register_env_codebase_mcp(self) -> None:
+        """环境驱动自动注册：让真实工具「装好即通电」，无需改代码。
+
+        - 优先读 AOS_CODEBASE_MCP_BIN（显式二进制路径）；
+        - 未设则探测仓库内 install.ps1 的默认安装位
+          third_party/codebase-memory-mcp/bin/codebase-memory-mcp.exe；
+        - 二进制不存在则静默跳过（优雅，不谎报 live）；
+        - AOS_CODEBASE_MCP_REPO 可覆盖索引目录（默认仓库根）。
+        """
+        bin_path = os.environ.get("AOS_CODEBASE_MCP_BIN")
+        if not bin_path or not os.path.isfile(bin_path):
+            default = (
+                Path(self._project_root())
+                / "third_party"
+                / "codebase-memory-mcp"
+                / "bin"
+                / "codebase-memory-mcp.exe"
+            )
+            if default.is_file():
+                bin_path = str(default)
+        if not bin_path or not os.path.isfile(bin_path):
+            return
+        repo = os.environ.get("AOS_CODEBASE_MCP_REPO") or self._project_root()
+        self.register_codebase_mcp(bin_path, repo_path=repo)
+
+    def _project_root(self) -> str:
+        """仓库根（D:/AOS）：本文件位于 src/kernel/plugins/，上溯三级。"""
+        return str(Path(__file__).resolve().parents[3])
 
     def recover(self, eid: str) -> bool:
         """内核重启芯粒：清除故障记录并复探 health()。

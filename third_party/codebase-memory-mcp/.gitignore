@@ -1,0 +1,5 @@
+# 二进制与构建产物不入库（按需拉取，见 install.ps1 / README.md）。
+# 仅 .codebase-memory/graph.db.zst 这类可共享图工件才提交（见根 .gitignore 的例外规则）。
+bin/
+build/
+*.exe

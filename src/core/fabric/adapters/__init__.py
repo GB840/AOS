@@ -4,6 +4,7 @@ from .ag2_adapter import AG2Adapter
 from .agnes_adapter import AgnesAdapter
 from .litellm_adapter import LiteLLMAdapter
 from .mcp_client_adapter import MCPClientAdapter
+from .mcp_stdio_adapter import MCPStdioAdapter
 from .mem0_adapter import Mem0Adapter
 from .observability_langfuse_adapter import LangfuseAdapter
 from .openclaw_adapter import OpenClawAdapter
@@ -16,6 +17,7 @@ __all__ = [
     "LangfuseAdapter",
     "LiteLLMAdapter",
     "MCPClientAdapter",
+    "MCPStdioAdapter",
     "Mem0Adapter",
     "OpenClawAdapter",
     "SearchAdapter",

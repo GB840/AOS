@@ -183,6 +183,17 @@ references/ecosystem/sim/
 references/ecosystem/timbal/
 
 # =============================================================================
+# codebase-memory-mcp（真实工具，二进制按需拉取，不入库）
+# 见 third_party/codebase-memory-mcp/README.md
+# =============================================================================
+third_party/codebase-memory-mcp/bin/
+third_party/codebase-memory-mcp/build/
+# 本地图缓存忽略；仅可提交产物 graph.db.zst 入库（别人 clone 后直接加载）
+.codebase-memory/*
+!.codebase-memory/graph.db.zst
+
+
+# =============================================================================
 # Test fixtures (keep some, remove others)
 # =============================================================================
 tests/fixtures/generated/
