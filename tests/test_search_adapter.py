@@ -141,10 +141,17 @@ def test_plan_bridge_maps_search_to_web_search():
 
     caps = ["web.search", "media.image", "inference.llm", "action.aci"]
     steps = heuristic_plan("搜索天气并画一张示意图", caps)
+    # 首步：搜索意图 → web.search，带原始 task 入参
     assert steps[0]["capability"] == "web.search"
     assert steps[0]["in"] == {"task": "搜索天气"}
-    assert steps[1]["capability"] == "media.image"
-    assert steps[1].get("in_from") == "previous"
+    # 画图意图 → media.image（桥接增强会在中间插入 LLM 步，但意图映射必须保留）
+    img_steps = [s for s in steps if s["capability"] == "media.image"]
+    assert img_steps, "画图意图未映射到 media.image"
+    assert img_steps[0].get("in_from") == "previous"
+    # 跨能力桥接：搜索(非 LLM 源) → 画图 之间应插入 LLM 推理步生成图像提示词
+    llm_steps = [s for s in steps if s["capability"] == "inference.llm"]
+    assert llm_steps, "搜索→画图应插入 LLM 桥接步"
+    assert "提示词" in llm_steps[0].get("prompt", "")
 
 
 def test_plan_bridge_strips_ag2_angle_brackets():
