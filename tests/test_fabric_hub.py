@@ -21,6 +21,10 @@ _KNOWN_CAPS = (
     "media.image",
     "media.video",
 )
+# 枢纽当前注册的全部引擎（单一真相源；新增引擎在此追加一行即可，
+# total 断言自动从本集合推导，避免计数与集合再漂移）。
+# 前 8 个为原始通电引擎；code-exec/file-io/web-fetch 为本特性新增的零依赖
+# 适配器；orchestrator 为默认通电编排芯粒；codebase-memory-mcp 为 stdio MCP。
 _EXPECTED_ENGINES = {
     "openclaw",
     "ag2",
@@ -30,13 +34,18 @@ _EXPECTED_ENGINES = {
     "langfuse",
     "web-search",
     "agnes",
+    "code-exec",
+    "file-io",
+    "web-fetch",
+    "orchestrator",
+    "codebase-memory-mcp",
 }
 
 
 def test_registers_all_six_and_reports_total():
     hub = FabricHub()
     rep = hub.health_report()
-    assert rep["total"] == 8
+    assert rep["total"] == len(_EXPECTED_ENGINES)
     assert set(rep["adapters"].keys()) == _EXPECTED_ENGINES
     # health_report 的字段是条件性的：核心字段恒在，隔离引擎额外带 isolation，
     # 支持 health_detail 的适配器额外带 health_detail。只校验「核心必在 + 无未知字段」。
@@ -84,7 +93,7 @@ def test_kernel_delegates_resolve_engine_to_hub():
 
     k.set_fabric_hub(FabricHub())
     rep = k.fabric_health()
-    assert rep is not None and rep["total"] == 8
+    assert rep is not None and rep["total"] == len(_EXPECTED_ENGINES)
 
     hub = k.fabric_hub
     for cap in _KNOWN_CAPS:
