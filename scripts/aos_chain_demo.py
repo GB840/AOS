@@ -25,7 +25,7 @@ sys.path.insert(0, "src")
 
 from kernel.wiring import build_fabric_hub
 
-LOCAL_MODEL = os.environ.get("AOS_LOCAL_MODEL", "ollama/deepseek-r1:7b")
+LOCAL_MODEL = os.environ.get("AOS_LOCAL_MODEL", "ollama/minicpm-mem")
 OLLAMA_URL = os.environ.get("AOS_OLLAMA_URL", "http://localhost:11434")
 QUERY = "2026年人工智能领域最重要的进展有哪些？"
 
