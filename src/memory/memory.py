@@ -211,31 +211,29 @@ class MemoryManager:
         self.sqlite_conn = self._init_sqlite()
         self._use_connection_pool = False
         self._lock = threading.Lock()  # 串行化所有 sqlite 访问，避免多线程共享单连接竞态
-        
-        # 性能优化：尝试启用连接池
-        try:
-            from core.pool import get_sqlite_pool
-            self._pool = get_sqlite_pool()
-            self._use_connection_pool = True
-            logger.info("内存层：启用连接池模式")
-        except (ImportError, RuntimeError):
-            self._use_connection_pool = False
-            logger.info("内存层：使用单连接模式")
-        
+
+        # 注意：core.pool.ConnectionPool 的 acquire/release 均为 async 协程，
+        # 而本类所有数据库操作为同步上下文，无法安全 await。旧实现曾在此尝试启用
+        # 连接池并把 _use_connection_pool 置 True，导致 _get_connection() 调用
+        # 不存在的同步 get_connection() 而抛 AttributeError（见 DEEP_AUDIT 报告 Bug#1）。
+        # 统一使用上面的单连接 + 锁模式，不再启用连接池。
+        self._use_connection_pool = False
+
         self._init_vector_store()
     
     def _get_connection(self):
-        """获取数据库连接（优先使用连接池，提高并发性能）"""
-        if self._use_connection_pool:
-            return self._pool.get_connection()
-        else:
-            # 单连接模式需要锁保证线程安全
-            from contextlib import contextmanager
-            @contextmanager
-            def single_connection():
-                with self._lock:
-                    yield self.sqlite_conn
-            return single_connection()
+        """获取数据库连接（单连接 + 锁，保证线程安全）。
+
+        注：core.pool.ConnectionPool 的 acquire/release 均为 async，无法在同步
+        上下文中使用，故 MemoryManager 统一走单连接模式（见 __init__ 说明）。
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def single_connection():
+            with self._lock:
+                yield self.sqlite_conn
+        return single_connection()
     
     def close(self):
         """关闭资源"""
@@ -326,13 +324,56 @@ class MemoryManager:
     def _create_tables(self, conn: sqlite3.Connection):
         """记忆层表结构。
 
-        基础表 (conversations / knowledge / tasks) 由单一真相层 core.database.init_db
-        统一创建 (含正确列与索引)；此处仅补充 SQLModel 无法表达的 FTS5 全文检索
-        虚拟表、触发器与性能索引。
-        """
-        from core.database import init_db
+        基础表 (conversations / knowledge / tasks) 直接用本连接的 db 文件创建，
+        不再委托 core.database.init_db()——后者是进程级引擎单例，其 SQLITE_DB_PATH
+        在 monkeypatch 改路径的测试场景下不响应变化，会把表建到错误的库（详见
+        DEEP_AUDIT 复核发现的「no such table: main.conversations」问题）。
 
-        init_db()  # 确保基础表存在 (单一真相层)
+        schema 与 core.database.models.infra 的 Conversation/Knowledge/Task 模型保持一致。
+        """
+        # 基础表（字段与 core.database.models.infra 对齐；TimestampMixin 提供 created_at/updated_at）
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata TEXT DEFAULT '{}',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS knowledge (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source TEXT DEFAULT '',
+                tags TEXT DEFAULT '[]',
+                metadata TEXT DEFAULT '{}',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                input TEXT DEFAULT '{}',
+                output TEXT DEFAULT '{}',
+                error TEXT DEFAULT '',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
 
         conn.executescript(
             """
@@ -590,7 +631,8 @@ class MemoryManager:
         
         with self._lock:
             cursor = self.sqlite_conn.execute(
-                """SELECT * FROM knowledge_fts
+                """SELECT rowid as id, title, content, source, tags
+                   FROM knowledge_fts
                    WHERE knowledge_fts MATCH ?
                    ORDER BY rank LIMIT ?""",
                 (safe_query, limit),
@@ -600,7 +642,7 @@ class MemoryManager:
         for row in rows:
             result.append(
                 {
-                    "id": row["rowid"],
+                    "id": row["id"],
                     "title": row["title"],
                     "content": row["content"],
                     "source": row["source"],

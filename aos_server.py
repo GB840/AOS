@@ -30,21 +30,26 @@ sys = build_default_system()
 k = sys.kernel
 k.register_agent(AgentSpec("assistant", "Assistant", "litellm", ["chat"]))
 
-router = get_router()
-register_builtins(router)
-
-# LLM 语义路由降级（关键词没命中时尝试）
-def llm_route(text, caps):
-    try:
-        r = k.send_message(Message(sender="router", recipient="assistant",
-            payload={"prompt": f"你是一个路由器。用户说: \"{text}\"。可用能力: {caps}。只返回最匹配的能力名，不要解释。都不匹配返回 none。"}))
-        if r.ok and r.data:
-            raw = r.data.get("content","").strip().lower()
-            for c in caps:
-                if c in raw: return c
-    except: pass
-    return None
-router.set_llm_router(llm_route)
+if _HAS_ROUTER:
+    router = get_router()
+    register_builtins(router)
+    # LLM 语义路由降级（关键词没命中时尝试）
+    def llm_route(text, caps):
+        try:
+            r = k.send_message(Message(sender="router", recipient="assistant",
+                payload={"prompt": f"你是一个路由器。用户说: \"{text}\"。可用能力: {caps}。只返回最匹配的能力名，不要解释。都不匹配返回 none。"}))
+            if r.ok and r.data:
+                raw = r.data.get("content","").strip().lower()
+                for c in caps:
+                    if c in raw: return c
+        except: pass
+        return None
+    router.set_llm_router(llm_route)
+else:
+    # kernel.router 模块从未入库（仅 .pyc 缓存），路由相关功能不可用。
+    # 降级为 None：下方 HTTP 处理器在 router 为 None 时返回明确错误，而非崩溃。
+    router = None
+    print("WARNING: kernel.router 不可用，路由功能降级（仅 LLM 兜底）")
 
 HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AOS v1.0</title>
 <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#0f0f14;color:#e0e0e0;height:100vh;display:flex}
@@ -79,11 +84,23 @@ function send(){
 from http.server import HTTPServer, BaseHTTPRequestHandler
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/api/caps": self._json(router.list_capabilities())
-        else: self._html(HTML)
+        if self.path == "/api/caps":
+            if router is not None:
+                self._json(router.list_capabilities())
+            else:
+                self._json([])
+        else:
+            self._html(HTML)
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         prompt = body.get("prompt", "")
+        if router is None:
+            # 路由不可用：直接走 LLM 兜底
+            t0 = time.monotonic()
+            r = k.send_message(Message(sender="web", recipient="assistant", payload={"prompt": prompt}))
+            lat = round(time.monotonic() - t0, 2)
+            text = r.data.get("content", "")[:1500] if r.data else r.error
+            self._json({"text": text, "llm": True, "meta": f"Zhipu(无路由) · {lat}s"}); return
         cap = router.route(prompt)
         llm_routed = cap and cap not in [c for c in ["search","calc","code","time","status"] if any(kw.lower() in prompt.lower() for kw in router._caps.get(c, type('',(),{'keywords':[]})()).keywords)]
         if cap:
@@ -100,5 +117,5 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 if __name__ == "__main__":
-    print(f"AOS v1.0 — http://localhost:8000 ({router.count} caps, LLM fallback)")
+    print(f"AOS v1.0 — http://localhost:8000 ({router.count if router else 0} caps, LLM fallback)")
     HTTPServer(("0.0.0.0", 8000), H).serve_forever()

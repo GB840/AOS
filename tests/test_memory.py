@@ -37,7 +37,6 @@ class TestMemoryManager:
         assert mem.db_path is not None
         assert mem.sqlite_conn is not None
 
-    @pytest.mark.xfail(reason="ConnectionPool.get_connection() not implemented", raises=AttributeError)
     def test_add_conversation(self, clean_data_dir):
         """Test adding a conversation message."""
         from src.memory.memory import MemoryManager
@@ -51,7 +50,6 @@ class TestMemoryManager:
         )
         assert conv_id > 0
 
-    @pytest.mark.xfail(reason="ConnectionPool.get_connection() not implemented", raises=AttributeError)
     def test_get_conversation_history(self, clean_data_dir):
         """Test retrieving conversation history."""
         from src.memory.memory import MemoryManager
@@ -71,7 +69,6 @@ class TestMemoryManager:
         assert history[1]["content"] == "Second message"
         assert history[2]["content"] == "Third message"
 
-    @pytest.mark.xfail(reason="ConnectionPool.get_connection() not implemented", raises=AttributeError)
     def test_add_knowledge(self, clean_data_dir):
         """Test adding knowledge entries."""
         from src.memory.memory import MemoryManager
@@ -85,7 +82,6 @@ class TestMemoryManager:
         )
         assert kid > 0
 
-    @pytest.mark.xfail(reason="ConnectionPool.get_connection() not implemented", raises=AttributeError)
     def test_search_knowledge_fulltext(self, clean_data_dir):
         """Test full-text search on knowledge."""
         from src.memory.memory import MemoryManager
@@ -144,7 +140,6 @@ class TestMemoryManager:
         assert len(completed) == 1
         assert completed[0]["id"] == "task-a"
 
-    @pytest.mark.xfail(reason="ConnectionPool.get_connection() not implemented", raises=AttributeError)
     def test_hybrid_search(self, clean_data_dir):
         """Test hybrid search combining vector and full-text."""
         from src.memory.memory import MemoryManager
