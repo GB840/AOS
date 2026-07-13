@@ -13,10 +13,8 @@ import json
 import sys
 
 TOOLS = [
-    "index_repository", "list_projects", "delete_project", "index_status",
-    "search_graph", "trace_path", "detect_changes", "query_graph",
+    "index_repository", "search_graph", "trace_path", "query_graph",
     "get_graph_schema", "get_code_snippet", "get_architecture", "search_code",
-    "manage_adr", "ingest_traces",
 ]
 
 

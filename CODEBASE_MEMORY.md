@@ -5,6 +5,17 @@ AOS 把真实开源工具 [codebase-memory-mcp](https://github.com/DeusData/code
 直接用它理解整个代码库。它不是 AOS 自研的玩具索引器，而是原版二进制，由 AOS 新栈以
 stdio MCP 接入（`code.understanding` 能力）。
 
+## 最快：一键脚本（推荐）
+
+```powershell
+# 在仓库根目录 D:\AOS 下，一条命令完成"下载二进制 + 索引整个仓库"
+powershell -ExecutionPolicy Bypass -File setup_codebase_memory.ps1
+```
+
+跑完 AOS 即自动通电 `code.understanding` 能力，并生成可提交的
+`.codebase-memory/graph.db.zst`。脚本内部就是下面第 1、2 步的组合；若你想分步或手动
+安装，见下文。
+
 ## 三步上手
 
 ```powershell
@@ -33,9 +44,9 @@ hub.route(Capability.CODE_UNDERSTANDING,
 
 ## 关键文件
 
-- `third_party/codebase-memory-mcp/README.md` —— 完整说明、14 个真实工具清单、AOS 集成细节
+- `third_party/codebase-memory-mcp/README.md` —— 完整说明、8 个 MCP 工具 + 6 个 CLI 工具清单、AOS 集成细节
 - `src/core/fabric/adapters/mcp_stdio_adapter.py` —— stdio MCP 客户端（subprocess + JSON-RPC）
-- `src/core/fabric/adapters/codebase_memory_mcp_adapter.py` —— 14 工具 → `code.understanding` 映射
+- `src/core/fabric/adapters/codebase_memory_mcp_adapter.py` —— 8 个 MCP 工具 → `code.understanding` 映射
 - `src/kernel/plugins/fabric_hub.py` —— `register_codebase_mcp` / 自动探测注册
 - `tests/test_mcp_stdio_adapter.py` —— 端到端验证（对 mock server，initialize→tools/list→tools/call）
 

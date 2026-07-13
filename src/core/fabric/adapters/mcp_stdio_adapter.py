@@ -214,7 +214,7 @@ class MCPStdioAdapter(BaseAgentAdapter):
 
     # ---- 执行 -----------------------------------------------------
     def invoke(self, req: InvokeRequest) -> InvokeResult:
-        # 14 个工具共用一个 code.understanding 能力时，由 payload["tool"] 指定具体
+        # 8 个 MCP 工具共用一个 code.understanding 能力时，由 payload["tool"] 指定具体
         # MCP tool；否则用该能力映射到的首个 tool。诚实：无 tool 且无映射则失败，
         # 绝不把任意能力悄悄落到第一个 tool（那是弄虚）。
         tool_name = req.payload.get("tool") or req.payload.get("name")

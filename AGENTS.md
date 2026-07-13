@@ -186,7 +186,8 @@ AOS 不重造轮子：任何支持 **MCP** 的真实产品都能经**通用 MCP 
 
 - **能力**：`code.understanding`（`src/core/fabric/capability.py`），由 stdio MCP 客户端
   （`src/core/fabric/adapters/mcp_stdio_adapter.py`）接真实二进制，经
-  `src/core/fabric/adapters/codebase_memory_mcp_adapter.py` 把其 14 个真实工具统一映射。
+  `src/core/fabric/adapters/codebase_memory_mcp_adapter.py` 把其 8 个真实 MCP 工具统一映射
+  （另有 6 个工具仅作 `cli` 子命令提供，不进 MCP server）。
 - **即插即用**：`FabricHub` 构建时自动探测并注册（`register_codebase_mcp` +
   `_register_env_codebase_mcp`）——装好二进制（`third_party/codebase-memory-mcp/install.ps1`）
   即通电；二进制缺失时**优雅跳过，绝不谎报 live**。

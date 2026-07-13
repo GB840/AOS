@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """端到端验证：MCPStdioAdapter 真的按 MCP stdio 协议跑通（对 mock server）。
 
-这是「不弄虚」的硬证据：适配器起子进程、做 initialize 握手、列 14 个工具、
+这是「不弄虚」的硬证据：适配器起子进程、做 initialize 握手、列 8 个 MCP 工具、
 调 tools/call 拿到真实返回、shutdown 后 health=False；并验证缺失二进制时
 构造即优雅失败（绝不谎报 live）。
 
@@ -82,7 +82,7 @@ def main() -> None:
 
     print("PASS: MCPStdioAdapter 端到端跑通 "
           "(initialize -> tools/list -> tools/call -> shutdown)；"
-          "缺失二进制优雅失败；14 工具映射 code.understanding。")
+          "缺失二进制优雅失败；8 个 MCP 工具映射 code.understanding。")
 
 
 if __name__ == "__main__":

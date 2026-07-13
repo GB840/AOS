@@ -12,16 +12,18 @@
 - **速度**：普通仓库毫秒级；Linux 内核（2800 万行）全量约 3 分钟；查询亚毫秒
 - **隐私**：100% 本地处理，不联网、不上传代码
 
-## 它暴露的 14 个 MCP 工具
+## 它暴露的工具（MCP + CLI）
 
-索引类：`index_repository` `list_projects` `delete_project` `index_status`
-查询类：`search_graph` `trace_path` `detect_changes` `query_graph` `get_graph_schema` `get_code_snippet` `get_architecture` `search_code` `manage_adr` `ingest_traces`
+二进制共提供 14 个工具，但**经 MCP stdio server 只暴露 8 个**（其余 6 个仅作为 `cli` 子命令可用）：
+
+- **MCP stdio 暴露的 8 个**：`index_repository` `search_graph` `trace_path` `query_graph` `get_graph_schema` `get_code_snippet` `get_architecture` `search_code`
+- **仅 CLI 可用的 6 个**（不进 MCP server）：`list_projects` `delete_project` `index_status` `detect_changes` `manage_adr` `ingest_traces`
 
 ## AOS 如何用它（已集成，无需改代码）
 
 - AOS 新增 `code.understanding` 能力（`src/core/fabric/capability.py`）
 - stdio MCP 客户端 `src/core/fabric/adapters/mcp_stdio_adapter.py` 起子进程、做 initialize 握手、列工具、调工具
-- 适配工厂 `src/core/fabric/adapters/codebase_memory_mcp_adapter.py` 把 14 个工具统一映射到 `code.understanding`
+- 适配工厂 `src/core/fabric/adapters/codebase_memory_mcp_adapter.py` 把 8 个 MCP 工具统一映射到 `code.understanding`
 - `FabricHub` 在构建时自动探测并注册（`register_codebase_mcp` + `_register_env_codebase_mcp`）：
   - 读了 `AOS_CODEBASE_MCP_BIN` 就用它；
   - 否则探测 `third_party/codebase-memory-mcp/bin/codebase-memory-mcp.exe`；

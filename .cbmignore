@@ -1,0 +1,59 @@
+# Project-specific ignore for codebase-memory-mcp (gitignore syntax).
+# Goal: let the indexer scan real source, skip binaries / caches / build artifacts
+# that make the tree-sitter worker crash. Source files (.py/.js/.ts/.go/.rs/.md/.json/...)
+# are intentionally NOT ignored.
+
+# Build / dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+build/
+out/
+
+# Binaries / archives (a 37MB .exe was crashing the index worker)
+*.exe
+*.dll
+*.so
+*.dylib
+*.zip
+*.tar.gz
+*.tgz
+*.gz
+*.7z
+*.rar
+*.bin
+*.obj
+
+# Media
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.ico
+*.svg
+*.mp3
+*.mp4
+*.wav
+*.avi
+
+# Databases / large artifacts
+*.db
+*.db.zst
+*.sqlite
+*.sqlite3
+
+# Caches / tooling / generated
+.workbuddy/
+.codebase-memory/
+.cache/
+tmp/
+*.tmp
+*.log
+
+# Vendored ecosystem sources (large, may contain pathological files)
+references/ecosystem/
