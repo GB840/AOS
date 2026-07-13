@@ -50,7 +50,7 @@ def build_mem0_config(force_local: bool = False) -> dict | None:
 
     # ---- 本地零成本优先（绝不触碰付费 API） ----
     if force_local or os.environ.get("AOS_MEM0_LOCAL") == "1":
-        llm_model = os.environ.get("AOS_MEM0_LLM_MODEL", "qwen2.5:7b")
+        llm_model = os.environ.get("AOS_MEM0_LLM_MODEL", "minicpm-mem")
         ollama_url = os.environ.get("AOS_MEM0_OLLAMA_URL", "http://localhost:11434")
         emb_choice = os.environ.get("AOS_MEM0_EMBEDDER", "ollama")
         if emb_choice == "huggingface":
@@ -138,7 +138,12 @@ class Mem0Adapter(BaseAgentAdapter):
     """Thin wrapper over the real Mem0 agent-memory (the "memory" plane)."""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        # Mem0 needs an LLM + vector store; defaults pick sane env-based ones.
+        # 默认生成本地零成本配置（ollama LLM + ollama embedder + 本地 chroma），
+        # 不依赖任何付费 key；调用方显式传入 config 可覆盖。
+        # 旧代码此处 self._config 恒为空字典 -> _build_memory 走 Memory() 无参
+        # -> mem0 去找 OpenAI key -> Missing credentials。这是记忆步长期假死的真因。
+        if not config:
+            config = build_mem0_config(force_local=True)
         self._config: dict[str, Any] = config or {}
 
     @property
