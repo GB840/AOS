@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -117,10 +118,20 @@ class OpenClawAdapter(BaseAgentAdapter):
                     "agent", "--agent", self._agent, "-m", text, "--json", timeout=600
                 )
                 if proc.returncode != 0:
+                    err, action = self._parse_failure(proc)
                     return InvokeResult(
-                        ok=False, error=proc.stderr.strip() or "openclaw agent failed"
+                        ok=False, error=err, data={"action": action} if action else None
                     )
-                data = json.loads(proc.stdout)
+                try:
+                    data = json.loads(proc.stdout)
+                except json.JSONDecodeError:
+                    # 非 JSON 输出（openclaw 把报错打到 stdout 而非 stderr 的情况）
+                    err, action = self._parse_failure(proc)
+                    return InvokeResult(
+                        ok=False,
+                        error=err or "openclaw 返回非 JSON 内容",
+                        data={"action": action} if action else None,
+                    )
                 if data.get("status") != "ok":
                     return InvokeResult(ok=False, error=str(data.get("summary")))
                 payloads = (data.get("result") or {}).get("payloads") or []
@@ -137,6 +148,68 @@ class OpenClawAdapter(BaseAgentAdapter):
         except Exception as e:  # gateway down / cli missing -> graceful degrade
             logger.warning("openclaw invoke failed: %s", e)
             return InvokeResult(ok=False, error=str(e))
+
+    @staticmethod
+    def _strip_ansi(s: str) -> str:
+        return re.sub(r"\x1b\[[0-9;]*m", "", s or "")
+
+    def _parse_failure(self, proc: "subprocess.CompletedProcess[str]") -> tuple[str, str | None]:
+        """把 openclaw CLI 的报错翻译成「诚实 + 可操作」的中文诊断。
+
+        不把整段带 ANSI 颜色码的 stderr 当 error 甩出去（那是之前误导
+        'Expecting value' 的根源）。优先识别已知故障模式并给出修复动作。
+        """
+        clean = self._strip_ansi((proc.stderr or "") + "\n" + (proc.stdout or ""))
+        if "SessionWriteLockStaleError" in clean:
+            return (
+                "openclaw 网关 session 写锁污染(stale lock)：网关进程卡住了一个会话锁，"
+                "新 agent 调用无法创建会话",
+                "重启网关清除锁：先 `openclaw gateway stop`（或 "
+                "`schtasks /End /TN \"OpenClaw Gateway\"`）停掉旧进程，再 "
+                "`openclaw gateway run --bind loopback --port 18789 "
+                "--token aos-fabric-2026local` 重新拉起",
+            )
+        low = clean.lower()
+        if "401" in clean or ("unauthorized" in low) or ("token" in low and "fail" in low):
+            return (
+                "openclaw 网关鉴权失败：OPENCLAW_GATEWAY_TOKEN 与网关启动时不一致",
+                "确保 AOS 环境变量 OPENCLAW_GATEWAY_TOKEN 等于启动网关用的 --token",
+            )
+        if "gateway" in low and ("not" in low or "refused" in low or "down" in low):
+            return (
+                "openclaw 网关不可达",
+                "启动网关：openclaw gateway run --bind loopback --port 18789 "
+                "--token aos-fabric-2026local",
+            )
+        # 兜底：取最后一行有意义的内容，截断避免噪音
+        lines = [l.strip() for l in clean.splitlines() if l.strip()]
+        head = lines[-1] if lines else "openclaw agent 异常退出（无错误输出）"
+        return (head[:300], None)
+
+    def agent_health(self, timeout: int = 20) -> dict:
+        """真实 agent 可达性探针：不只查端口，而是真发一个 ping 看能否出会话。
+
+        health_detail() 只看 TCP 端口（端口在听 ≠ agent 真能工作，stale lock
+        就是反例）。本方法弥补这个「假健康」缺口。
+        返回 {"status": "ok" | "gateway_down" | "agent_stale" | "agent_error",
+              "reason": str|None, "action": str|None}
+        """
+        if self.health_detail()["status"] != "ok":
+            return {"status": "gateway_down"}
+        try:
+            proc = self._run(
+                "agent", "--agent", self._agent, "-m", "ping", "--json", timeout=timeout
+            )
+            if proc.returncode == 0:
+                try:
+                    json.loads(proc.stdout)
+                    return {"status": "ok"}
+                except json.JSONDecodeError:
+                    pass
+            err, action = self._parse_failure(proc)
+            return {"status": "agent_stale", "reason": err, "action": action}
+        except Exception as e:  # noqa: BLE001
+            return {"status": "agent_error", "reason": str(e)}
 
     def health(self) -> bool:
         return self.health_detail()["status"] == "ok"
