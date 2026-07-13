@@ -317,6 +317,17 @@ def cmd_demo(args):
 
 
 # ================================================================
+def cmd_serve(args):
+    """Phase 1a: 启动 FabricHub HTTP 服务模式（纯增量，不碰 brain/deerflow）。
+
+    经 src/core/fabric/http_server.py 暴露 /api/chat、/api/run_task、/api/mcp，
+    复用同一 FabricHub 内核，与 v5(:8000) 并存。详见该模块 docstring。
+    """
+    from core.fabric.http_server import serve
+    serve(host=args.host, port=args.port)
+
+
+# ================================================================
 def main():
     parser = argparse.ArgumentParser(description="AOS v1.0 统一控制台")
     sub = parser.add_subparsers(dest="cmd")
@@ -351,6 +362,12 @@ def main():
 
     sub.add_parser("skills", help="列出所有技能").set_defaults(func=cmd_skills)
     sub.add_parser("demo", help="综合演示").set_defaults(func=cmd_demo)
+
+    p_serve = sub.add_parser("serve", help="启动 FabricHub HTTP 服务模式 (Phase 1a)")
+    p_serve.add_argument("--host", default="0.0.0.0", help="绑定地址 (默认 0.0.0.0)")
+    p_serve.add_argument("--port", type=int, default=8123,
+                         help="监听端口 (默认 8123, 避开 v5 的 8000)")
+    p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     if not args.cmd:
