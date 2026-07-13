@@ -65,6 +65,11 @@ DEFAULT_OPENCLAW_TOKEN = "aos-fabric-2026local"
 AOS_VENV = Path(os.environ.get("AOS_VENV", str(DEFAULT_AOS_VENV)))
 DEERFLOW_VENV = Path(os.environ.get("DEERFLOW_VENV", str(DEFAULT_DEERFLOW_VENV)))
 OPENCLAW_TOKEN = os.environ.get("OPENCLAW_TOKEN", DEFAULT_OPENCLAW_TOKEN)
+# 网关用 --token 起的，AOS 的 OpenClawAdapter 必须拿到同一个 token 才能鉴权
+# 通过 `openclaw agent` CLI 调网关。这里把 token 注入环境，使下游 openclaw
+# 服务(继承)与 aos 服务(_aos_env 拷贝 os.environ)都能一致拿到，避免"网关活
+# 着但 AOS 调不通"的隐性故障。
+os.environ.setdefault("OPENCLAW_GATEWAY_TOKEN", OPENCLAW_TOKEN)
 DEFAULT_SITE = Path(
     r"C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Lib\site-packages"
 )
