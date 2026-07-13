@@ -203,6 +203,47 @@ class Mem0Adapter(BaseAgentAdapter):
             logger.debug("mem0 health check failed: %s", e)
             return False
 
+    def health_detail(self) -> dict:
+        """真实通电自检：不只看 import 成不成功（那是假健康），而是探后端是否真在跑。
+
+        health() 保持轻量（仅 import 检查，供 route 热路径频繁调用）；
+        本方法供 health_report / 诊断用，做真实后端探测，避免 health_report
+        显示「live」实则调不动（ollama 没起 / 远程 key 没配）。
+        返回 {"status": "ok"|"ollama_down"|"no_config"|"import_missing",
+              "reason": str}
+        """
+        try:
+            _import_mem0()
+        except Exception as e:  # noqa: BLE001
+            return {"status": "import_missing", "reason": str(e)}
+        cfg = self._config or {}
+        llm = (cfg.get("llm") or {})
+        provider = llm.get("provider")
+        if provider == "ollama":
+            # 本地零成本模式：必须 ollama 真在跑才有意义
+            import os as _os
+            ollama_url = (llm.get("config") or {}).get(
+                "ollama_base_url",
+                _os.environ.get("AOS_MEM0_OLLAMA_URL", "http://localhost:11434"),
+            )
+            try:
+                import requests
+                r = requests.get(ollama_url, timeout=2)
+                if r.status_code == 200:
+                    return {"status": "ok", "reason": f"ollama 可达 {ollama_url}"}
+                return {"status": "ollama_unreachable",
+                        "reason": f"ollama 返回 HTTP {r.status_code} ({ollama_url})"}
+            except Exception as e:  # noqa: BLE001
+                return {"status": "ollama_down",
+                        "reason": f"ollama 不可达 ({ollama_url}): {e}"}
+        # 远程 key 模式：探 key 是否配置（不探网络，避免慢）
+        import os as _os
+        for envk in ("SILICONFLOW_API_KEY", "ZHIPU_API_KEY", "UNIFIED_API_KEY"):
+            if _os.environ.get(envk):
+                return {"status": "ok", "reason": f"{envk} 已配置（远程模式）"}
+        return {"status": "no_config",
+                "reason": "无本地 ollama 也无远程 key，mem0 无法真实持久化"}
+
     def supported_protocols(self) -> list[str]:
         # Mem0 runs an LLM under the hood (via LiteLLM) and exposes an
         # OpenAI-compatible client in recent versions.

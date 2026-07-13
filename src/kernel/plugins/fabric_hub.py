@@ -156,6 +156,14 @@ class FabricHub:
         #    "capability_map": {"tool_name": "data.query"},  # 可选
         #    "auth_token": "..."}                              # 可选
         self._register_env_mcp_servers()
+        # 默认通电编排芯粒：让 system.workflow 能力在构建后即 live，
+        # run_task 的底层编排才不会因「no live provider」空转。
+        # （之前只有显式 add_orchestrator() 才挂，health_report 里
+        #  system.workflow 永远显示未通电，run_task 默认跑不出编排。）
+        try:
+            self.add_orchestrator()
+        except Exception as e:  # noqa: BLE001 - 编排芯粒注册失败不拖垮枢纽
+            _LOG.warning("默认注册编排芯粒失败: %s", e)
 
     # ---- 模拟路由层（仅探测用，生产默认关闭） --------------------
     def set_route_sim_us(self, micros: float) -> None:

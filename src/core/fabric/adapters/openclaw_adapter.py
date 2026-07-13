@@ -189,12 +189,16 @@ class OpenClawAdapter(BaseAgentAdapter):
     def agent_health(self, timeout: int = 20) -> dict:
         """真实 agent 可达性探针：不只查端口，而是真发一个 ping 看能否出会话。
 
-        health_detail() 只看 TCP 端口（端口在听 ≠ agent 真能工作，stale lock
-        就是反例）。本方法弥补这个「假健康」缺口。
+        health() 只看 TCP 端口（端口在听 ≠ agent 真能工作，stale lock 就是反例）。
+        本方法弥补这个「假健康」缺口。开头做轻量端口探（不回调用 health_detail，
+        避免与 health_detail→agent_health 互递归）。
         返回 {"status": "ok" | "gateway_down" | "agent_stale" | "agent_error",
               "reason": str|None, "action": str|None}
         """
-        if self.health_detail()["status"] != "ok":
+        try:
+            with socket.create_connection(("127.0.0.1", OPENCLAW_GATEWAY_PORT), timeout=2):
+                pass
+        except Exception:  # noqa: BLE001
             return {"status": "gateway_down"}
         try:
             proc = self._run(
@@ -212,31 +216,48 @@ class OpenClawAdapter(BaseAgentAdapter):
             return {"status": "agent_error", "reason": str(e)}
 
     def health(self) -> bool:
-        return self.health_detail()["status"] == "ok"
+        # 轻量：仅探端口。热路径（route 每次都调 health）不做 agent ping，
+        # 否则每次路由都多一次 agent 调用。真实 agent 可达性由 health_detail
+        # / agent_health 暴露。
+        try:
+            with socket.create_connection(("127.0.0.1", OPENCLAW_GATEWAY_PORT), timeout=2):
+                return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def health_detail(self) -> dict:
-        """结构化自检：区分「网关端口不通」与「二进制缺失」，并给出可操作修复动作。
+        """结构化自检：区分「网关端口不通」「二进制缺失」「agent 真不可用」。
 
-        返回 {"status": "ok"|"port_down"|"binary_missing",
+        比 health() 多一层：端口在听 ≠ agent 真能工作（stale lock 就是反例），
+        故 TCP 可达时再发一次轻量 agent ping 探真实可达性。
+        返回 {"status": "ok"|"port_down"|"binary_missing"|"agent_stale"|"agent_error",
               "reason": str|None, "action": str|None}
         """
         try:
             with socket.create_connection(("127.0.0.1", OPENCLAW_GATEWAY_PORT), timeout=2):
-                return {"status": "ok", "reason": None, "action": None}
-        except Exception as e:  # noqa: BLE001
-            port_err = e
-        have_cli = bool(shutil.which("openclaw")) or os.path.exists(OPENCLAW_DEFAULT_CLI)
-        if _resolve_openclaw_mjs() is None and not have_cli:
+                pass
+        except Exception:  # noqa: BLE001
+            have_cli = bool(shutil.which("openclaw")) or os.path.exists(OPENCLAW_DEFAULT_CLI)
+            if _resolve_openclaw_mjs() is None and not have_cli:
+                return {
+                    "status": "binary_missing",
+                    "reason": "OpenClaw 网关未运行，且未找到 openclaw 二进制（npm -g openclaw / openclaw.cmd）",
+                    "action": "npm i -g openclaw   或   运行 python scripts/aos_supervisor.py --only openclaw 拉起网关(:18789)",
+                }
             return {
-                "status": "binary_missing",
-                "reason": "OpenClaw 网关未运行，且未找到 openclaw 二进制（npm -g openclaw / openclaw.cmd）",
-                "action": "npm i -g openclaw   或   运行 python scripts/aos_supervisor.py --only openclaw 拉起网关(:18789)",
+                "status": "port_down",
+                "reason": f"OpenClaw 网关未监听 127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
+                "action": "启动网关：openclaw gateway run --bind loopback --port 18789 --token aos-fabric-2026local",
             }
-        return {
-            "status": "port_down",
-            "reason": f"OpenClaw 网关未监听 127.0.0.1:{OPENCLAW_GATEWAY_PORT}（{type(port_err).__name__}）",
-            "action": "启动网关：openclaw gateway --allow-unconfigured   或   python scripts/aos_supervisor.py --only openclaw",
-        }
+        # 端口在听 → 进一步探 agent 是否真能出会话（暴露 stale lock 等假健康）
+        ah = self.agent_health(timeout=8)
+        if ah["status"] != "ok":
+            return {
+                "status": ah["status"],
+                "reason": ah.get("reason"),
+                "action": ah.get("action"),
+            }
+        return {"status": "ok", "reason": "网关端口可达且 agent 可出会话", "action": None}
 
     def ensure_gateway(self, token: str | None = None, timeout: float = 60.0) -> bool:
         """尽力自动拉起 OpenClaw Gateway（:18789）。已健康则直接返回 True。
