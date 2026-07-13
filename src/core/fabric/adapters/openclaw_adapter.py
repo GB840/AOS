@@ -90,10 +90,12 @@ class OpenClawAdapter(BaseAgentAdapter):
         return "openclaw"
 
     def advertise_capabilities(self) -> list[Capability]:
-        # 本适配器只实现 CHANNEL_ACCESS（经 openclaw CLI 把消息交给网关背后的
-        # LLM）。TOOL_USE / MEMORY_PERSISTENT 由 AOS 其它芯粒（ag2 / mem0）
-        # 真实承载，故此处不虚报，避免路由优先选中却立刻 ok=False 再降级。
-        return [Capability.CHANNEL_ACCESS]
+        # CHANNEL_ACCESS：经 openclaw agent 把消息交给网关背后的 LLM（聊天）。
+        # CHANNEL_SEND：经 openclaw agent --channel <渠道> --deliver 把消息
+        #   真正推送出去（文档「场景1：通过微信通知我」的真实落地路径）。
+        # TOOL_USE / MEMORY_PERSISTENT 由 AOS 其它芯粒（ag2 / mem0）真实承载，
+        # 此处不虚报，避免路由优先选中却立刻 ok=False 再降级。
+        return [Capability.CHANNEL_ACCESS, Capability.CHANNEL_SEND]
 
     def _run(self, *args: str, timeout: int = 600) -> subprocess.CompletedProcess[str]:
         env = dict(os.environ)
@@ -106,6 +108,34 @@ class OpenClawAdapter(BaseAgentAdapter):
             timeout=timeout,
             env=env,
         )
+
+    @staticmethod
+    def _build_send_args(
+        channel: str,
+        text: str,
+        to: str | None = None,
+        agent: str | None = None,
+        session_key: str | None = None,
+        session_id: str | None = None,
+    ) -> list[str]:
+        """构造真实的渠道投递命令（供 dry-run 验证，无副作用）。
+
+        机制已探明（非文档臆测，实测验证）：
+          openclaw agent --channel <渠道> --message "<文本>" --deliver --json
+            [--to <E.164> | --agent <id> | --session-key <key> | --session-id <id>]
+        OpenClaw 要求「必须指定投递目标」，四种模式任选其一；缺省会报
+        "No target session selected"。
+        """
+        args = ["agent", "--channel", channel, "--message", text, "--deliver", "--json"]
+        if to:
+            args += ["--to", str(to)]
+        elif agent:
+            args += ["--agent", str(agent)]
+        elif session_key:
+            args += ["--session-key", str(session_key)]
+        elif session_id:
+            args += ["--session-id", str(session_id)]
+        return args
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         try:
@@ -138,6 +168,52 @@ class OpenClawAdapter(BaseAgentAdapter):
                 reply = payloads[0].get("text", "") if payloads else ""
                 return InvokeResult(
                     ok=True, data={"reply": reply, "agent": self._agent}
+                )
+            if req.capability == Capability.CHANNEL_SEND:
+                # 真实落地文档「场景1：通过微信通知我」。
+                # 机制（已探明，非文档臆测，且经真实发送实测验证）：
+                #   openclaw agent --channel <渠道> --message "<文本>" --deliver --json
+                #     [--to <E.164> | --agent <id> | --session-key <key> | --session-id <id>]
+                # OpenClaw 要求「必须指定投递目标」，故 payload 需给 to/agent/
+                # session_key/session_id 之一；本机已配置 openclaw-weixin。
+                text = req.payload.get("text") or extract_text(req.payload)
+                if not text:
+                    return InvokeResult(
+                        ok=False, error="CHANNEL_SEND 需要 text 载荷（消息正文）"
+                    )
+                channel = req.payload.get("channel") or "openclaw-weixin"
+                to = req.payload.get("to")
+                agent = req.payload.get("agent")
+                session_key = req.payload.get("session_key")
+                session_id = req.payload.get("session_id")
+                if not any([to, agent, session_key, session_id]):
+                    return InvokeResult(
+                        ok=False,
+                        error="CHANNEL_SEND 需指定投递目标：to / agent / session_key / session_id",
+                    )
+                args = self._build_send_args(
+                    channel, text, to, agent, session_key, session_id
+                )
+                proc = self._run(*args, timeout=600)
+                if proc.returncode != 0:
+                    err, action = self._parse_failure(proc)
+                    return InvokeResult(
+                        ok=False, error=err, data={"action": action} if action else None
+                    )
+                try:
+                    data = json.loads(proc.stdout)
+                except json.JSONDecodeError:
+                    err, action = self._parse_failure(proc)
+                    return InvokeResult(
+                        ok=False,
+                        error=err or "openclaw 返回非 JSON 内容",
+                        data={"action": action} if action else None,
+                    )
+                if data.get("status") != "ok":
+                    return InvokeResult(ok=False, error=str(data.get("summary")))
+                return InvokeResult(
+                    ok=True,
+                    data={"channel": channel, "to": to, "delivered": True, "raw": data},
                 )
             # TOOL_USE / MEMORY_PERSISTENT are delegated to the OpenClaw agent
             # harness itself (skills + persistent memory live inside OpenClaw);

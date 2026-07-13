@@ -21,6 +21,7 @@ class Capability(str, Enum):
 
     # Reach / access
     CHANNEL_ACCESS = "channel.access"            # reach users on 20+ chat platforms
+    CHANNEL_SEND = "channel.send"                # push a message out via a channel (e.g. WeChat)
     GROUP_ORCHESTRATION = "group.orchestration"  # multi-agent swarm / group chat
 
     # Cognition
@@ -73,7 +74,7 @@ class Capability(str, Enum):
 # actually runs (in-process group chat, no Docker needed). The registry is
 # health-gated, so only live engines are routed.
 ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
-    "openclaw": [Capability.CHANNEL_ACCESS],
+    "openclaw": [Capability.CHANNEL_ACCESS, Capability.CHANNEL_SEND],
     "ag2": [Capability.GROUP_ORCHESTRATION, Capability.PLANNING],
     "hermes": [
         Capability.SELF_IMPROVEMENT,
