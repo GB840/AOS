@@ -40,6 +40,7 @@ class Capability(str, Enum):
     # Multimodal generation (Agnes AI / OpenAI-compatible media planes)
     MEDIA_IMAGE = "media.image"                # text-to-image / image-to-image
     MEDIA_VIDEO = "media.video"                # text-to-video / image-to-video (async)
+    MEDIA_3D = "media.3d"                      # interactive 3D scene/app (Three.js, browser-runtime)
 
     # Memory
     MEMORY_PERSISTENT = "memory.persistent"

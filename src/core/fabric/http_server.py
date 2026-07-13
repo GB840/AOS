@@ -15,6 +15,8 @@ Endpoints:
   POST /api/run_task          {"task","planner","session_id"} -> hub.run_task
   POST /api/mcp               JSON-RPC -> reused MCPProtocol (aos_* tools)
   GET  /api/mcp/info          MCP server info
+  POST /api/3d/generate       {"prompt"} -> interactive 3D scene url (MEDIA_3D)
+  GET  /scene/{id}            serve the generated 3D scene HTML (browser-interactive)
 
 The HTTP MCP path reuses src.mcp.protocol.MCPProtocol verbatim, so FabricHub
 instantly gains an HTTP MCP surface that mirrors v5's /api/mcp shape — the two
@@ -29,6 +31,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,7 @@ from kernel.wiring import build_fabric_hub
 # import is intentional: we deliberately bind to the protocol layer's already
 # validated singleton rather than spinning up a second FabricHub.
 from mcp.protocol import MCPProtocol, _get_hub
+from core.fabric.adapter import InvokeRequest
 
 __all__ = ["serve", "FabricHubHTTPHandler"]
 
@@ -67,6 +71,41 @@ def _load_dotenv_best_effort() -> None:
 # One protocol instance reused for every /api/mcp request. Its handlers call
 # the shared _get_hub() — never builds a second kernel.
 _MCP = MCPProtocol()
+
+# In-memory store of generated interactive 3D scenes (scene_id -> record).
+# Prototype: scenes live for the server's lifetime; persist to disk if needed later.
+_SCENES: dict[str, dict] = {}
+
+
+def _generate_3d(prompt: str) -> dict:
+    """Generate an interactive 3D scene from a prompt.
+
+    Strategy (honours the 端云合作 / 本地兜底 principle):
+      1. Direct adapter first — ThreejsAdapter is zero-dependency, deterministic,
+         instant. The endpoint never blocks on a heavy kernel build.
+      2. FabricHub route as fallback — if a future remote 3D provider is
+         registered, the unified router still works.
+    Returns {"ok": True, "html": ..., "mode": ...} or {"ok": False, "error": ...}.
+    """
+    # 1) direct adapter (local, instant, always available)
+    try:
+        from core.fabric.adapters.threejs_adapter import ThreejsAdapter
+        r = ThreejsAdapter().invoke(
+            InvokeRequest(capability="media.3d", payload={"prompt": prompt})
+        )
+        if r.ok and r.data and r.data.get("html"):
+            return {"ok": True, "html": r.data["html"], "mode": r.data.get("mode")}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("3D 直连适配器失败，尝试 hub 路由: %s", e)
+    # 2) fallback: unified FabricHub routing
+    try:
+        hub = _get_hub()
+        r = hub.route("media.3d", {"prompt": prompt})
+        if r.ok and r.data and r.data.get("html"):
+            return {"ok": True, "html": r.data["html"], "mode": r.data.get("mode")}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("3D hub 路由失败: %s", e)
+    return {"ok": False, "error": "3D 生成失败（适配器与 hub 均未返回有效结果）"}
 
 
 def _extract_text(data: object) -> str:
@@ -134,6 +173,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": str(e)})
         if path == "/api/mcp/info":
             return self._send_json(_MCP.get_server_info())
+        if path.startswith("/scene/"):
+            return self._serve_scene(path[len("/scene/"):])
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     def do_POST(self):
@@ -145,6 +186,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_run_task(body)
         if path == "/api/mcp":
             return self._post_mcp(body)
+        if path == "/api/3d/generate":
+            return self._post_3d_generate(body)
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     # ---- endpoints ----
@@ -161,6 +204,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 "run_task": "POST /api/run_task  {\"task\": ...}",
                 "mcp": "POST /api/mcp  (JSON-RPC 2.0)",
                 "mcp_info": "/api/mcp/info",
+                "3d_generate": "POST /api/3d/generate  {\"prompt\": ...} -> 交互式 3D 场景 url",
+                "3d_scene": "GET /scene/{scene_id}  (浏览器打开即可拖拽交互)",
             },
         }
 
@@ -213,6 +258,36 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 "id": body.get("id"),
                 "error": {"code": -32603, "message": str(e)},
             })
+
+
+    def _post_3d_generate(self, body: dict) -> None:
+        prompt = (body.get("prompt") or body.get("message") or "").strip()
+        if not prompt:
+            return self._send_json({"ok": False, "error": "prompt required"}, status=400)
+        out = _generate_3d(prompt)
+        if not out.get("ok"):
+            return self._send_json({"ok": False, "error": out.get("error")}, status=500)
+        sid = uuid.uuid4().hex[:12]
+        _SCENES[sid] = {"html": out["html"], "prompt": prompt, "mode": out.get("mode")}
+        return self._send_json({
+            "ok": True,
+            "scene_id": sid,
+            "url": f"/scene/{sid}",
+            "mode": out.get("mode"),
+            "prompt": prompt,
+            "note": "在浏览器打开 url 即可交互（拖拽旋转 / 滚轮缩放 / 自动旋转）。",
+        })
+
+    def _serve_scene(self, sid: str) -> None:
+        rec = _SCENES.get(sid)
+        if not rec:
+            return self._send_json({"error": "scene not found"}, status=404)
+        html = rec["html"].encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+        self.wfile.write(html)
 
 
 def serve(host: str = "0.0.0.0", port: int = 8123) -> None:

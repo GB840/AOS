@@ -34,6 +34,7 @@ from core.fabric.adapters import (
     OpenClawAdapter,
     SearchAdapter,
     WebFetchAdapter,
+    ThreejsAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -112,6 +113,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         AgnesAdapter,        # OpenAI-compatible 多模态平面：文本/图像/视频（需 AGNES_API_KEY）
         CodeExecutionAdapter,  # 本地沙箱代码执行（subprocess 隔离，零依赖）
         FileAdapter,           # 文件读写（workspace 内，路径遍历防护）
+        ThreejsAdapter,       # 交互式 3D 场景生成（MEDIA_3D，浏览器端渲染）
     )
     if a is not None
 )
