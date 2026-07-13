@@ -22,9 +22,12 @@ from ..capability import Capability
 
 
 def _import_mem0():
-    """Lazy import so the adapter is valid code even before `pip install`."""
-    from mem0 import Memory  # type: ignore
-    return Memory
+    """Lazy + 超时守卫导入，避免 import 卡死拖垮调用方。"""
+    from ..resilience import guarded_import
+    mod = guarded_import("mem0")
+    if mod is None:
+        raise ImportError("mem0 unavailable (import hung or missing)")
+    return mod.Memory
 
 
 def build_mem0_config(force_local: bool = False) -> dict | None:

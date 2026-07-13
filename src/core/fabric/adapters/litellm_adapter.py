@@ -41,9 +41,12 @@ LITELLM_CONFIG: dict[str, Any] = {
 
 
 def _import_litellm():
-    """Lazy import so the adapter is valid code even before `pip install`."""
-    import litellm  # type: ignore
-    return litellm
+    """Lazy + 超时守卫导入，避免 import 卡死拖垮调用方。"""
+    from ..resilience import guarded_import
+    mod = guarded_import("litellm")
+    if mod is None:
+        raise ImportError("litellm unavailable (import hung or missing)")
+    return mod
 
 
 def _resolve_key() -> str | None:

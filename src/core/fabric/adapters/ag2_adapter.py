@@ -41,28 +41,13 @@ def _ensure_autogen(timeout: float = 6.0):
     在 import 时卡死，也不会让 API 进程 / 内核构建挂起，只是该能力不可用。
     """
     global _AG2_AVAILABLE, _AUTOGEN_MODULE
-    if _AUTOGEN_MODULE is not None:
+    if _AUTOGEN_MODULE is not None or _AG2_AVAILABLE:
         return _AUTOGEN_MODULE
-    if _AG2_AVAILABLE:
-        return _AUTOGEN_MODULE
-    import threading
-    import importlib
-
-    box: dict = {}
-    def _run() -> None:
-        try:
-            box["m"] = importlib.import_module("autogen")
-        except Exception:  # noqa: BLE001 - 任一导入错误都视为不可用
-            box["err"] = True
-    th = threading.Thread(target=_run, daemon=True)
-    th.start()
-    th.join(timeout)
-    if th.is_alive() or "err" in box:
-        _AG2_AVAILABLE = False
-        return None
-    _AUTOGEN_MODULE = box["m"]
-    _AG2_AVAILABLE = True
-    return _AUTOGEN_MODULE
+    from ..resilience import guarded_import
+    mod = guarded_import("autogen", timeout)
+    _AUTOGEN_MODULE = mod
+    _AG2_AVAILABLE = mod is not None
+    return mod
 
 
 def _llm_config() -> dict[str, Any]:
