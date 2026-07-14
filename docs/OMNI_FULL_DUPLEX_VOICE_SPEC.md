@@ -81,9 +81,10 @@ MiniCPMOAdapter (VOICE_OMNI)  ── 薄翻译层，绝不自研 Omni 模型
       ├─ invoke():       单次/回合契约 (chat / realtime_once)  ← 兼容现有 fabric 路由
       └─ open_realtime_session(): 持续流 generator, yield {text|audio|state|error}
       │
-      ├─ cloud_api    → https://api.modelbest.cn/v1  (+ Realtime WS)
-      ├─ local_comni  → Comni/llama.cpp-omni  (INT4, 12GB)
-      └─ local_pytorch→ wss://localhost:8443/v1/realtime?mode=audio (~21.5GB/24GB)
+      ├─ 高(high)   → local_pytorch 本地 PyTorch 全量全双工 (~21.5GB/24GB) 质量/双工最佳
+      ├─ 中(medium) → local_comni    Comni/llama.cpp-omni INT4 (12GB) 均衡
+      ├─ 低(low)    → cloud_api     https://api.modelbest.cn/v1 (+ Realtime WS) 无 GPU 即可
+      └─ auto(默认) → 运行时按可用性自动选最高可用档（高→中→低 兜底），不写死一个
 ```
 
 **适配器已落地的接口**（沙箱验证通过）：
@@ -125,10 +126,14 @@ MiniCPMOAdapter (VOICE_OMNI)  ── 薄翻译层，绝不自研 Omni 模型
 
 1. **部署模型**：装 Comni 一键包，或 `llama.cpp-omni`（INT4，12GB）；或 PyTorch 全量（21.5GB/24GB）。
 2. **起服务**：暴露 `/health` + `/v1/realtime?mode=audio`（Comni 一键起；PyTorch 按官方 CookBook）。
-3. **配置 AOS**：`AOS_MINICPM_MODE=local_comni` + `AOS_MINICPM_LOCAL_WS/HTTP` 指向服务。
+3. **配置 AOS**：`AOS_MINICPM_TIER=medium` 选档（缺省=auto 自动选最高可用），
+   + `AOS_MINICPM_LOCAL_WS/HTTP` 指向服务。等价旧名 `AOS_MINICPM_MODE` 仍兼容。
 4. **冒烟**：
    ```bash
-   PYTHONPATH=src python -c "from core.fabric.adapters.omni_minicpm_adapter import MiniCPMOAdapter; a=MiniCPMOAdapter(mode='local_comni'); print('health=', a.health())"
+   # auto：打印实际解析档位 + 可用档位列表（高中低）
+   PYTHONPATH=src python -c "from core.fabric.adapters.omni_minicpm_adapter import MiniCPMOAdapter; a=MiniCPMOAdapter(); print('resolved=', a.health_detail()['resolved_tier'], '| available=', a.available_tiers())"
+   # 指定中档
+   PYTHONPATH=src python -c "from core.fabric.adapters.omni_minicpm_adapter import MiniCPMOAdapter; a=MiniCPMOAdapter(tier='medium'); print('health=', a.health())"
    ```
    应打印 `health= True`。
 5. **补全真对接**：按官方 Realtime API 协议实现 `open_realtime_session` 的
