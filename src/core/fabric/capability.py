@@ -68,6 +68,11 @@ class Capability(str, Enum):
     # 反映引擎是否真可用，缺失则优雅降级（浏览器 Web Speech 永远兜底）。
     VOICE_STT = "voice.stt"   # 语音识别：音频 -> 文本
     VOICE_TTS = "voice.tts"   # 语音合成：文本 -> 音频
+    # 原生全双工全模态（MiniCPM-o 4.5 等端到端 Omni 模型）：持续双向流，
+    # 听/说/看 不阻塞、无需 VAD。与 VOICE_STT/VOICE_TTS（轮次制、积木式拼装
+    # 不同引擎）正交——VOICE_OMNI 由单一 Omni 模型端到端产出「文本+语音+视觉」
+    # 流，对应 fabric 的实时会话范式（open_realtime_session）。
+    VOICE_OMNI = "voice.omni"  # 全双工全模态实时交互（音频/视频/文本持续流）
 
     # Data layer (structured external datasets, e.g. ExploreYC YC/a16z portfolio)
     DATA_QUERY = "data.query"

@@ -103,6 +103,11 @@ try:
 except Exception:  # noqa: BLE001
     ScriptsAdapter = None
 
+try:
+    from .omni_minicpm_adapter import MiniCPMOAdapter
+except Exception:  # noqa: BLE001 - 缺依赖（websockets）则跳过，不拖垮内核
+    MiniCPMOAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -124,6 +129,7 @@ __all__ = [
         "TTSAdapter",
         "LNNAdapter",
         "ScriptsAdapter",
+        "MiniCPMOAdapter",
     )
     if globals().get(n) is not None
 ]

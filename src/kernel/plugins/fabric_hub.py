@@ -40,6 +40,7 @@ from core.fabric.adapters import (
     LNNAdapter,
     LFMAdapter,
     ScriptsAdapter,
+    MiniCPMOAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -124,6 +125,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         LNNAdapter,           # 液态神经网络时间序列推理（INFERENCE_LNN，纯 numpy 自包含）
         LFMAdapter,           # LFM2 轻量 LLM 供给方（inference.llm 的「低功耗」一极，高低搭配）
         ScriptsAdapter,       # 动态脚本执行（scripts/repls/*.py 热加载）
+        MiniCPMOAdapter,       # 全双工全模态（VOICE_OMNI）：MiniCPM-o 4.5 推理后端
     )
     if a is not None
 )
