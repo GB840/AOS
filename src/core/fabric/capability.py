@@ -91,6 +91,22 @@ class Capability(str, Enum):
     WORKFLOW_EXECUTE = "system.workflow"  # 编排芯粒：把多芯粒串成流水线（Day15-21）
 
 
+# ============================================================================
+# 全局高中低三级档位（动态路由第一维度，正交于 ROUTE_STRATEGY）
+# - 高(high)   : 本地重算力 / 零成本 / 最强隐私（本地优先）
+# - 中(medium) : 云端优质（质量高，但有成本/依赖网络）
+# - 低(low)    : 轻量兜底（免费 / 最小依赖，质量一般）
+# - auto(默认) : 运行时从最高档向低档级联（高→中→低），即「云端用不了就本地」
+# 引擎档位是「数据而非架构」——自由编辑 ENGINE_TIER 即可重新分级，不动路由代码。
+# ============================================================================
+TIER_HIGH = "high"
+TIER_MEDIUM = "medium"
+TIER_LOW = "low"
+TIER_AUTO = "auto"
+# 档位权重：越小越优先（用于排序与级联起点）
+TIER_RANK: dict[str, int] = {TIER_HIGH: 0, TIER_MEDIUM: 1, TIER_LOW: 2}
+
+
 # Declarative, swappable map: the four mandated real-OSS engines -> capabilities
 # they are known to provide. EDIT / EXTEND FREELY. This is data, not architecture.
 # "ag2" (MIT, pip `ag2`) is the real-OSS group.orchestration engine AOS
@@ -120,3 +136,42 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
         Capability.MEDIA_VIDEO,
     ],
 }
+
+# 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
+# 中=云端优质，低=轻量兜底。某能力可被哪些档位满足＝「能力分级」的静态视图，
+# 由 capability_tiers() 据 ENGINE_TIER × ENGINE_CAPABILITY_MAP 推导。
+ENGINE_TIER: dict[str, str] = {
+    # 高：本地重算力 / 零成本 / 最强隐私
+    "ag2": TIER_HIGH,            # 本地规划推理
+    "mem0": TIER_HIGH,           # 本地零成本记忆（AOS_MEM0_LOCAL=1）
+    "code-exec": TIER_HIGH,      # 本地 subprocess 隔离
+    "file-io": TIER_HIGH,        # 本地文件读写
+    # 中：云端优质（质量高，有成本/依赖网络）
+    "openclaw": TIER_MEDIUM,     # 云端 LLM 网关
+    "agnes": TIER_MEDIUM,        # 云端多模态
+    "litellm": TIER_MEDIUM,      # 云端模型网关
+    "hermes": TIER_MEDIUM,
+    "deerflow": TIER_MEDIUM,
+    "browseruse": TIER_MEDIUM,
+    "langfuse": TIER_MEDIUM,
+    # 低：轻量兜底（免费 / 最小依赖）
+    "search": TIER_LOW,          # 含免费搜索源
+    "web-fetch": TIER_LOW,
+    # minicpm_o 由适配器实例按配置返回自身档位（覆盖此默认）
+    "minicpm_o": TIER_MEDIUM,
+}
+
+
+def capability_tiers(cap: "Capability") -> list[str]:
+    """某能力可被哪些档位满足（静态「能力分级」视图）。
+
+    基于 ENGINE_TIER × ENGINE_CAPABILITY_MAP 推导：凡能服务该能力的引擎，
+    其档位集合即为该能力的可达档位（高/中/低）。调用方据此可请求特定档位，
+    或按「能力分级」做 UI/降级展示。
+    """
+    tiers = {
+        ENGINE_TIER.get(eid, TIER_MEDIUM)
+        for eid, caps in ENGINE_CAPABILITY_MAP.items()
+        if cap in caps
+    }
+    return [t for t in (TIER_HIGH, TIER_MEDIUM, TIER_LOW) if t in tiers]

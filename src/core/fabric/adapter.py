@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from .capability import Capability
+from .capability import Capability, ENGINE_TIER, TIER_MEDIUM
 
 
 @dataclass
@@ -24,6 +24,7 @@ class InvokeRequest:
     capability: Capability
     payload: dict[str, Any]
     trace_id: str | None = None
+    tier: str | None = None  # 可选：指定起始(最高)档 high/medium/low；缺省由注册表默认(级联)
 
 
 @dataclass
@@ -53,6 +54,15 @@ class BaseAgentAdapter(ABC):
     @abstractmethod
     def health(self) -> bool:
         """Liveness check so the fabric can route around dead engines."""
+
+    def tier(self) -> str:
+        """本引擎在全局高中低三级中的档位（动态路由第一维度）。
+
+        默认读 ENGINE_TIER 映射（数据，可编辑）；子类可覆盖以返回自身
+        运行时档位（如按配置/可用性解析）。档位参与 registry 的 tier-first
+        排序与向下级联，是「端云合作 / 云端用不了就本地」的落点。
+        """
+        return ENGINE_TIER.get(self.engine_id, TIER_MEDIUM)
 
     def supported_protocols(self) -> list[str]:
         """Optional: declare open protocols spoken (MCP / A2A / ACP).

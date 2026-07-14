@@ -89,6 +89,8 @@ MiniCPMOAdapter (VOICE_OMNI)  ── 薄翻译层，绝不自研 Omni 模型
 
 **适配器已落地的接口**（沙箱验证通过）：
 - `engine_id="minicpm_o"`、`advertise_capabilities()=[VOICE_OMNI]`
+- `tier()`：返回自身解析后的档位（高/中/低），参与 fabric **全局高中低三级动态路由**
+  （registry 档位优先 + 向低档级联；VOICE_OMNI 可被显式请求 high/medium/low 档）
 - `health()`：cloud 查 key、local 探活 `/health`，**诚实不谎报**
 - `invoke({action:"chat"})`：真实 HTTP（OpenAI 兼容），沙箱无网返回 ok=False+真实错误
 - `invoke({action:"realtime_once"})` / `open_realtime_session()`：真 WS 对接为

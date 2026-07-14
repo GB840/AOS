@@ -10,13 +10,22 @@ is a thin seam, not a heavy OS substrate.
 from __future__ import annotations
 
 from .adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
-from .capability import Capability
+from .capability import (
+    Capability,
+    TIER_HIGH,
+    TIER_MEDIUM,
+    TIER_LOW,
+    TIER_AUTO,
+    TIER_RANK,
+    ENGINE_TIER,
+)
 
 
-# 供给方偏好（越小越优先）。默认「云端优先、本地兜底」，把 AOS 的
-# 「万物为我所用 / 端云合作 / 云端用不了就本地」从口号变成路由层的运行时节点击穿：
-# 云端供给方可达时先用（质量/速度），不可达/失败时自动降级到本地供给方。
+# 供给方偏好（同档内的二级排序键，越小越优先）。默认「云端优先、本地兜底」，
+# 把 AOS 的「万物为我所用 / 端云合作 / 云端用不了就本地」从口号变成路由层
+# 运行时节点击穿：档位相同时，云端供给方先试（质量/速度），失败自动降级本地。
 # 想调顺序（如默认本地优先）改这里即可，不动任何适配器代码——这就是「不绑定」。
+# 注意：偏好只是「同档内」的次级排序；档位(tier)才是第一维度（见 ROUTE_TIER）。
 PROVIDER_PREFERENCE: dict[str, int] = {
     "openclaw": 10,    # 网关背后云 LLM，优先
     "agnes": 10,       # 云端多模态平面
@@ -32,8 +41,14 @@ PROVIDER_PREFERENCE: dict[str, int] = {
 }
 _DEFAULT_PREF = 50
 
-# 路由策略：把 Auriko 的成本套利内核原生借进 AOS。
-# - preference：默认，按 PROVIDER_PREFERENCE 排序（云端优先→本地兜底）。
+# 全局默认档位策略：动态路由的第一维度。
+# - auto(默认)：运行时从最高档向低档级联（高→中→低），即「云端用不了就本地 /
+#   端云合作」的真实执行路径——优先用最佳可达档，逐级兜底，绝不写死单档。
+# - high/medium/low：把起始(最高)档固定为该档，仍向下级联到更低档。
+ROUTE_TIER = TIER_AUTO
+
+# 路由策略（档位内的二级排序）：把 Auriko 的成本套利内核原生借进 AOS。
+# - preference：默认，按 PROVIDER_PREFERENCE 排序（同档内云端优先→本地兜底）。
 # - cost：成本优先（provider_cost 越小越先，单位相对分）。
 # - latency：延迟优先（provider_latency 越小越先）。
 # - quality：质量优先（provider_quality 越大越先）。
@@ -51,6 +66,7 @@ class FabricRegistry:
     def __init__(
         self,
         strategy: str | None = None,
+        tier: str | None = None,
         provider_cost: dict[str, float] | None = None,
         provider_latency: dict[str, float] | None = None,
         provider_quality: dict[str, float] | None = None,
@@ -58,6 +74,8 @@ class FabricRegistry:
         self._adapters: dict[str, BaseAgentAdapter] = {}
         # 实例级策略，避免改全局影响其它枢纽；默认读模块级 ROUTE_STRATEGY。
         self.strategy = strategy or ROUTE_STRATEGY
+        # 实例级默认档位（第一维度）；默认读模块级 ROUTE_TIER（auto=级联）。
+        self.tier = tier or ROUTE_TIER
         self._cost = provider_cost if provider_cost is not None else dict(PROVIDER_COST)
         self._latency = provider_latency if provider_latency is not None else dict(PROVIDER_LATENCY)
         self._quality = provider_quality if provider_quality is not None else dict(PROVIDER_QUALITY)
@@ -83,7 +101,23 @@ class FabricRegistry:
             return -self._quality.get(eid, 50.0)
         return float(_pref(eid))
 
-    def providers_for(self, cap: Capability) -> list[BaseAgentAdapter]:
+    def _tier_of(self, a: BaseAgentAdapter) -> str:
+        """取引擎实际档位（高/中/低），非法值回落中档。"""
+        t = a.tier()
+        return t if t in TIER_RANK else TIER_MEDIUM
+
+    def providers_for(self, cap: Capability, tier: str | None = None) -> list[BaseAgentAdapter]:
+        """返回某能力的 live 供给方，按**档位优先 + 策略次级**排序。
+
+        档位维度（动态路由第一维度）：
+        - `tier` = 起始(最高)档；从该档向低档级联（高→中→低）。
+          auto/high 从高档起；medium 从中档起；low 仅低档。
+        - 这就是「云端用不了就本地 / 端云合作」的真实执行路径：
+          优先用最佳可达档，逐级兜底，绝不写死单档。
+
+        同档内再依 ROUTE_STRATEGY（preference/cost/latency/quality）排序。
+        route() 仍会在排序后的供给方之间做运行时故障转移（Auriko fallback 语义）。
+        """
         cap_str = self._cap_to_str(cap)
         live = [
             a
@@ -91,22 +125,45 @@ class FabricRegistry:
             if cap_str in {self._cap_to_str(c) for c in a.advertise_capabilities()}
             and a.health()
         ]
-        # 依当前策略（preference / cost / latency / quality）排序。
-        # route() 仍会在排序后的供给方之间做运行时故障转移——即 Auriko 的
-        # 「首选路由失败自动 fallback 到次优」语义，由端云合作机制统一承载。
-        return sorted(live, key=self._sort_key)
+        start = TIER_RANK.get(tier or self.tier, TIER_RANK[TIER_HIGH])
+        # 仅保留档位 >= 起始档的供给方（实现「向低档级联」）
+        cands = [
+            a for a in live
+            if TIER_RANK.get(self._tier_of(a), TIER_RANK[TIER_MEDIUM]) >= start
+        ]
+        # 先按档位(高->低)，同档内按策略排序
+        cands.sort(key=lambda a: (
+            TIER_RANK.get(self._tier_of(a), TIER_RANK[TIER_MEDIUM]),
+            self._sort_key(a),
+        ))
+        return cands
+
+    def tiers_for(self, cap: Capability) -> list[str]:
+        """某能力当前 live 可达的档位（高/中/低），即「能力分级」运行时视图。
+
+        供调用方/UI 展示该能力可被哪些档位满足，或决定请求哪个档位。
+        """
+        ranks = {
+            TIER_RANK.get(self._tier_of(a), TIER_RANK[TIER_MEDIUM])
+            for a in self.providers_for(cap)
+        }
+        return [t for t in (TIER_HIGH, TIER_MEDIUM, TIER_LOW) if TIER_RANK.get(t) in ranks]
 
     def route(self, req: InvokeRequest) -> InvokeResult:
         """按能力路由，并在 live 供给方之间做**运行时故障转移**：
 
-        - 依偏好排序（云端优先→本地兜底）逐个尝试；
+        - 档位优先：优先用最高可达档（auto 从高档起，向低档级联）；
+        - 同档内依偏好/策略排序（云端优先→本地兜底）逐个尝试；
         - 任一供给方 `ok=False` 或抛异常，自动跳到下一个 live 供给方；
         - 全部失败才返回合并错误。
 
         这就是「云端用不了就本地 / 万物为我所用」的真实执行路径——
-        调用方永远不感知背后是云还是端，AOS 统一协商。
+        调用方永远不感知背后是云还是端、用的是什么档，AOS 统一协商。
+        请求可在 `req.tier` / `payload['tier']` 指定起始档（高/中/低），
+        缺省用本注册表默认档位（默认 auto=级联）。
         """
-        providers = self.providers_for(req.capability)
+        req_tier = getattr(req, "tier", None) or (req.payload or {}).get("tier")
+        providers = self.providers_for(req.capability, req_tier)
         if not providers:
             cap_str = self._cap_to_str(req.capability)
             return InvokeResult(ok=False, error=f"no live provider for {cap_str}")
@@ -139,7 +196,7 @@ class FabricRegistry:
 
     def snapshot(self) -> dict[str, list[str]]:
         return {
-            eid: [c.value for c in a.advertise_capabilities()]
+            eid: [self._cap_to_str(c) for c in a.advertise_capabilities()]
             for eid, a in self._adapters.items()
         }
 

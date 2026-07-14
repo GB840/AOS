@@ -120,6 +120,14 @@ class MiniCPMOAdapter(BaseAgentAdapter):
     def advertise_capabilities(self) -> list[Capability]:
         return [Capability.VOICE_OMNI]
 
+    def tier(self) -> str:
+        """本引擎在全局三级中的档位＝当前解析后的实际档位（高/中/低）。
+
+        覆盖 BaseAgentAdapter 默认（读 ENGINE_TIER），使 registry 能按本适配器
+        运行时配置（auto 解析为最高可用档）参与全局 tier-first 排序与级联。
+        """
+        return self._resolve_tier()
+
     # ---- 档位解析 ----
     def _mode_for(self, tier: str) -> str:
         return _TIER_TO_MODE.get(tier, "cloud_api")

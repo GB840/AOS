@@ -39,6 +39,13 @@ _EXPECTED_ENGINES = {
     "web-fetch",
     "orchestrator",
     "codebase-memory-mcp",
+    "threejs",     # 交互式 3D 场景
+    "stt",         # 语音识别
+    "tts",         # 语音合成
+    "lnn",         # 液态神经网络
+    "lfm2",        # LFM2 轻量 LLM
+    "scripts",     # 动态脚本执行
+    "minicpm_o",  # 全双工全模态适配器（VOICE_OMNI，高中低三级档位）
 }
 
 

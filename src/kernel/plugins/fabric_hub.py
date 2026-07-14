@@ -280,8 +280,9 @@ class FabricHub:
         """
         if self.route_sim_us:
             _busy_wait(self.route_sim_us / 1_000_000.0)
-        req = InvokeRequest(capability=capability, payload=payload, trace_id=trace_id)
-        providers = self._registry.providers_for(req.capability)
+        req = InvokeRequest(capability=capability, payload=payload, trace_id=trace_id,
+                            tier=payload.get("tier"))
+        providers = self._registry.providers_for(req.capability, req.tier)
         if not providers:
             return InvokeResult(ok=False, error=f"no live provider for {capability}")
         last_res: InvokeResult | None = None
