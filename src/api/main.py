@@ -1298,7 +1298,7 @@ async def vimax_configure(api_keys: Dict[str, str]):
 # ---- IMA (Tencent Knowledge Base) API ----
 
 class IMARequest(BaseModel):
-    operation: str = Field(..., description="操作类型: search_knowledge/search_knowledge_base/get_knowledge_base/list_knowledge/create_note")
+    operation: str = Field(..., description="操作类型: search_knowledge/search_knowledge_base/get_knowledge_base/list_knowledge/create_note/store_handoff")
     input: str = Field(default="", description="检索关键词 / 笔记内容（视 operation 而定）")
     params: Optional[Dict[str, Any]] = Field(default={}, description="操作专属参数（knowledge_base_id/title/content/...）")
 

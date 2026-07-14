@@ -65,6 +65,12 @@ class IMASubagent:
             "description": "创建笔记（用于结构化交接 / 长期记忆存储）",
             "params": ["title", "content", "content_format"],
         },
+        "store_handoff": {
+            "name": "store_handoff",
+            "description": "结构化交接：构造信封 → 只读审查 → 存 IMA 知识库",
+            "params": ["title", "summary", "confirmed_facts", "assumptions",
+                       "risk_boundary", "open_questions", "handoff_to", "source", "tags"],
+        },
     }
 
     def __init__(self):

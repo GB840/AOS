@@ -27,6 +27,9 @@ from typing import Dict, Any, Optional
 
 from .base import Skill
 
+# 结构化交接信封（AOS 多 Agent / 多会话交接链，存 IMA 知识库）
+from core.fabric.handoff import HandoffEnvelope, review_handoff, store_handoff
+
 logger = logging.getLogger(__name__)
 
 IMA_BASE_URL = "https://ima.qq.com"
@@ -68,6 +71,13 @@ IMA_OPERATIONS = {
         "input_desc": "title + content",
         "output_desc": "笔记创建结果",
         "example": "title='交接-2026-07-15', content='...'",
+    },
+    "store_handoff": {
+        "name": "store_handoff",
+        "description": "结构化交接：构造 HandoffEnvelope → 只读审查 → 存入 IMA 知识库",
+        "input_desc": "title/summary/confirmed_facts/assumptions/risk_boundary/open_questions/handoff_to/source/tags",
+        "output_desc": "审查结果 + IMA 笔记 note_id",
+        "example": "title='IM集成交接', summary='...', confirmed_facts=[...], handoff_to='下一手'",
     },
 }
 
@@ -167,6 +177,8 @@ class IMASkill(Skill):
                 result = self._client.list_knowledge(context)
             elif operation == "create_note":
                 result = self._client.create_note(context)
+            elif operation == "store_handoff":
+                return self._handle_store_handoff(context)
             else:
                 return {"success": False, "operation": operation, "error": f"不支持的操作: {operation}"}
 
@@ -193,6 +205,50 @@ class IMASkill(Skill):
                 "error": str(e),
                 "status": "failed",
             }
+
+    def _handle_store_handoff(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """结构化交接：构造信封 → 只读审查（不通过则拒存）→ 存 IMA"""
+        def _as_list(v):
+            if v is None:
+                return []
+            if isinstance(v, list):
+                return v
+            if isinstance(v, str):
+                return [v] if v.strip() else []
+            return [v]
+
+        try:
+            envelope = HandoffEnvelope(
+                task_id=context.get("task_id", str(uuid.uuid4())[:8]),
+                title=context.get("title", "未命名交接"),
+                summary=context.get("summary", ""),
+                confirmed_facts=_as_list(context.get("confirmed_facts")),
+                assumptions=_as_list(context.get("assumptions")),
+                risk_boundary=_as_list(context.get("risk_boundary")),
+                open_questions=_as_list(context.get("open_questions")),
+                handoff_to=context.get("handoff_to", ""),
+                source=context.get("source", ""),
+                tags=_as_list(context.get("tags")),
+            )
+        except Exception as e:
+            return {"success": False, "operation": "store_handoff", "error": f"信封构造失败: {e}"}
+
+        review = review_handoff(envelope)
+        if not review["ready"]:
+            return {
+                "success": False,
+                "operation": "store_handoff",
+                "review": review,
+                "error": "交接信封未通过只读审查（见 gaps），拒绝存储以防丢上下文",
+            }
+        store_res = store_handoff(envelope, skill=self)
+        return {
+            "success": store_res.get("success", False),
+            "operation": "store_handoff",
+            "review": review,
+            "result": store_res.get("result"),
+            "error": store_res.get("error"),
+        }
 
     def get_status(self, task_id: str) -> Dict[str, Any]:
         """获取任务状态"""
