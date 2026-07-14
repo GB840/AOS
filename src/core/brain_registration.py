@@ -81,6 +81,16 @@ def register_subagents(brain, cfg) -> None:
         logger.warning("ViMax subagent unavailable: %s", e)
 
     try:
+        from subagents.ima_agent import IMASubagent
+
+        ima = IMASubagent()
+        brain.subagents.register("ima", ima.DESCRIPTION, ima.CAPABILITIES, ima.handle)
+        brain.deerflow.register_handler("knowledge_search", ima.handle)
+        logger.info("IMA subagent registered")
+    except Exception as e:
+        logger.warning("IMA subagent unavailable: %s", e)
+
+    try:
         from subagents.ruflo_agent import RuFloSubagent
 
         rf = RuFloSubagent()

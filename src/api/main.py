@@ -1295,6 +1295,65 @@ async def vimax_configure(api_keys: Dict[str, str]):
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
+# ---- IMA (Tencent Knowledge Base) API ----
+
+class IMARequest(BaseModel):
+    operation: str = Field(..., description="操作类型: search_knowledge/search_knowledge_base/get_knowledge_base/list_knowledge/create_note")
+    input: str = Field(default="", description="检索关键词 / 笔记内容（视 operation 而定）")
+    params: Optional[Dict[str, Any]] = Field(default={}, description="操作专属参数（knowledge_base_id/title/content/...）")
+
+
+@app.get("/api/ima/operations")
+async def ima_operations():
+    """列出所有 IMA 操作"""
+    try:
+        from skills.ima import IMA_OPERATIONS
+        return {"operations": IMA_OPERATIONS}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.post("/api/ima/execute")
+async def ima_execute(req: IMARequest):
+    """执行 IMA 操作（知识检索 / 笔记读写）"""
+    try:
+        params = dict(req.params or {})
+        payload = {"operation": req.operation, "input": req.input, **params}
+        result = await asyncio.to_thread(brain.subagents.invoke, "ima", payload)
+        if result.get("success"):
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=result.get("error", "IMA 执行失败"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/ima/task/{task_id}")
+async def ima_task(task_id: str):
+    """查询任务状态"""
+    try:
+        from skills.ima import get_ima_skill
+        def _st():
+            skill = get_ima_skill()
+            return skill.get_status(task_id)
+        status = await asyncio.to_thread(_st)
+        return {"task_id": task_id, **status}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.post("/api/ima/configure")
+async def ima_configure(api_keys: Dict[str, str]):
+    """配置 IMA API 密钥"""
+    try:
+        from subagents.ima_agent import get_ima_subagent
+        agent = get_ima_subagent()
+        await asyncio.to_thread(agent.configure, api_keys)
+        return {"success": True, "configured_keys": list(api_keys.keys())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
 # ---- RuFlo API ----
 
 class RuFloRequest(BaseModel):

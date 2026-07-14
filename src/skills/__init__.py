@@ -37,6 +37,7 @@ from .sandbox import SkillSandbox, SandboxConfig, SandboxResult, get_sandbox
 from .monitoring import SkillMonitor, SkillSpan, SkillMetric, get_monitor
 from .loop_engineering import LoopEngineeringSkill
 from .vimax import ViMaxSkill
+from .ima import IMASkill
 from .ruflo import RuFloSkill
 from .pixelle_video import PixelleVideoSkill
 from .codebase_memory import CodebaseMemorySkill
