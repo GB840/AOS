@@ -209,6 +209,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._serve_voice_audio(path[len("/api/voice/audio/"):])
         if path == "/api/voice/wake/status":
             return self._get_voice_wake_status()
+        if path.startswith("/api/voice/task/"):
+            return self._get_voice_task(path[len("/api/voice/task/"):])
         if path == "/api/lnn/info":
             return self._get_lnn_info()
         if path == "/api/lnn/predict":  # POST below; GET 也允许(演示)
@@ -561,12 +563,28 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 "planner_used": res.planner_used,
                 "scene_id": res.scene_id,
                 "artifacts": res.artifacts or [],
+                "task_id": res.task_id,
                 "state": res.state,
                 "error": res.error,
             })
         except Exception as e:  # noqa: BLE001 - 永不崩服务
             logger.exception("voice turn failed")
             return self._send_json({"ok": False, "error": str(e)})
+
+    def _get_voice_task(self, task_id: str) -> None:
+        """查询后台深度任务结果（GPT-Live 式：前台不阻塞，后台跑完回填）。
+
+        返回 {status: pending|done|error, reply, planner_used, artifacts, scene_id}。
+        """
+        try:
+            from core.fabric.voice_chiplet import VoicePipeline
+            res = VoicePipeline.get_task_result(task_id)
+            if res is None:
+                return self._send_json(
+                    {"ok": False, "error": "未知 task_id"}, status=404)
+            return self._send_json({"ok": True, **res})
+        except Exception as e:  # noqa: BLE001
+            return self._send_json({"ok": False, "error": str(e)}, status=500)
 
     # ---- 常驻语音唤醒（VAD 监听）----
     _wake_state: dict = {"loop": None, "handler": None, "last": None, "pipeline": None}

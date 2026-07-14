@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -105,6 +107,7 @@ class VoiceTurnResult:
     planner_used: Optional[str] = None
     scene_id: Optional[str] = None
     artifacts: Optional[list] = None
+    task_id: Optional[str] = None
     state: dict = field(default_factory=dict)
     error: Optional[str] = None
 
@@ -116,6 +119,10 @@ class VoicePipeline:
     因此「对着伙伴说话 → 它去调 3D/搜索/AOS 能力 → 用声音回应」整条链路打通。
     stt/tts 默认用本模块适配器（懒加载），也可注入用于测试。
     """
+
+    # 后台异步任务注册表（GPT-Live 思想：前台不阻塞，后台跑深度任务，结果经查询回填）
+    _TASKS: dict = {}
+    _TASK_LOCK = threading.Lock()
 
     def __init__(
         self,
@@ -219,6 +226,63 @@ class VoicePipeline:
             parts.append(f"有 {fail} 步没跑成（可能缺网络或密钥），我继续兜底。")
         return " ".join(parts)
 
+    # ---- GPT-Live 式前台/后台解耦 ----
+    _FRONT_ACKS = [
+        "嗯，我先记下了，边聊边帮你办～",
+        "好嘞，我一边陪你聊一边去安排。",
+        "收到，这事儿我后台跑着，你继续说。",
+        "嗯哼，我记着呢，先帮你办起来。",
+    ]
+
+    def _front_desk_ack(self, text: str) -> str:
+        """前台短反馈：GPT-Live 式的『嗯/对』即时回应，不阻塞对话。"""
+        import random
+        return random.choice(self._FRONT_ACKS)
+
+    def _submit_background_plan(self, text: str) -> str:
+        """提交后台深度任务（ag2 规划 + 编排执行），立即返回 task_id。
+
+        前台已先回短反馈；后台完成后结果存 _TASKS[task_id]，
+        前端经 GET /api/voice/task/{id} 轮询回填（对应 GPT-Live 后台 GPT-5.5 不中断前台）。
+        """
+        tid = "vt_" + uuid.uuid4().hex[:12]
+        with VoicePipeline._TASK_LOCK:
+            VoicePipeline._TASKS[tid] = {"status": "pending", "started_at": time.time()}
+        planner = self._planner_fn
+
+        def worker() -> None:
+            try:
+                res = planner(text)
+                if isinstance(res, dict):
+                    payload = {
+                        "status": "done",
+                        "reply": res.get("reply", ""),
+                        "planner_used": res.get("planner_used"),
+                        "plan": res.get("plan"),
+                        "artifacts": res.get("artifacts"),
+                        "scene_id": res.get("scene_id"),
+                        "finished_at": time.time(),
+                    }
+                else:
+                    payload = {"status": "done", "reply": str(res),
+                               "finished_at": time.time()}
+            except Exception as e:  # noqa: BLE001
+                logger.exception("后台 plan 失败 tid=%s", tid)
+                payload = {"status": "error", "error": str(e),
+                           "finished_at": time.time()}
+            with VoicePipeline._TASK_LOCK:
+                VoicePipeline._TASKS[tid] = payload
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        return tid
+
+    @classmethod
+    def get_task_result(cls, task_id: str) -> Optional[dict]:
+        """查询后台任务结果；返回 None 表示未知 task_id。"""
+        with cls._TASK_LOCK:
+            return cls._TASKS.get(task_id)
+
     # ---- 一次语音回合 ----
     def handle_voice_turn(
         self,
@@ -247,20 +311,26 @@ class VoicePipeline:
                 return VoiceTurnResult(ok=False, error=f"STT 失败: {e}")
         self.fsm.on_user_utterance(user_text)
 
-        # 2) 想：路由到 AOS 能力（同伴编排 或 ag2 长任务规划）
+        # 2) 想：路由到 AOS 能力（同伴应答 或 ag2 长任务规划）
         try:
             use_plan = force_plan or (self._auto_plan and self._should_plan(user_text))
+            background_task_id = None
             if use_plan:
-                resp = self._planner_fn(user_text)
-                planner_used = (resp.get("planner_used")
-                                if isinstance(resp, dict) else None)
+                # GPT-Live 思想：前台先回短反馈（不阻塞），后台异步跑深度规划，
+                # 结果经 GET /api/voice/task/{id} 轮询回填（前台对话不中断）。
+                background_task_id = self._submit_background_plan(user_text)
+                reply = self._front_desk_ack(user_text)
+                mood = "excited"
+                planner_used = None
+                scene_id = None
+                artifacts = None
             else:
                 resp = self._respond_fn(user_text)
                 planner_used = None
-            reply = (resp.get("reply") if isinstance(resp, dict) else str(resp)) or ""
-            mood = resp.get("mood") if isinstance(resp, dict) else None
-            scene_id = resp.get("scene_id") if isinstance(resp, dict) else None
-            artifacts = resp.get("artifacts") if isinstance(resp, dict) else None
+                reply = (resp.get("reply") if isinstance(resp, dict) else str(resp)) or ""
+                mood = resp.get("mood") if isinstance(resp, dict) else None
+                scene_id = resp.get("scene_id") if isinstance(resp, dict) else None
+                artifacts = resp.get("artifacts") if isinstance(resp, dict) else None
         except Exception as e:
             return VoiceTurnResult(ok=False, user_text=user_text, error=f"响应失败: {e}")
         self.fsm.on_response_ready()
@@ -286,6 +356,7 @@ class VoicePipeline:
             planner_used=planner_used,
             scene_id=scene_id,
             artifacts=artifacts,
+            task_id=background_task_id,
             state=self.fsm.snapshot(),
         )
 

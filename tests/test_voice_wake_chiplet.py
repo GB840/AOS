@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import time
 
 from core.fabric.voice_wake import numpy_vad, make_vad, VoiceWakeLoop
 from core.fabric.voice_chiplet import VoicePipeline, VoiceTurnResult
@@ -110,11 +111,25 @@ def test_force_plan_routes_to_planner_and_sets_planner_used():
         calls["text"] = text
         return {"reply": "已规划完成", "planner_used": "ag2-mock", "plan": "1. a\n2. b"}
 
-    p = VoicePipeline(planner_fn=fake_planner, auto_plan=False)
+    # 注入即时 tts_fn，隔离出 plan 异步路径本身（TTS 首载耗时不计入）
+    p = VoicePipeline(planner_fn=fake_planner, auto_plan=False,
+                      tts_fn=lambda t: {"text": t, "engine": "web_speech"})
     res = p.handle_voice_turn(transcript="帮我查天气然后做3D场景", force_plan=True)
+    # 前台：立即返回短反馈 + task_id（GPT-Live 式，不阻塞）；planner_used 待后台回填
     assert res.ok is True
-    assert res.planner_used == "ag2-mock"
-    assert res.reply == "已规划完成"
+    assert res.task_id and res.task_id.startswith("vt_")
+    assert res.planner_used is None
+    assert res.reply in VoicePipeline._FRONT_ACKS
+    # 后台：轮询拿到规划结果（规划器确被调用）
+    r = None
+    for _ in range(60):
+        r = VoicePipeline.get_task_result(res.task_id)
+        if r and r.get("status") in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert r is not None and r["status"] == "done"
+    assert r["planner_used"] == "ag2-mock"
+    assert r["reply"] == "已规划完成"
     assert calls.get("text") == "帮我查天气然后做3D场景"
 
 
@@ -191,12 +206,25 @@ def test_http_voice_turn_plan_param_routes_to_planner():
         captured["t"] = text
         return {"reply": "planned", "planner_used": "mock"}
 
-    from core.fabric.voice_chiplet import handle_voice_turn as hvt
+    from core.fabric.voice_chiplet import handle_voice_turn as hvt  # noqa: F401
     # 直接调底层（绕过 HTTP 的默认 companion 响应），验证 plan 分支数据通路
-    res = VoicePipeline(planner_fn=fake_planner).handle_voice_turn(
-        transcript="查天气然后做3D", force_plan=True)
-    assert res.planner_used == "mock"
-    assert res.reply == "planned"
+    p = VoicePipeline(planner_fn=fake_planner,
+                      tts_fn=lambda t: {"text": t, "engine": "web_speech"})
+    res = p.handle_voice_turn(transcript="查天气然后做3D", force_plan=True)
+    # 前台：plan 异步 → 立即返回 task_id + 短反馈，planner_used 待后台回填
+    assert res.task_id and res.task_id.startswith("vt_")
+    assert res.planner_used is None
+    assert res.reply in VoicePipeline._FRONT_ACKS
+    # 后台：轮询确认规划器被调用且结果回填
+    r = None
+    for _ in range(60):
+        r = VoicePipeline.get_task_result(res.task_id)
+        if r and r.get("status") in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert r is not None and r["status"] == "done"
+    assert r["planner_used"] == "mock"
+    assert r["reply"] == "planned"
     assert captured["t"] == "查天气然后做3D"
 
 

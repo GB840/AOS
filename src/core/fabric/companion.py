@@ -943,6 +943,19 @@ function renderArtifacts(arr){
 }
 document.getElementById('artClose').onclick=()=>{ document.getElementById('artifacts').classList.remove('show'); };
 
+function pollTask(tid, tries){
+  // GPT-Live 式：前台已回短反馈，后台异步跑深度任务，这里轮询回填（不中断对话）
+  if(tries>40) return;  // 最多约 20s（500ms 间隔）
+  fetch('/api/voice/task/'+tid).then(r=>r.json()).then(t=>{
+    if(!t.ok){ setTimeout(()=>pollTask(tid, tries+1), 500); return; }
+    if(t.status==='pending'){ setTimeout(()=>pollTask(tid, tries+1), 500); return; }
+    if(t.reply){ bubble.textContent=t.reply; bubble.classList.add('show'); }
+    moodLine.textContent = t.planner_used ? ('状态：'+t.planner_used+' 已完成') : '状态：后台完成';
+    if(t.scene_id){ setTimeout(()=>openScene(t.scene_id), 600); }
+    if(t.artifacts && t.artifacts.length){ renderArtifacts(t.artifacts); }
+    voiceOut({reply:t.reply||'', audio_url:null});  // 后台结果可选朗读（voiceOn 时）
+  }).catch(()=>{ setTimeout(()=>pollTask(tid, tries+1), 500); });
+}
 function say(text){
   if(!text.trim()) return;
   bubble.textContent='💭 思考中…'; bubble.classList.add('show');
@@ -952,11 +965,17 @@ function say(text){
     body:JSON.stringify({transcript:text, plan:plan})})
     .then(r=>r.json()).then(d=>{
       bubble.textContent=d.reply||'…'; bubble.classList.add('show');
-      if(d.planner_used) moodLine.textContent='状态：已用 '+d.planner_used+' 规划多步执行';
-      else moodLine.textContent='状态：回应中';
-      if(d.scene_id){ setTimeout(()=>openScene(d.scene_id), 600); }
-      if(d.artifacts && d.artifacts.length){ renderArtifacts(d.artifacts); }
       voiceOut(d);
+      if(d.task_id){
+        // 前台已回短反馈，后台异步跑深度任务，轮询回填（GPT-Live 思想）
+        moodLine.textContent='状态：后台处理中…（前台继续聊）';
+        pollTask(d.task_id, 0);
+      } else {
+        if(d.planner_used) moodLine.textContent='状态：已用 '+d.planner_used+' 规划多步执行';
+        else moodLine.textContent='状态：回应中';
+        if(d.scene_id){ setTimeout(()=>openScene(d.scene_id), 600); }
+        if(d.artifacts && d.artifacts.length){ renderArtifacts(d.artifacts); }
+      }
     }).catch(e=>{ bubble.textContent='哎呀，和伙伴的连接抖了一下：'+e; bubble.classList.add('show'); });
 }
 function openScene(id){
