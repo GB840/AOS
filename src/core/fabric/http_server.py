@@ -244,6 +244,12 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_voice_wake_start()
         if path == "/api/voice/wake/stop":
             return self._post_voice_wake_stop()
+        if path == "/api/voice/stt/stream":
+            return self._post_voice_stt_stream(body)
+        if path == "/api/voice/turn/stream":
+            return self._post_voice_turn_stream(body)
+        if path == "/api/voice/interrupt":
+            return self._post_voice_interrupt(body)
         if path == "/api/lnn/predict":
             return self._post_lnn_predict(body)
         return self._send_json({"error": "not found", "path": path}, status=404)
@@ -585,6 +591,97 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._send_json({"ok": True, **res})
         except Exception as e:  # noqa: BLE001
             return self._send_json({"ok": False, "error": str(e)}, status=500)
+
+    # ---- 流式语音端点（方案①：SSE 流式，零新依赖）----
+    _VOICE_INTERRUPTS: dict = {}  # session_id -> True（前端打断置位）
+
+    def _stream_response(self, event_gen) -> None:
+        """SSE 流式响应：逐事件 flush。stdlib ThreadingHTTPServer 每请求一线程，可保持连接流式写。"""
+        import json
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        try:
+            for ev in event_gen:
+                line = "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+                self.wfile.write(line.encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # 客户端断开（如打断后前端主动关流）
+        finally:
+            try:
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except Exception:
+                pass
+
+    def _post_voice_stt_stream(self, body: dict) -> None:
+        """流式 STT：接收一段音频，SSE 推 partial transcript（前端边录边出字）。"""
+        import base64
+        import os
+        import tempfile
+        audio_path = body.get("audio_path")
+        audio_b64 = body.get("audio_b64")
+        if not audio_path and audio_b64:
+            suffix = body.get("audio_suffix", "wav")
+            fd, audio_path = tempfile.mkstemp(suffix="." + suffix.lstrip("."))
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(base64.b64decode(audio_b64))
+        if not audio_path or not os.path.isfile(audio_path):
+            return self._send_json({"ok": False, "error": "需要 audio_path 或 audio_b64"}, status=400)
+        try:
+            from core.fabric.adapters.stt_adapter import STTAdapter
+            stt = STTAdapter()
+
+            def gen():
+                try:
+                    for partial in stt.stream_transcribe(audio_path):
+                        yield {"type": "partial", "text": partial}
+                except Exception as e:  # noqa: BLE001
+                    yield {"type": "done", "ok": False, "error": str(e)}
+
+            self._stream_response(gen())
+        except Exception as e:  # noqa: BLE001
+            logger.exception("voice stt stream failed")
+            return self._send_json({"ok": False, "error": str(e)})
+
+    def _post_voice_turn_stream(self, body: dict) -> None:
+        """流式语音回合：SSE 推事件（partial/reply_start/reply_token/audio_chunk/done/interrupted）。"""
+        from core.fabric.voice_chiplet import VoicePipeline
+        sid = body.get("session_id") or "default"
+        FabricHubHTTPHandler._VOICE_INTERRUPTS.pop(sid, None)  # 新回合重置中断
+
+        def checker():
+            return bool(FabricHubHTTPHandler._VOICE_INTERRUPTS.get(sid, False))
+
+        pipe = VoicePipeline(
+            user_id=body.get("user_id", "default"),
+            barge_window=float(body.get("barge_window", 3.0)),
+        )
+
+        def gen():
+            try:
+                for ev in pipe.handle_voice_turn_stream(
+                    transcript=(body.get("transcript") or body.get("text") or ""),
+                    audio_path=body.get("audio_path", ""),
+                    audio_b64=body.get("audio_b64", ""),
+                    force_plan=bool(body.get("plan") or body.get("force_plan")),
+                    interrupt_checker=checker,
+                ):
+                    yield ev
+            finally:
+                FabricHubHTTPHandler._VOICE_INTERRUPTS.pop(sid, None)
+
+        self._stream_response(gen())
+
+    def _post_voice_interrupt(self, body: dict) -> None:
+        """前端在播放中检测到用户开口（VAD）→ 置位 session 中断标志 → 流式生成器立即停。"""
+        sid = body.get("session_id") or "default"
+        FabricHubHTTPHandler._VOICE_INTERRUPTS[sid] = True
+        self._send_json({"ok": True, "interrupted": sid})
 
     # ---- 常驻语音唤醒（VAD 监听）----
     _wake_state: dict = {"loop": None, "handler": None, "last": None, "pipeline": None}

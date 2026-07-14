@@ -128,6 +128,69 @@ class TTSAdapter(BaseAgentAdapter):
             "audio_url": f"/api/voice/audio/{digest}.{ext}",
         })
 
+    # ---- 流式合成（边生成边播放）----
+    def supports_streaming(self) -> bool:
+        """是否真·流式：edge_tts / kokoro 原生 chunk 流式；web_speech / xtts 退化整段。"""
+        return self._engine in ("edge_tts", "kokoro")
+
+    def stream_synthesize(self, text: str, payload: dict | None = None) -> "Iterator[tuple[bytes, str]]":
+        """流式合成：边生成边 yield (audio_chunk_bytes, ext)。
+
+        - edge_tts：comm.stream() 是 audio chunk 生成器（真流式）。
+        - kokoro：pipeline() 是句子生成器（真流式）。
+        - web_speech / xtts：退化整段 yield 一次。
+
+        上层（http SSE / 前端）拿到 chunk 后立即推给客户端播放 → 「边生成边播」。
+        """
+        payload = payload or {}
+        if not text or not text.strip():
+            return
+        if self._engine == "edge_tts":
+            for data in self._stream_edge_tts(text, payload):
+                yield (data, "mp3")
+        elif self._engine == "kokoro":
+            for data in self._stream_kokoro(text, payload):
+                yield (data, "wav")
+        else:  # web_speech / xtts 退化整段
+            audio, ext = self._synthesize(text, payload)
+            yield (audio, ext)
+
+    def _stream_edge_tts(self, text: str, payload: dict):
+        """edge_tts 异步 audio chunk 生成器 → 同步 Iterator[bytes]。"""
+        import asyncio
+        import edge_tts
+        voice = payload.get("voice") or os.environ.get("AOS_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
+        loop = asyncio.new_event_loop()
+        comm = edge_tts.Communicate(text, voice)
+
+        async def _agen():
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    yield chunk["data"]
+
+        agen = _agen()
+        try:
+            while True:
+                data = loop.run_until_complete(agen.__anext__())
+                yield data
+        except StopAsyncIteration:
+            pass
+        finally:
+            loop.close()
+
+    def _stream_kokoro(self, text: str, payload: dict):
+        """kokoro 句子生成器 → 每句 wav bytes。"""
+        from kokoro import KPipeline
+        import io
+        import soundfile as sf
+        lang = payload.get("lang", "z")
+        voice = payload.get("voice") or os.environ.get("AOS_TTS_VOICE", "zf_001")
+        pipeline = KPipeline(lang_code=lang)
+        for _, _, audio in pipeline(text, voice=voice):
+            buf = io.BytesIO()
+            sf.write(buf, audio, 24000)
+            yield buf.getvalue()
+
     # ---- 引擎实现（重依赖惰性导入）----
     def _synthesize(self, text: str, payload: dict) -> tuple[bytes, str]:
         if self._engine == "edge_tts":

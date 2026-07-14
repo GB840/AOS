@@ -192,6 +192,37 @@ class STTAdapter(BaseAgentAdapter):
             return InvokeResult(ok=False, error="STT 未识别出文本")
         return InvokeResult(ok=True, data={"text": text.strip(), "engine": self._engine})
 
+    # ---- 流式识别（边说边出字）----
+    def supports_streaming(self) -> bool:
+        """是否真·流式：faster_whisper 原生 segment 流式；whisper_cpp 退化整段；web_speech 不适用。"""
+        return self._engine in ("faster_whisper", "whisper_cpp")
+
+    def stream_transcribe(self, audio_path: str, language: str = "zh") -> "Iterator[str]":
+        """流式转写：对一段音频边识别边 yield 部分文本（Iterator[str]）。
+
+        - faster_whisper：transcribe() 返回 segment 生成器，天然流式 → 每句 yield 一次。
+        - whisper_cpp：无原生实时增量 → 整段识别后 yield 一次（接口一致但非真流式）。
+        - web_speech：无音频输入，不支持 → 抛错（应改用 transcript 直传）。
+
+        上层（http SSE / 前端分段录音）对每段音频调一次本方法，累积 partial 即「边说边出字」。
+        """
+        if not audio_path or not os.path.isfile(audio_path):
+            raise RuntimeError("stream_transcribe 需要已落盘的 audio_path")
+        if self._engine == "web_speech":
+            raise RuntimeError("web_speech 无音频输入，不支持流式；请浏览器识别后传 transcript")
+        if self._engine == "faster_whisper":
+            from faster_whisper import WhisperModel
+            model = WhisperModel(os.environ.get("AOS_WHISPER_SIZE", "base"),
+                                 device=os.environ.get("AOS_WHISPER_DEVICE", "cpu"))
+            for seg in model.transcribe(audio_path, language=language, beam_size=5):
+                text = (seg.text or "").strip()
+                if text:
+                    yield text
+        else:  # whisper_cpp 退化：整段后 yield 一次
+            full = self._run_whisper_cpp(audio_path)
+            if full and full.strip():
+                yield full.strip()
+
     # ---- 引擎实现（重依赖惰性导入）----
     def _run_whisper_cpp(self, audio_path: str) -> str:
         binp, modelp = self._whisper_cpp_paths()

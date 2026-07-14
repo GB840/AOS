@@ -956,28 +956,101 @@ function pollTask(tid, tries){
     voiceOut({reply:t.reply||'', audio_url:null});  // 后台结果可选朗读（voiceOn 时）
   }).catch(()=>{ setTimeout(()=>pollTask(tid, tries+1), 500); });
 }
-function say(text){
-  if(!text.trim()) return;
-  bubble.textContent='💭 思考中…'; bubble.classList.add('show');
-  moodLine.textContent='状态：思考中…';
-  const plan = document.getElementById('plan').checked;
-  fetch('/api/voice/turn',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({transcript:text, plan:plan})})
-    .then(r=>r.json()).then(d=>{
-      bubble.textContent=d.reply||'…'; bubble.classList.add('show');
-      voiceOut(d);
-      if(d.task_id){
-        // 前台已回短反馈，后台异步跑深度任务，轮询回填（GPT-Live 思想）
-        moodLine.textContent='状态：后台处理中…（前台继续聊）';
-        pollTask(d.task_id, 0);
-      } else {
-        if(d.planner_used) moodLine.textContent='状态：已用 '+d.planner_used+' 规划多步执行';
-        else moodLine.textContent='状态：回应中';
-        if(d.scene_id){ setTimeout(()=>openScene(d.scene_id), 600); }
-        if(d.artifacts && d.artifacts.length){ renderArtifacts(d.artifacts); }
-      }
-    }).catch(e=>{ bubble.textContent='哎呀，和伙伴的连接抖了一下：'+e; bubble.classList.add('show'); });
+// ===== 流式语音回合（方案①：边说边出字 / 边播边打断）=====
+const SESSION_ID = (Math.random().toString(36).slice(2)) + Date.now().toString(36);
+let _audioCtx=null, _streamPlayStop=false, _streamReader=null;
+function getAudioCtx(){ if(!_audioCtx){ try{ _audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return _audioCtx; }
+function stopStreamingPlayback(){
+  _streamPlayStop=true;
+  if(_streamReader){ try{ _streamReader.cancel(); }catch(e){} _streamReader=null; }
+  if(_audioCtx){ try{ _audioCtx.close(); }catch(e){} _audioCtx=null; }
 }
+async function playChunk(b64, ext){
+  if(_streamPlayStop) return;
+  const ctx=getAudioCtx(); if(!ctx) return;
+  try{
+    const bin=atob(b64); const buf=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
+    const ab=buf.buffer.slice(buf.byteOffset, buf.byteOffset+buf.byteLength);
+    const audioBuf=await ctx.decodeAudioData(ab);
+    if(_streamPlayStop) return;
+    const src=ctx.createBufferSource(); src.buffer=audioBuf; src.connect(ctx.destination); src.start(0);
+  }catch(e){ /* 解码失败忽略，下一 chunk 继续 */ }
+}
+async function readSSE(resp, onEvent){
+  const reader=resp.body.getReader(); _streamReader=reader;
+  const dec=new TextDecoder(); let buf='';
+  try{
+    while(true){
+      const {done,value}=await reader.read();
+      if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let idx;
+      while((idx=buf.indexOf('\n\n'))>=0){
+        const chunk=buf.slice(0,idx); buf=buf.slice(idx+2);
+        const line=chunk.split('\n').find(l=>l.startsWith('data: '));
+        if(!line) continue;
+        const data=line.slice(6);
+        if(data==='[DONE]') continue;
+        try{ onEvent(JSON.parse(data)); }catch(e){}
+      }
+      if(_streamPlayStop){ try{ reader.cancel(); }catch(e){} break; }
+    }
+  }catch(e){} finally { _streamReader=null; }
+}
+// 前端 VAD 打断：播放中检测用户开口 -> 调 /api/voice/interrupt + 停播放
+let _ivadStream=null, _ivadRAF=null;
+async function startInterruptVad(){
+  if(_ivadStream) return;
+  try{ _ivadStream=await navigator.mediaDevices.getUserMedia({audio:true}); }catch(e){ return; }
+  const ctx=getAudioCtx(); if(!ctx) return;
+  const src=ctx.createMediaStreamSource(_ivadStream);
+  const an=ctx.createAnalyser(); an.fftSize=512; src.connect(an);
+  const arr=new Uint8Array(an.frequencyBinCount);
+  const tick=()=>{
+    if(_streamPlayStop) return;
+    an.getByteFrequencyData(arr);
+    let sum=0; for(let i=0;i<arr.length;i++) sum+=arr[i];
+    const vol=sum/arr.length;
+    if(vol>40){
+      _streamPlayStop=true;
+      fetch('/api/voice/interrupt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:SESSION_ID})}).catch(()=>{});
+      bubble.textContent='（你打断了伙伴）';
+    }
+    _ivadRAF=requestAnimationFrame(tick);
+  };
+  tick();
+}
+function stopInterruptVad(){ if(_ivadRAF) cancelAnimationFrame(_ivadRAF); if(_ivadStream){ _ivadStream.getTracks().forEach(t=>t.stop()); _ivadStream=null; } }
+
+function sayStream(text, opts){
+  opts=opts||{};
+  if(!text||!text.trim()) return;
+  _streamPlayStop=false;
+  bubble.classList.add('show'); bubble.textContent='💭 思考中…';
+  moodLine.textContent='状态：思考中…';
+  fetch('/api/voice/turn/stream',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({transcript:text, plan:!!opts.plan, session_id:SESSION_ID})})
+    .then(resp=>readSSE(resp, ev=>{
+      if(ev.type==='partial'){ bubble.textContent=ev.text; bubble.classList.add('show'); }
+      else if(ev.type==='reply_start'){ bubble.textContent='💬 回应中…'; }
+      else if(ev.type==='reply_token'){ bubble.textContent=ev.text; bubble.classList.add('show'); }
+      else if(ev.type==='audio_chunk'){ startInterruptVad(); playChunk(ev.data, ev.ext); }
+      else if(ev.type==='interrupted'){ bubble.textContent='（被你打断了）'; stopStreamingPlayback(); stopInterruptVad(); }
+      else if(ev.type==='done'){
+        stopInterruptVad();
+        if(ev.reply) bubble.textContent=ev.reply;
+        if(ev.audio_url){ voiceOut({audio_url:ev.audio_url, reply:ev.reply}); }
+        if(ev.scene_id){ setTimeout(()=>openScene(ev.scene_id), 600); }
+        if(ev.artifacts && ev.artifacts.length){ renderArtifacts(ev.artifacts); }
+        if(ev.task_id){ moodLine.textContent='状态：后台处理中…（前台继续聊）'; pollTask(ev.task_id, 0); }
+        else { moodLine.textContent = ev.planner_used ? ('状态：已用 '+ev.planner_used+' 规划') : '状态：回应中'; }
+      }
+    }))
+    .catch(e=>{ stopInterruptVad(); bubble.textContent='哎呀，和伙伴的连接抖了一下：'+e; bubble.classList.add('show'); });
+}
+// 向后兼容：say 走流式
+function say(text){ sayStream(text, {plan:document.getElementById('plan').checked}); }
 function openScene(id){
   document.getElementById('sceneFrame').src='/scene/'+id;
   document.getElementById('sceneModal').classList.add('show');
@@ -991,14 +1064,48 @@ document.getElementById('sceneClose').onclick=()=>{
 document.getElementById('send').onclick=()=>{ const i=document.getElementById('say'); say(i.value); i.value=''; };
 document.getElementById('say').addEventListener('keydown',e=>{ if(e.key==='Enter'){ say(e.target.value); e.target.value=''; }});
 
-// ===== 语音输入 NUI（Web Speech API，纯浏览器）=====
+// ===== 语音输入：流式录音（边录边出字）+ Web Speech 兜底 =====
 const mic=document.getElementById('mic'); let rec=null;
+let mediaRec=null, recStream=null, recChunks=[], partialText='', micStreaming=false;
 if('webkitSpeechRecognition' in window || 'SpeechRecognition' in window){
   const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
   rec=new SR(); rec.lang='zh-CN'; rec.interimResults=false;
-  rec.onresult=e=>{ const t=e.results[0][0].transcript; say(t); };
-  mic.onclick=()=>{ if(rec.recording){ rec.stop(); mic.classList.remove('on'); } else { rec.start(); mic.classList.add('on'); } };
-} else { mic.style.display='none'; }
+  rec.onresult=e=>{ const t=e.results[0][0].transcript; sayStream(t); };
+}
+function blobToB64(blob){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); }); }
+// 流式录音：MediaRecorder 分段 -> /api/voice/stt/stream 边出字
+async function startStreamMic(){
+  try{ recStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ if(rec){ try{rec.start(); mic.classList.add('on');}catch(_){} } return; }  // 退回 Web Speech
+  partialText=''; bubble.classList.add('show'); bubble.textContent='🎤 听写中…';
+  mediaRec=new MediaRecorder(recStream); micStreaming=true; mic.classList.add('on');
+  mediaRec.ondataavailable = async (ev)=>{
+    if(ev.data && ev.data.size>0){
+      recChunks.push(ev.data);
+      const blob=new Blob(recChunks); recChunks=[];
+      const b64=await blobToB64(blob);
+      fetch('/api/voice/stt/stream',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({audio_b64:b64, audio_suffix:'webm', session_id:SESSION_ID})})
+        .then(r=>readSSE(r, e2=>{ if(e2.type==='partial'){ partialText=(partialText+' '+e2.text).trim(); bubble.textContent='🎤 '+partialText; } }))
+        .catch(()=>{});
+    }
+  };
+  mediaRec.start(300);
+  moodLine.textContent='状态：聆听中（再次点 🎤 结束）';
+}
+function stopStreamMic(){
+  micStreaming=false; mic.classList.remove('on');
+  if(mediaRec && mediaRec.state!=='inactive'){ try{ mediaRec.stop(); }catch(e){} }
+  if(recStream){ recStream.getTracks().forEach(t=>t.stop()); recStream=null; }
+  if(partialText.trim()){ sayStream(partialText, {plan:document.getElementById('plan').checked}); }
+  else { bubble.textContent='没听清，再说一次？'; }
+}
+mic.onclick=()=>{
+  if(micStreaming || mediaRec){ stopStreamMic(); }
+  else if(rec){ if(rec.recording){ rec.stop(); mic.classList.remove('on'); } else { try{rec.start(); mic.classList.add('on');}catch(e){} } }
+  else { startStreamMic(); }  // 流式录音优先
+};
+if(!rec && !navigator.mediaDevices){ mic.style.display='none'; }
 
 // ===== 常驻唤醒（前端 Web Audio VAD，零服务端麦克风依赖）=====
 // 思路：用 AudioContext 实时算麦克风能量(RMS)，超阈值即认为「在说话」，

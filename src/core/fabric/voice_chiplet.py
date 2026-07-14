@@ -16,7 +16,9 @@
 """
 from __future__ import annotations
 
+import base64
 import logging
+import os
 import re
 import threading
 import time
@@ -25,6 +27,14 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+# 流式语音回合事件类型（方案① 流式架构）
+STREAM_PARTIAL = "partial"          # STT 部分结果 {"text"}
+STREAM_REPLY_START = "reply_start"  # 开始生成回复（前端准备气泡）
+STREAM_REPLY_TOKEN = "reply_token"  # LLM 流式文本（默认整段一次）
+STREAM_AUDIO_CHUNK = "audio_chunk"  # TTS 流式音频片 {"data": b64, "ext"}
+STREAM_DONE = "done"               # 结束 {"ok","reply","state",...}
+STREAM_INTERRUPTED = "interrupted"  # 流式被打断（barge-in 流式版）
 
 
 # ============================================================================
@@ -133,6 +143,8 @@ class VoicePipeline:
         auto_plan: bool = False,
         barge_window: float = 3.0,
         user_id: str = "default",
+        stt_stream_fn: Optional[Callable[[str], "Iterator[str]"]] = None,
+        tts_stream_fn: Optional[Callable[[str, dict], "Iterator[tuple[bytes, str]]"]] = None,
     ) -> None:
         self.user_id = user_id
         self.fsm = ConversationStateMachine(barge_window=barge_window)
@@ -143,6 +155,9 @@ class VoicePipeline:
         # 长任务规划：默认接 AOS 内核的 think→do 闭环（ag2 规划 + 编排执行）
         self._planner_fn = planner_fn or self._default_plan
         self._auto_plan = auto_plan
+        # 流式链路（方案①）：可注入 mock 便于测试
+        self._stt_stream_fn = stt_stream_fn or self._default_stt_stream
+        self._tts_stream_fn = tts_stream_fn or self._default_tts_stream
 
     # ---- 默认实现（懒加载 AOS 真实引擎）----
     def _default_stt(self, payload: dict) -> str:
@@ -282,6 +297,120 @@ class VoicePipeline:
         """查询后台任务结果；返回 None 表示未知 task_id。"""
         with cls._TASK_LOCK:
             return cls._TASKS.get(task_id)
+
+    # ---- 流式语音回合（边说边出字 / 边播边打断 —— 方案① 流式架构核心）----
+    def _default_stt_stream(self, audio_path: str):
+        from .adapters.stt_adapter import STTAdapter
+        return STTAdapter().stream_transcribe(audio_path)
+
+    def _default_tts_stream(self, text: str, payload: dict | None = None):
+        from .adapters.tts_adapter import TTSAdapter
+        return TTSAdapter().stream_synthesize(text, payload or {})
+
+    def handle_voice_turn_stream(
+        self,
+        transcript: str = "",
+        audio_path: str = "",
+        audio_b64: str = "",
+        audio_suffix: str = "wav",
+        force_plan: bool = False,
+        interrupt_checker: Optional[Callable[[], bool]] = None,
+    ) -> "Iterator[dict]":
+        """流式语音回合生成器：边听边出字、边想边回、边播边可打断。
+
+        yield 事件（dict，type 字段见模块常量 STREAM_*）：
+          partial        STT 部分结果（边说边出字）
+          reply_start    开始生成回复（前端准备气泡）
+          reply_token    LLM 流式文本（默认整段一次；接 LLM 流式后可逐 token）
+          audio_chunk    TTS 流式音频片（前端边收边播）
+          done           结束（含完整 reply / state / artifacts）
+          interrupted    流式被打断（barge-in 流式版）
+
+        interrupt_checker: 可调用，返回 True 即立即停止（上层用 session 级标志位实现，
+        前端调 POST /api/voice/interrupt 置位 → 「边播边打断」）。
+
+        完全保留 handle_voice_turn 不动；本方法是增量流式能力。
+        """
+        def _interrupted() -> bool:
+            try:
+                return bool(interrupt_checker() if interrupt_checker else False)
+            except Exception:
+                return False
+
+        # 1) 听：拿到文本（流式 STT 边转边出 partial）
+        self.fsm.on_user_start()
+        user_text = ""
+        if transcript and transcript.strip():
+            user_text = transcript.strip()
+            yield {"type": STREAM_PARTIAL, "text": user_text}
+        else:
+            if not audio_path and not audio_b64:
+                yield {"type": STREAM_DONE, "ok": False, "error": "需要 transcript 或 audio"}
+                return
+            ap = audio_path
+            if not ap and audio_b64:
+                import tempfile
+                suffix = audio_suffix or "wav"
+                fd, ap = tempfile.mkstemp(suffix="." + suffix.lstrip("."))
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(base64.b64decode(audio_b64))
+            try:
+                for partial in self._stt_stream_fn(ap):
+                    user_text = (user_text + " " + partial).strip()
+                    yield {"type": STREAM_PARTIAL, "text": partial}
+                    if _interrupted():
+                        yield {"type": STREAM_INTERRUPTED}
+                        return
+            except Exception as e:
+                yield {"type": STREAM_DONE, "ok": False, "error": f"流式STT失败: {e}"}
+                return
+        self.fsm.on_user_utterance(user_text)
+
+        # 2) 想：路由 AOS 能力（同伴应答 或 ag2 长任务规划）
+        use_plan = force_plan or (self._auto_plan and self._should_plan(user_text))
+        if use_plan:
+            # GPT-Live 式：前台先回短反馈（不阻塞），后台异步跑深度规划
+            tid = self._submit_background_plan(user_text)
+            yield {"type": STREAM_REPLY_START}
+            ack = self._front_desk_ack(user_text)
+            yield {"type": STREAM_REPLY_TOKEN, "text": ack}
+            yield {"type": STREAM_DONE, "ok": True, "reply": ack, "task_id": tid,
+                   "state": self.fsm.snapshot()}
+            return
+        yield {"type": STREAM_REPLY_START}
+        try:
+            resp = self._respond_fn(user_text)
+        except Exception as e:
+            yield {"type": STREAM_DONE, "ok": False, "error": f"响应失败: {e}"}
+            return
+        reply = (resp.get("reply") if isinstance(resp, dict) else str(resp)) or ""
+        mood = resp.get("mood") if isinstance(resp, dict) else None
+        scene_id = resp.get("scene_id") if isinstance(resp, dict) else None
+        artifacts = resp.get("artifacts") if isinstance(resp, dict) else None
+        tts_payload = resp.get("tts_payload") if isinstance(resp, dict) else None
+        yield {"type": STREAM_REPLY_TOKEN, "text": reply}
+        if _interrupted():
+            yield {"type": STREAM_INTERRUPTED}
+            return
+        self.fsm.on_response_ready()
+
+        # 3) 说：流式 TTS（边生成边播）
+        audio_url = None
+        tts_engine = None
+        try:
+            for chunk, ext in self._tts_stream_fn(reply, tts_payload):
+                if _interrupted():
+                    yield {"type": STREAM_INTERRUPTED}
+                    return
+                yield {"type": STREAM_AUDIO_CHUNK,
+                       "data": base64.b64encode(chunk).decode("ascii"), "ext": ext}
+        except Exception as e:
+            logger.warning("流式 TTS 失败，前端兜底: %s", e)
+        self.fsm.on_speech_end()
+        yield {"type": STREAM_DONE, "ok": True, "reply": reply, "user_text": user_text,
+               "audio_url": audio_url, "tts_engine": tts_engine, "mood": mood,
+               "scene_id": scene_id, "artifacts": artifacts,
+               "state": self.fsm.snapshot()}
 
     # ---- 一次语音回合 ----
     def handle_voice_turn(
