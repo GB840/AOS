@@ -98,6 +98,11 @@ try:
 except Exception:  # noqa: BLE001
     LFMAdapter = None
 
+try:
+    from .scripts_adapter import ScriptsAdapter
+except Exception:  # noqa: BLE001
+    ScriptsAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -118,6 +123,7 @@ __all__ = [
         "STTAdapter",
         "TTSAdapter",
         "LNNAdapter",
+        "ScriptsAdapter",
     )
     if globals().get(n) is not None
 ]

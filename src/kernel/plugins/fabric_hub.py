@@ -39,6 +39,7 @@ from core.fabric.adapters import (
     TTSAdapter,
     LNNAdapter,
     LFMAdapter,
+    ScriptsAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -122,6 +123,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         TTSAdapter,           # 语音合成（VOICE_TTS：kokoro/edge-tts/XTTS/Web Speech）
         LNNAdapter,           # 液态神经网络时间序列推理（INFERENCE_LNN，纯 numpy 自包含）
         LFMAdapter,           # LFM2 轻量 LLM 供给方（inference.llm 的「低功耗」一极，高低搭配）
+        ScriptsAdapter,       # 动态脚本执行（scripts/repls/*.py 热加载）
     )
     if a is not None
 )
