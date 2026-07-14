@@ -68,6 +68,7 @@ def _scene_js(scene_type: str, palette: list[str], prompt: str) -> str:
             "g.setAttribute('position',new THREE.BufferAttribute(pos,3));"
             "const m=new THREE.PointsMaterial({color:0x%06x,size:0.08,transparent:true,opacity:0.9});"
             "const pts=new THREE.Points(g,m);scene.add(pts);controls.target.set(0,0,0);"
+            "wobj=pts;"
             "animate=()=>{pts.rotation.y+=0.0015};"
         ) % i0
 
@@ -80,6 +81,7 @@ def _scene_js(scene_type: str, palette: list[str], prompt: str) -> str:
             "new THREE.MeshStandardMaterial({color:0x%06x,roughness:0.6}));"
             "b.position.set(x,h/2,z);grp.add(b);}"
             "scene.add(grp);controls.target.set(0,1.5,0);"
+            "wobj=grp;"
             "animate=()=>{grp.rotation.y+=0.001};"
         ) % i1
 
@@ -90,6 +92,7 @@ def _scene_js(scene_type: str, palette: list[str], prompt: str) -> str:
             "const wire=new THREE.Mesh(new THREE.SphereGeometry(2.05,24,24),"
             "new THREE.MeshBasicMaterial({color:0x%06x,wireframe:true}));"
             "scene.add(sphere);scene.add(wire);controls.target.set(0,0,0);"
+            "wobj=sphere;"
             "animate=()=>{sphere.rotation.y+=0.004;wire.rotation.y-=0.002};"
         ) % (i0, i2)
 
@@ -104,6 +107,7 @@ def _scene_js(scene_type: str, palette: list[str], prompt: str) -> str:
             "const m=new THREE.Mesh(new THREE.PlaneGeometry(4,1),"
             "new THREE.MeshBasicMaterial({map:tex,transparent:true}));"
             "scene.add(m);controls.target.set(0,0,0);"
+            "wobj=m;"
             "animate=()=>{m.rotation.y=Math.sin(t.v*0.5)*0.3};"
         ) % (c0, safe)
 
@@ -112,6 +116,7 @@ def _scene_js(scene_type: str, palette: list[str], prompt: str) -> str:
         "const knot=new THREE.Mesh(new THREE.TorusKnotGeometry(1.6,0.5,160,32),"
         "new THREE.MeshStandardMaterial({color:0x%06x,roughness:0.3,metalness:0.4}));"
         "scene.add(knot);controls.target.set(0,0,0);"
+        "wobj=knot;"
         "animate=()=>{knot.rotation.x+=0.005;knot.rotation.y+=0.008};"
     ) % i0
 
@@ -136,7 +141,7 @@ _TEMPLATE = """<!DOCTYPE html>
 {"imports":{"three":"__CDN__/build/three.module.js","three/addons/":"__CDN__/examples/jsm/"}}
 </script>
 <script type="module">
-let scene, camera, renderer, controls, animate=()=>{};
+let scene, camera, renderer, controls, animate=()=>{}, wobj=null;
 try {
   const THREE = await import('three');
   const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
@@ -154,6 +159,9 @@ try {
   const dir = new THREE.DirectionalLight(0xffffff, 1.0); dir.position.set(5,8,6); scene.add(dir);
   const t = {v:0};
 __SCENE_JS__
+  // 暴露给"生命体"在场感层（呼吸 / 随光标转头 / 消息脉冲）操作
+  window.AOS_SCENE = { scene, camera, renderer, controls, t, main: wobj, sceneType: '__TYPE__' };
+  if (window.__aosOnSceneReady) window.__aosOnSceneReady(window.AOS_SCENE);
   addEventListener('resize', ()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
   renderer.setAnimationLoop(()=>{ t.v+=0.016; animate(); controls.update(); renderer.render(scene,camera); });
 } catch (e) {

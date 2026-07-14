@@ -17,6 +17,10 @@ Endpoints:
   GET  /api/mcp/info          MCP server info
   POST /api/3d/generate       {"prompt"} -> interactive 3D scene url (MEDIA_3D)
   GET  /scene/{id}            serve the generated 3D scene HTML (browser-interactive)
+  GET  /                       Living Companion Entry (3D 生命体伙伴首页, text/html)
+  GET  /?info=1               service info (JSON, for API clients)
+  GET  /api/companion         companion identity + state (双域记忆视图)
+  POST /api/companion/message {"text"} -> 伙伴编排：感知/记忆/规划/执行/回应
 
 The HTTP MCP path reuses src.mcp.protocol.MCPProtocol verbatim, so FabricHub
 instantly gains an HTTP MCP surface that mirrors v5's /api/mcp shape — the two
@@ -137,12 +141,16 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         logger.debug("http %s - %s", self.address_string(), fmt % args)
 
     def _send_json(self, obj, status: int = 200) -> None:
-        body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionError, OSError):
+            # 客户端已断开（负载下偶发）——吞掉，绝不回退成字符串错误页。
+            pass
 
     def _read_json_body(self) -> dict:
         try:
@@ -159,9 +167,14 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
 
     # ---- routing ----
     def do_GET(self):
-        path = self.path.split("?", 1)[0].rstrip("/")
+        raw = self.path
+        path = raw.split("?", 1)[0].rstrip("/")
         if path in ("", "/"):
-            return self._send_json(self._info())
+            # Living Companion Entry：浏览器打开就是 3D 生命体伙伴首页；
+            # ?info=1 给 API 客户端返回 JSON 元信息。
+            if "info=1" in raw:
+                return self._send_json(self._info())
+            return self._serve_living_home()
         if path == "/health":
             return self._send_json(
                 {"status": "alive", "service": "aos-fabrichub", "ts": time.time()}
@@ -173,6 +186,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": str(e)})
         if path == "/api/mcp/info":
             return self._send_json(_MCP.get_server_info())
+        if path == "/api/companion":
+            return self._get_companion()
         if path.startswith("/scene/"):
             return self._serve_scene(path[len("/scene/"):])
         return self._send_json({"error": "not found", "path": path}, status=404)
@@ -188,13 +203,15 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_mcp(body)
         if path == "/api/3d/generate":
             return self._post_3d_generate(body)
+        if path == "/api/companion/message":
+            return self._post_companion_message(body)
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     # ---- endpoints ----
     def _info(self) -> dict:
         return {
             "service": "aos-fabrichub",
-            "mode": "http-serving (Phase 1a consolidation)",
+            "mode": "http-serving (Phase 1a consolidation + Living Companion Entry)",
             "runtime_principle": "single FabricHub kernel, one port",
             "endpoints": {
                 "health": "/health",
@@ -204,8 +221,11 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 "run_task": "POST /api/run_task  {\"task\": ...}",
                 "mcp": "POST /api/mcp  (JSON-RPC 2.0)",
                 "mcp_info": "/api/mcp/info",
+                "companion": "GET /api/companion  (生命体身份+状态)",
+                "companion_message": "POST /api/companion/message  {\"text\": ...} -> 伙伴编排回应",
                 "3d_generate": "POST /api/3d/generate  {\"prompt\": ...} -> 交互式 3D 场景 url",
                 "3d_scene": "GET /scene/{scene_id}  (浏览器打开即可拖拽交互)",
+                "living_home": "GET /  (3D 生命体伙伴首页, text/html)",
             },
         }
 
@@ -279,15 +299,62 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         })
 
     def _serve_scene(self, sid: str) -> None:
+        # 场景存储的唯一真相源在 companion 模块；http_server 自己的 _SCENES
+        # 由 /api/3d/generate 写入，companion 生成的场景在其 _SCENES。两者都查。
         rec = _SCENES.get(sid)
+        if rec is None:
+            try:
+                from core.fabric import companion as _companion
+                rec = _companion._SCENES.get(sid)
+            except Exception:
+                rec = None
         if not rec:
             return self._send_json({"error": "scene not found"}, status=404)
-        html = rec["html"].encode("utf-8")
+        # 兼容两种存储形态：/api/3d/generate 存 {html,...} 字典；
+        # companion 生成直接存 HTML 字符串。
+        html = rec["html"] if isinstance(rec, dict) and "html" in rec else rec
+        if not isinstance(html, str):
+            return self._send_json({"error": "scene 格式异常"}, status=500)
+        html = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(html)))
         self.end_headers()
         self.wfile.write(html)
+
+    # ---- Living Companion Entry ----
+    def _serve_living_home(self) -> None:
+        try:
+            from core.fabric import companion as _companion
+            c = _companion.Companion.load("default")
+            html = _companion.build_living_home_html(c).encode("utf-8")
+        except Exception as e:  # noqa: BLE001
+            logger.exception("living home 生成失败")
+            return self._send_json({"error": f"living home 失败: {e}"}, status=500)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+        self.wfile.write(html)
+
+    def _get_companion(self) -> None:
+        try:
+            from core.fabric import companion as _companion
+            self._send_json(_companion.get_companion_view("default"))
+        except Exception as e:  # noqa: BLE001
+            self._send_json({"error": str(e)}, status=500)
+
+    def _post_companion_message(self, body: dict) -> None:
+        text = (body.get("text") or body.get("message") or "").strip()
+        if not text:
+            return self._send_json({"ok": False, "error": "text required"}, status=400)
+        try:
+            from core.fabric import companion as _companion
+            result = _companion.handle_companion_message(text, "default")
+            return self._send_json(result)
+        except Exception as e:  # noqa: BLE001 - 永不崩服务
+            logger.exception("companion message failed")
+            return self._send_json({"ok": False, "error": str(e)})
 
 
 def serve(host: str = "0.0.0.0", port: int = 8123) -> None:

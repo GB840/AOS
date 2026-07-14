@@ -221,3 +221,5 @@ nul
 .workbuddy/
 # agency_roles 迁移备份（269 文件，确认前保留磁盘、不入库、不删除）。
 src/skills/agency_roles/_migrate_backup/
+# 生命体伙伴运行时状态（Companion 持久化 JSON，运行时生成，不入库）。
+.companion/
