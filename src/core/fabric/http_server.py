@@ -27,6 +27,9 @@ Endpoints:
   POST /api/voice/turn        {"transcript"|"audio"*} -> 听→想→说 全链路 {reply, audio_url, mood, state}
   GET  /api/voice/info        STT/TTS 引擎可用性探测（诚实）
   GET  /api/voice/audio/{id}  托管 TTS 合成音频（mp3/wav）
+  # LNN 轻量动态推理芯粒（液态神经网络时间序列预测；与 LLM 正交，高低搭配）
+  POST /api/lnn/predict       {"series":[floats]|"demo":true,"horizon"?,"epochs"?} -> {forecast, engine, final_loss}
+  GET  /api/lnn/info          LNN/LFM2 引擎可用性探测（诚实：numpy 永远 live，LFM2 需权重）
 
 The HTTP MCP path reuses src.mcp.protocol.MCPProtocol verbatim, so FabricHub
 instantly gains an HTTP MCP surface that mirrors v5's /api/mcp shape — the two
@@ -200,6 +203,10 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._get_voice_info()
         if path.startswith("/api/voice/audio/"):
             return self._serve_voice_audio(path[len("/api/voice/audio/"):])
+        if path == "/api/lnn/info":
+            return self._get_lnn_info()
+        if path == "/api/lnn/predict":  # POST below; GET 也允许(演示)
+            return self._post_lnn_predict({})
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     def do_POST(self):
@@ -221,6 +228,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_voice_tts(body)
         if path == "/api/voice/turn":
             return self._post_voice_turn(body)
+        if path == "/api/lnn/predict":
+            return self._post_lnn_predict(body)
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     # ---- endpoints ----
@@ -462,6 +471,48 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             })
         except Exception as e:  # noqa: BLE001 - 永不崩服务
             logger.exception("voice turn failed")
+            return self._send_json({"ok": False, "error": str(e)})
+
+    # ---- LNN（液态神经网络时间序列推理）----
+    def _get_lnn_info(self) -> None:
+        try:
+            from core.fabric.adapters.lnn_adapter import LNNAdapter
+            from core.fabric.adapters.lfm_adapter import LFMAdapter
+            lnn = LNNAdapter()
+            lfm = LFMAdapter()
+            self._send_json({
+                "ok": True,
+                "lnn": {
+                    "engine": lnn._engine,
+                    "live": bool(lnn.health()),
+                    "detail": lnn.health_detail(),
+                },
+                "lfm2": {
+                    "engine": lfm._engine,
+                    "model": lfm._model,
+                    "live": bool(lfm.health()),
+                    "detail": lfm.health_detail(),
+                },
+                "note": "LNN 擅长时间序列/动态适应（本地零依赖）；LFM2 为 inference.llm 的"
+                        "轻量供给方，权重未下载时自动退回其它 live LLM（高低搭配）。",
+            })
+        except Exception as e:  # noqa: BLE001
+            self._send_json({"ok": False, "error": str(e)})
+
+    def _post_lnn_predict(self, body: dict) -> None:
+        try:
+            from core.fabric.adapters.lnn_adapter import LNNAdapter
+            from core.fabric.adapter import InvokeRequest
+            payload = {}
+            for k in ("series", "horizon", "demo", "epochs"):
+                if body.get(k) is not None:
+                    payload[k] = body[k]
+            r = LNNAdapter().invoke(InvokeRequest(capability="inference.lnn", payload=payload))
+            if not r.ok:
+                return self._send_json({"ok": False, "error": r.error}, status=422)
+            return self._send_json({"ok": True, **r.data})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("lnn predict failed")
             return self._send_json({"ok": False, "error": str(e)})
 
     def _serve_voice_audio(self, fid: str) -> None:

@@ -184,6 +184,12 @@ class Companion:
                      r"百科|资料", t):
             return {"kind": "search", "payload": {"query": text},
                     "reaction": "curious", "reply_hint": "我帮你查查～"}
+        # 时间序列 / 预测意图 → LNN（液态神经网络，AOS 轻量动态推理芯粒）
+        if re.search(r"预测|forecast|时间序列|趋势|走势|推断|算算后面", t):
+            nums = re.findall(r"-?\d+(?:\.\d+)?", text)
+            series = [float(n) for n in nums] if nums else None
+            return {"kind": "lnn", "payload": {"series": series},
+                    "reaction": "curious", "reply_hint": "我用量化液态网络帮你预测～"}
         # 默认：对话
         return {"kind": "chat", "payload": {"prompt": text},
                 "reaction": "thinking", "reply_hint": None}
@@ -263,6 +269,25 @@ def handle_companion_message(text: str, user_id: str = "default",
             reply = "想帮你查，不过我的联网检索在云端～你这问题我记下了，连上网就办。"
             companion.react("curious")
         companion.remember_user(text)
+
+    elif intent["kind"] == "lnn":
+        series = intent["payload"].get("series")
+        payload = {"horizon": 5}
+        if series:
+            payload["series"] = series
+        else:
+            payload["demo"] = True
+        res = _route_hub("inference.lnn", payload)
+        if res["ok"]:
+            fc = (res.get("data") or {}).get("forecast", [])
+            reply = (f"我用液态神经网络(LNN)做了预测 ✨ 接下来 {len(fc)} 步："
+                     f"{fc}。LNN 擅长这种动态趋势，比硬算更稳。")
+            companion.react("curious")
+            companion.note_experience("lnn", f"forecast horizon={len(fc)}")
+        else:
+            reply = (f"想用 LNN 帮你预测，但芯粒暂时连不上：{res.get('error')}。"
+                     f"你换个说法或稍后再试？")
+            companion.react("sad")
 
     else:  # chat
         if _LLM_ROUTING:

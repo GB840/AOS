@@ -88,6 +88,16 @@ try:
 except Exception:  # noqa: BLE001
     TTSAdapter = None
 
+try:
+    from .lnn_adapter import LNNAdapter
+except Exception:  # noqa: BLE001
+    LNNAdapter = None
+
+try:
+    from .lfm_adapter import LFMAdapter
+except Exception:  # noqa: BLE001
+    LFMAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -97,6 +107,7 @@ __all__ = [
         "FileAdapter",
         "LangfuseAdapter",
         "LiteLLMAdapter",
+        "LFMAdapter",
         "MCPClientAdapter",
         "MCPStdioAdapter",
         "Mem0Adapter",
@@ -106,6 +117,7 @@ __all__ = [
         "ThreejsAdapter",
         "STTAdapter",
         "TTSAdapter",
+        "LNNAdapter",
     )
     if globals().get(n) is not None
 ]

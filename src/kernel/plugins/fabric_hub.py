@@ -37,6 +37,8 @@ from core.fabric.adapters import (
     ThreejsAdapter,
     STTAdapter,
     TTSAdapter,
+    LNNAdapter,
+    LFMAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -118,6 +120,8 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         ThreejsAdapter,       # 交互式 3D 场景生成（MEDIA_3D，浏览器端渲染）
         STTAdapter,           # 语音识别（VOICE_STT：whisper.cpp/faster-whisper/Web Speech）
         TTSAdapter,           # 语音合成（VOICE_TTS：kokoro/edge-tts/XTTS/Web Speech）
+        LNNAdapter,           # 液态神经网络时间序列推理（INFERENCE_LNN，纯 numpy 自包含）
+        LFMAdapter,           # LFM2 轻量 LLM 供给方（inference.llm 的「低功耗」一极，高低搭配）
     )
     if a is not None
 )

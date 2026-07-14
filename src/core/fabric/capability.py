@@ -32,6 +32,10 @@ class Capability(str, Enum):
 
     # Inference plane (the "fuel" the behaviour engines run on)
     LLM_GATEWAY = "inference.llm"              # unified LLM access via LiteLLM
+    # LNN 轻量动态推理平面（时间序列 / 连续时间动态建模）。与 inference.llm
+    # 正交：LLM 擅长语言/推理，LNN 擅长低维时间序列与自适应控制（参数高效、
+    # 边缘友好）。AOS「高低搭配」——简单/长序列/预测类任务优先 LNN。
+    INFERENCE_LNN = "inference.lnn"            # liquid neural network (CfC/LTC) 时间序列推理
 
     # Code understanding (codebase-memory-mcp: real stdio MCP server, tree-sitter
     # knowledge graph over the codebase — see third_party/codebase-memory-mcp/)
