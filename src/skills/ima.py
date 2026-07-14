@@ -79,6 +79,20 @@ IMA_OPERATIONS = {
         "output_desc": "审查结果 + IMA 笔记 note_id",
         "example": "title='IM集成交接', summary='...', confirmed_facts=[...], handoff_to='下一手'",
     },
+    "get_handoff": {
+        "name": "get_handoff",
+        "description": "读回结构化交接：按 doc_id 取 IMA 笔记 → 解析回 HandoffEnvelope → 审查",
+        "input_desc": "doc_id（store_handoff 返回的 note_id）",
+        "output_desc": "结构化信封 + 审查结果 + 原始笔记文本",
+        "example": "doc_id='7482930863560973'",
+    },
+    "search_handoffs": {
+        "name": "search_handoffs",
+        "description": "检索历史交接笔记（按关键词搜 IMA 笔记正文，默认关键词'交接'）",
+        "input_desc": "query（默认'交接'）/ limit",
+        "output_desc": "命中的历史交接笔记列表（docid/title/summary）",
+        "example": "query='交接', limit=20",
+    },
 }
 
 
@@ -179,6 +193,10 @@ class IMASkill(Skill):
                 result = self._client.create_note(context)
             elif operation == "store_handoff":
                 return self._handle_store_handoff(context)
+            elif operation == "get_handoff":
+                return self._handle_get_handoff(context)
+            elif operation == "search_handoffs":
+                return self._handle_search_handoffs(context)
             else:
                 return {"success": False, "operation": operation, "error": f"不支持的操作: {operation}"}
 
@@ -250,6 +268,56 @@ class IMASkill(Skill):
             "error": store_res.get("error"),
         }
 
+    def _handle_get_handoff(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """读回交接：取 IMA 笔记正文 → 解析回 HandoffEnvelope → 审查（不写任何东西）"""
+        doc_id = context.get("doc_id") or context.get("note_id")
+        if not doc_id:
+            return {"success": False, "operation": "get_handoff",
+                    "error": "缺少 doc_id / note_id（store_handoff 返回的 note_id）"}
+        raw = self._client.get_note(doc_id)
+        if not raw.get("success"):
+            return {"success": False, "operation": "get_handoff", "error": raw.get("error")}
+        # get_doc_content 返回形态兼容多种：裸字符串 / {content:"..."} / {data:{content:"..."}}
+        data = raw.get("data")
+        if isinstance(data, str):
+            text = data
+        elif isinstance(data, dict):
+            inner = data.get("content")
+            if isinstance(inner, str):
+                text = inner
+            elif isinstance(inner, dict):
+                text = inner.get("content") or ""
+            else:
+                deep = data.get("data")
+                text = deep.get("content") if isinstance(deep, dict) else (deep or "")
+        else:
+            text = str(data) if data is not None else ""
+        if not text:
+            return {"success": False, "operation": "get_handoff",
+                    "error": "IMA 返回笔记内容为空（可能 doc_id 无效或内容格式不支持）"}
+        envelope = HandoffEnvelope.from_markdown(text)
+        review = review_handoff(envelope)
+        return {
+            "success": True,
+            "operation": "get_handoff",
+            "doc_id": doc_id,
+            "envelope": envelope.to_dict(),
+            "review": review,
+            "raw": text,
+        }
+
+    def _handle_search_handoffs(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """检索历史交接笔记：按关键词搜 IMA 笔记正文"""
+        raw = self._client.search_handoffs(context.get("query", "交接"),
+                                           context.get("limit", 20))
+        if not raw.get("success"):
+            return {"success": False, "operation": "search_handoffs", "error": raw.get("error")}
+        return {
+            "success": True,
+            "operation": "search_handoffs",
+            "result": raw.get("data"),
+        }
+
     def get_status(self, task_id: str) -> Dict[str, Any]:
         """获取任务状态"""
         return self._op_status.get(task_id, {"status": "unknown"})
@@ -317,13 +385,36 @@ class _IMAClient:
         # 笔记创建：官方笔记模块路径为 openapi/note/v1/import_doc（全小写，已联网搜证核实）
         # 重要：IMA 笔记无独立 title 字段，标题即正文首个 '# 标题' 行；
         # payload = {content_format:1(固定Markdown), content: "# 标题\n\n正文", 可选 folder_id}
+        # 防重复标题：若正文已以 '# ' 开头（如结构化交接的 to_markdown），不再叠加 '# {title}'。
         title = ctx.get("title", "AOS 笔记")
         body = ctx.get("content", ctx.get("input", ""))
-        md = f"# {title}\n\n{body}" if body else f"# {title}"
+        if body.startswith("# "):
+            md = body
+        else:
+            md = f"# {title}\n\n{body}" if body else f"# {title}"
         return self._post("openapi/note/v1/import_doc", {
             "content": md,
             "content_format": ctx.get("content_format", 1),
             "folder_id": ctx.get("folder_id", ""),
+        })
+
+    def get_note(self, doc_id: str) -> Dict[str, Any]:
+        # 读取单条笔记正文：openapi/note/v1/get_doc_content（已联网搜证核实）
+        # target_content_format=1 返回 Markdown（保留 #/## 结构与换行，便于解析回信封）；
+        # format=0 会把 Markdown 去格式化成纯文本、换行塌缩，无法还原结构。
+        return self._post("openapi/note/v1/get_doc_content", {
+            "doc_id": doc_id,
+            "target_content_format": 1,
+        })
+
+    def search_handoffs(self, query: str, limit: int = 20) -> Dict[str, Any]:
+        # 按关键词搜笔记正文：openapi/note/v1/search_note_book（已联网搜证核实）
+        # search_type=1 按内容搜；query_info.content 为关键词
+        return self._post("openapi/note/v1/search_note_book", {
+            "search_type": 1,
+            "query_info": {"content": query or "交接"},
+            "start": 0,
+            "end": limit,
         })
 
 

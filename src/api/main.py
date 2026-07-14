@@ -1298,7 +1298,7 @@ async def vimax_configure(api_keys: Dict[str, str]):
 # ---- IMA (Tencent Knowledge Base) API ----
 
 class IMARequest(BaseModel):
-    operation: str = Field(..., description="操作类型: search_knowledge/search_knowledge_base/get_knowledge_base/list_knowledge/create_note/store_handoff")
+    operation: str = Field(..., description="操作类型: search_knowledge/search_knowledge_base/get_knowledge_base/list_knowledge/create_note/store_handoff/get_handoff/search_handoffs")
     input: str = Field(default="", description="检索关键词 / 笔记内容（视 operation 而定）")
     params: Optional[Dict[str, Any]] = Field(default={}, description="操作专属参数（knowledge_base_id/title/content/...）")
 
@@ -1350,6 +1350,52 @@ async def ima_configure(api_keys: Dict[str, str]):
         agent = get_ima_subagent()
         await asyncio.to_thread(agent.configure, api_keys)
         return {"success": True, "configured_keys": list(api_keys.keys())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+# ---- Orchestrator API ----
+class OrchestratorRunRequest(BaseModel):
+    task_id: Optional[str] = Field(None, description="任务 ID（缺省自动生成）")
+    steps: List[Dict[str, Any]] = Field(..., description="流水线步骤定义（每步: capability + in/in_from）")
+    initial: Optional[Dict[str, Any]] = Field(default={}, description="初始上下文（首步输入）")
+    auto_handoff: bool = Field(False, description="收尾自动存结构化交接信封存 IMA 知识库")
+    parallel_groups: Optional[List[Any]] = Field(None, description="并行分组（可选，进阶用法）")
+
+
+@app.post("/api/orchestrator/run")
+async def orchestrator_run(req: OrchestratorRunRequest):
+    """运行多芯粒编排流水线（system.workflow）。
+
+    把 steps 按序/并行串联，每步经 fabric 能力路由委派给 live 引擎；
+    设 auto_handoff=true 时，收尾自动把结构化交接信封存 IMA 知识库。
+    流水线逻辑在 OrchestrationChiplet，路由复用 FabricHub（单一可信源）。
+    """
+    try:
+        from mcp.protocol import _get_hub
+        from core.fabric.capability import Capability
+        hub = _get_hub()
+        # 编排芯粒已在 build_fabric_hub 注册；此处幂等确保存在
+        try:
+            if hub.resolve_engine(Capability.WORKFLOW_EXECUTE.value) is None:
+                hub.add_orchestrator()
+        except Exception:
+            pass
+        spec: Dict[str, Any] = {
+            "steps": req.steps,
+            "initial": req.initial or {},
+            "auto_handoff": req.auto_handoff,
+        }
+        if req.task_id:
+            spec["task_id"] = req.task_id
+        if req.parallel_groups:
+            spec["parallel_groups"] = req.parallel_groups
+        res = await asyncio.to_thread(hub.route, Capability.WORKFLOW_EXECUTE.value, spec)
+        return {
+            "success": getattr(res, "ok", False),
+            "data": getattr(res, "data", None),
+            "error": getattr(res, "error", None),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 

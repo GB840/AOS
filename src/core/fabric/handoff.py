@@ -62,6 +62,66 @@ class HandoffEnvelope:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_markdown(cls, md: str) -> "HandoffEnvelope":
+        """从 IMA 笔记 Markdown（to_markdown 的逆操作）解析回信封，用于交接读回 / 审查。
+
+        兼容 IMA 读回时的格式差异：列表符既可能是 '- ' 也可能是 '* '（IMA 存 Markdown
+        读回时常把 '- ' 转成 '* '），元信息值可能带反引号。解析确定性、不抛异常、未知留空。
+        """
+        import re
+        title = ""
+        task_id = source = handoff_to = created_at = ""
+        tags: List[str] = []
+        summary = ""
+        sections: Dict[str, List[str]] = {}
+        current: Optional[str] = None
+        for raw in (md or "").splitlines():
+            s = raw.strip()
+            if not s:
+                continue
+            # 标题（只取首个，忽略重复拼接行）
+            if s.startswith("# 交接:"):
+                if not title:
+                    title = s[len("# 交接:"):].strip()
+                continue
+            # 元信息行：* task_id: `xxx`  /  - 来源: yyy
+            m = re.match(r"^[\*\-]\s+(task_id|来源|交接给|创建|标签):\s*(.*)$", s)
+            if m:
+                key, val = m.group(1), m.group(2).strip().strip("`").strip()
+                if key == "task_id":
+                    task_id = val
+                elif key == "来源":
+                    source = val
+                elif key == "交接给":
+                    handoff_to = val
+                elif key == "创建":
+                    created_at = val
+                elif key == "标签" and val and val != "—":
+                    tags = [x.strip() for x in val.split(",") if x.strip()]
+                continue
+            # 章节标题
+            if s.startswith("## "):
+                current = s[3:].strip()
+                continue
+            # 结论章节：纯文本（非列表项）
+            if current == "结论":
+                summary = (summary + "\n" + s).strip() if summary else s
+                continue
+            # 其他章节：列表项
+            if current and re.match(r"^[\*\-]\s+", s):
+                item = re.sub(r"^[\*\-]\s+", "", s).strip()
+                sections.setdefault(current, []).append(item)
+                continue
+        return cls(
+            task_id=task_id, title=title, summary=summary,
+            confirmed_facts=sections.get("已确认事实", []),
+            assumptions=sections.get("假设（未验证前提）", []),
+            risk_boundary=sections.get("风险边界 / 禁忌", []),
+            open_questions=sections.get("未决问题", []),
+            handoff_to=handoff_to, source=source, created_at=created_at, tags=tags,
+        )
+
 
 def review_handoff(envelope: "HandoffEnvelope") -> Dict[str, Any]:
     """只读审查：不写任何东西，返回缺口清单（哪些关键字段空）"""

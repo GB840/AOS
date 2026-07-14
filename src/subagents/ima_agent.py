@@ -71,6 +71,16 @@ class IMASubagent:
             "params": ["title", "summary", "confirmed_facts", "assumptions",
                        "risk_boundary", "open_questions", "handoff_to", "source", "tags"],
         },
+        "get_handoff": {
+            "name": "get_handoff",
+            "description": "读回结构化交接：按 doc_id 取 IMA 笔记 → 解析回 HandoffEnvelope → 审查",
+            "params": ["doc_id"],
+        },
+        "search_handoffs": {
+            "name": "search_handoffs",
+            "description": "检索历史交接笔记（按关键词搜 IMA 笔记正文）",
+            "params": ["query", "limit"],
+        },
     }
 
     def __init__(self):
