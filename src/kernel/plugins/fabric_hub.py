@@ -496,7 +496,8 @@ class FabricHub:
 
     def add_isolated_engine(self, engine_id: str, adapter_cls,
                             transport: Optional[str] = None,
-                            task_us: float = 0.0, standby: bool = True) -> str:
+                            task_us: float = 0.0, standby: bool = True,
+                            passthrough_env: Optional[list[str]] = None) -> str:
         """把一个真实适配器**隔离进独立子进程**，作为 fabric 引擎注册。
 
         这是 Day22-30 B 路线「收口进生产」的落点：
@@ -506,11 +507,14 @@ class FabricHub:
           - 能力路由/自检逻辑复用现有 route()/resolve_engine()/health_report()，
             零改动（注册的是 IsolatedAdapterProxy）。
         默认 transport 取 AOS_ISO_TRANSPORT（沙箱=tcp，生产=pipe/Named Pipe）。
+        passthrough_env：隔离层默认剥离全部密钥，适配器确需的 key 经此白名单
+        显式回灌子进程（如 agnes 的 AGNES_API_KEY），否则子进程调真实 API 会 401。
         """
         caps = list(adapter_cls().advertise_capabilities())
         spec = f"{adapter_cls.__module__}:{adapter_cls.__qualname__}"
         host = IsolatedEngineHost(engine_id, spec, transport=transport,
-                                  task_us=task_us, standby=standby)
+                                  task_us=task_us, standby=standby,
+                                  passthrough_env=passthrough_env)
         host.start()
         proxy = IsolatedAdapterProxy(engine_id, caps, host)
         self._registry.register(proxy)

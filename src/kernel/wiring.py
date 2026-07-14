@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+from typing import Dict
 
 from .kernel import AOSKernel
 from .plugins import FabricAgentRuntime, FabricHub, LiteLLMModelGateway, MCPSkillBus
@@ -76,7 +77,10 @@ def build_fabric_hub(isolate_heavy: bool = True) -> "FabricHub":
 
     for eid, cls in isolated.items():
         try:
-            hub.add_isolated_engine(eid, cls)
+            # 隔离层默认剥离全部密钥；适配器声明 REQUIRED_ENV 的 key 才显式回灌
+            # 子进程（agnes 需 AGNES_API_KEY 调真实 API，否则子进程 401 静默死）。
+            passthrough = getattr(cls, "REQUIRED_ENV", None)
+            hub.add_isolated_engine(eid, cls, passthrough_env=list(passthrough) if passthrough else None)
         except Exception as e:  # noqa: BLE001
             print(f"[wiring] {eid} 隔离登记失败（退回进程内）: {e}")
             try:
@@ -182,6 +186,14 @@ def build_default_kernel(default_grant: bool = False,
     #    使其 LLM 调用走统一三级回退链而非自建 LLM 逻辑。
     #    非物理删除 brain.py，而是向内核让渡模型调用权。
     _inject_kernel_into_brain(kernel)
+
+    # 6) 挂载 FabricHub：让所有 /api/v1/run_task 及 chat 自动检测走 fabric
+    #    能力枢纽，真正实现端云合作 + 编排闭环。v5_bridge.py 委托 self.kernel.fabric_hub。
+    try:
+        hub = build_fabric_hub(isolate_heavy=isolate_heavy)
+        kernel.set_fabric_hub(hub)
+    except Exception as e:
+        print(f"[wiring] fabric_hub 挂载失败（不影响内核构建）: {e}")
 
     return kernel
 

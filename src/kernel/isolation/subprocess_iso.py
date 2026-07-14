@@ -98,7 +98,8 @@ class SubprocessIsolationLayer:
     """把一个 fabric 芯粒隔离进独立进程，经本地 IPC 提供服务。"""
 
     def __init__(self, engine_id: str, adapter_spec: Optional[str] = None,
-                 task_us: float = 0.0, transport: Optional[str] = None) -> None:
+                 task_us: float = 0.0, transport: Optional[str] = None,
+                 passthrough_env: Optional[list[str]] = None) -> None:
         self.engine_id = engine_id
         self.adapter_spec = adapter_spec
         self.task_us = task_us
@@ -111,8 +112,10 @@ class SubprocessIsolationLayer:
         self._conn = None
         self._spawn_ms: Optional[float] = None
         self._last_rtt_us: Optional[float] = None
-        # 隔离子进程默认拿不到任何密钥；若某适配器确需特定 key，显式声明在此白名单。
-        self.passthrough_env: list[str] = []
+        # 隔离子进程默认拿不到任何密钥；若某适配器确需特定 key，经此白名单显式回灌
+        # （例如 agnes 的 AGNES_API_KEY）。由调用方（FabricHub.add_isolated_engine）
+        # 把适配器声明的 REQUIRED_ENV 传进来，绝不默认透传任何密钥。
+        self.passthrough_env: list[str] = list(passthrough_env) if passthrough_env else []
 
     # ---- 内部工具 -------------------------------------------------
     @staticmethod
@@ -306,15 +309,18 @@ class IsolatedEngineHost:
 
     def __init__(self, engine_id: str, adapter_spec: str,
                  transport: Optional[str] = None, task_us: float = 0.0,
-                 standby: bool = True) -> None:
+                 standby: bool = True,
+                 passthrough_env: Optional[list[str]] = None) -> None:
         self.engine_id = engine_id
         self.adapter_spec = adapter_spec
         self._transport = transport
         self._task_us = task_us
         self._standby_enabled = standby
+        self._passthrough_env = list(passthrough_env) if passthrough_env else []
         self._layer = SubprocessIsolationLayer(
             engine_id=engine_id, adapter_spec=adapter_spec,
             transport=transport, task_us=task_us,
+            passthrough_env=self._passthrough_env,
         )
         self._standby: Optional[SubprocessIsolationLayer] = None
         self._lock = threading.Lock()
@@ -322,10 +328,12 @@ class IsolatedEngineHost:
         self._last_recover_ms: Optional[float] = None
 
     def _mk_standby(self) -> SubprocessIsolationLayer:
+        # 热备层必须继承主层的密钥白名单，否则故障转移切到热备时会因缺 key 而 401。
         return SubprocessIsolationLayer(
             engine_id=f"{self.engine_id}#standby",
             adapter_spec=self.adapter_spec,
             transport=self._transport, task_us=self._task_us,
+            passthrough_env=self._passthrough_env,
         )
 
     def start(self) -> float:
