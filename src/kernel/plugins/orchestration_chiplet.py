@@ -40,6 +40,7 @@
 from __future__ import annotations
 
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional
 
@@ -54,9 +55,12 @@ def _as_str(cap) -> str:
 class _RunState:
     """顺序/并发共享的执行状态；所有写操作加锁，保证线程安全。"""
 
-    def __init__(self, initial: Dict[str, Any]) -> None:
+    def __init__(self, initial: Dict[str, Any], task_id: Optional[str] = None,
+                 auto_handoff: bool = False) -> None:
         self.lock = threading.Lock()
         self.initial = initial
+        self.task_id = task_id or str(uuid.uuid4())[:8]
+        self.auto_handoff = auto_handoff
         self.last_success_out: Optional[Dict[str, Any]] = None
         self.context: Optional[Dict[str, Any]] = None
         self.ok_steps = 0
@@ -95,13 +99,15 @@ class OrchestrationChiplet(BaseAgentAdapter):
             return self._invoke_parallel(steps, spec, parallel_groups)
 
         # —— 顺序路径（既有行为，保持不变）——
-        state = _RunState(spec.get("initial") or {})
+        state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
+                          auto_handoff=spec.get("auto_handoff", False))
         for idx, step in enumerate(steps):
             self._run_step(idx, step, state)
         return self._finalize(state)
 
     def _invoke_parallel(self, steps, spec, parallel_groups) -> InvokeResult:
-        state = _RunState(spec.get("initial") or {})
+        state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
+                          auto_handoff=spec.get("auto_handoff", False))
         covered: set[int] = set()
         for group in parallel_groups:
             idxs = self._resolve_group(group, steps)
@@ -204,6 +210,8 @@ class OrchestrationChiplet(BaseAgentAdapter):
                 error="orchestrator: 所有步骤均失败（见 trace）",
                 data={"ok_steps": 0, "failed_steps": state.failed_steps, "trace": state.trace},
             )
+        if state.auto_handoff:
+            _auto_store_handoff(state)
         return InvokeResult(
             ok=True,
             data={"ok_steps": state.ok_steps, "failed_steps": state.failed_steps,
@@ -218,3 +226,40 @@ def _brief(obj: Any, limit: int = 200) -> Any:
         return {k: _brief(v, limit) for k, v in list(obj.items())[:8]}
     s = str(obj)
     return s if len(s) <= limit else s[:limit] + "…"
+
+
+def _auto_store_handoff(state: "_RunState") -> None:
+    """流水线收尾：把执行结果汇成结构化交接信封，自动存 IMA（opt-in）。
+
+    仅当 state.auto_handoff=True 时由 _finalize 调用。失败仅告警、不阻断
+    主流程返回——交接是「增强」而非「必需」步骤。
+    若 IMA 未配置，store_handoff 返回 success=False 且无副作用。
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from core.fabric.handoff import HandoffEnvelope, store_handoff
+
+        confirmed: List[str] = []
+        risks: List[str] = []
+        for t in state.trace:
+            cap = t.get("capability") or "?"
+            if t.get("ok"):
+                confirmed.append(f"步骤{t.get('step')}({cap}): {_brief(t.get('out'))}")
+            else:
+                risks.append(f"步骤{t.get('step')}({cap}) 失败: {t.get('error')}")
+
+        envelope = HandoffEnvelope(
+            task_id=state.task_id,
+            title=f"Orchestration 交接-{state.task_id}",
+            summary=f"完成 {state.ok_steps} 步，失败 {state.failed_steps} 步",
+            confirmed_facts=confirmed,
+            risk_boundary=risks,
+            source="OrchestrationChiplet",
+            tags=["handoff", "orchestration"],
+        )
+        res = store_handoff(envelope)  # skill=None → 自建 IMASkill（未配置则无副作用）
+        if not res.get("success"):
+            logger.warning("流水线交接自动存 IMA 未成功（可能未配置 IMA）：%s", res.get("error"))
+    except Exception as e:
+        logger.warning("流水线交接自动存 IMA 异常（已忽略）：%s", e)
