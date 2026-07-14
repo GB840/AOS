@@ -59,6 +59,19 @@ def _first_existing(paths: list[str]) -> str | None:
     return None
 
 
+def _hf_cache_dir() -> str:
+    return os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface/hub")
+
+
+def _faster_whisper_model_cached(size: str) -> bool:
+    """faster-whisper 把模型缓存为 models--Systran--faster-whisper-<size>。
+
+    仅检查缓存目录是否存在（不触发下载）；不存在即「待下载」→ 诚实 not-ready。
+    """
+    d = os.path.join(_hf_cache_dir(), f"models--Systran--faster-whisper-{size}")
+    return os.path.isdir(d)
+
+
 def _pick_engine() -> str:
     forced = os.environ.get("AOS_STT_ENGINE")
     if forced:
@@ -100,7 +113,8 @@ class STTAdapter(BaseAgentAdapter):
         if self._engine == "faster_whisper":
             try:
                 import faster_whisper  # noqa: F401
-                return True
+                size = os.environ.get("AOS_WHISPER_SIZE", "base")
+                return _faster_whisper_model_cached(size)
             except Exception:
                 return False
         # web_speech：服务端只收 transcript，永远可用
@@ -119,7 +133,11 @@ class STTAdapter(BaseAgentAdapter):
         if self._engine == "faster_whisper":
             try:
                 import faster_whisper  # noqa: F401
-                return {"engine": "faster_whisper", "ready": True}
+                size = os.environ.get("AOS_WHISPER_SIZE", "base")
+                cached = _faster_whisper_model_cached(size)
+                return {"engine": "faster_whisper", "ready": cached,
+                        "model_size": size, "model_cached": cached,
+                        "note": "全离线；首次需从 HuggingFace 下载 ggml 模型（约 75-150MB）"}
             except Exception as e:
                 return {"engine": "faster_whisper", "ready": False, "error": repr(e)}
         return {"engine": "web_speech", "ready": True,

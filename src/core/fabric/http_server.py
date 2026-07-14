@@ -203,6 +203,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._get_voice_info()
         if path.startswith("/api/voice/audio/"):
             return self._serve_voice_audio(path[len("/api/voice/audio/"):])
+        if path == "/api/voice/wake/status":
+            return self._get_voice_wake_status()
         if path == "/api/lnn/info":
             return self._get_lnn_info()
         if path == "/api/lnn/predict":  # POST below; GET 也允许(演示)
@@ -228,6 +230,10 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_voice_tts(body)
         if path == "/api/voice/turn":
             return self._post_voice_turn(body)
+        if path == "/api/voice/wake/start":
+            return self._post_voice_wake_start()
+        if path == "/api/voice/wake/stop":
+            return self._post_voice_wake_stop()
         if path == "/api/lnn/predict":
             return self._post_lnn_predict(body)
         return self._send_json({"error": "not found", "path": path}, status=404)
@@ -251,6 +257,9 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 "3d_generate": "POST /api/3d/generate  {\"prompt\": ...} -> 交互式 3D 场景 url",
                 "3d_scene": "GET /scene/{scene_id}  (浏览器打开即可拖拽交互)",
                 "living_home": "GET /  (3D 生命体伙伴首页, text/html)",
+                "voice_info": "GET /api/voice/info  (STT/TTS/唤醒 引擎可用性)",
+                "voice_turn": "POST /api/voice/turn  {\"transcript\"} -> STT→AOS→TTS 整回合 (可传 plan:true 走 ag2 规划)",
+                "voice_wake": "POST /api/voice/wake/start|stop · GET /api/voice/wake/status  (常驻 VAD 唤醒)",
             },
         }
 
@@ -397,6 +406,15 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             from core.fabric.adapters.tts_adapter import TTSAdapter
             stt = STTAdapter()
             tts = TTSAdapter()
+            loop = FabricHubHTTPHandler._wake_state.get("loop")
+            wake_info = None
+            if loop is not None:
+                wake_info = {
+                    "running": loop.running,
+                    "health": loop.health(),
+                    "vad_engine": loop.vad_engine_name(),
+                    "total_utterances": loop.total_utterances,
+                }
             self._send_json({
                 "ok": True,
                 "stt": {
@@ -409,7 +427,15 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                     "live": bool(tts.health()),
                     "detail": tts.health_detail(),
                 },
-                "note": "live=false 时前端自动改用浏览器 Web Speech 兜底，全链路不崩。",
+                "wake": wake_info,
+                "wake_endpoints": {
+                    "start": "POST /api/voice/wake/start",
+                    "stop": "POST /api/voice/wake/stop",
+                    "status": "GET /api/voice/wake/status",
+                },
+                "turn_plan": "POST /api/voice/turn 可传 {\"plan\": true} 走 ag2 长任务规划",
+                "note": "live=false 时前端自动改用浏览器 Web Speech 兜底；"
+                        "无麦克风时唤醒自动退回 🎤 按钮，全链路不崩。",
             })
         except Exception as e:  # noqa: BLE001
             self._send_json({"ok": False, "error": str(e)})
@@ -452,12 +478,16 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
     def _post_voice_turn(self, body: dict) -> None:
         try:
             from core.fabric.voice_chiplet import handle_voice_turn
+            force_plan = bool(body.get("plan") or body.get("force_plan"))
+            auto_plan = bool(body.get("auto_plan"))
             res = handle_voice_turn(
                 transcript=(body.get("transcript") or body.get("text") or ""),
                 audio_path=body.get("audio_path", ""),
                 audio_b64=body.get("audio_b64", ""),
                 user_id=body.get("user_id", "default"),
                 barge_window=float(body.get("barge_window", 3.0)),
+                force_plan=force_plan,
+                auto_plan=auto_plan,
             )
             return self._send_json({
                 "ok": res.ok,
@@ -466,12 +496,79 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 "audio_url": res.audio_url,
                 "tts_engine": res.tts_engine,
                 "mood": res.mood,
+                "planner_used": res.planner_used,
+                "scene_id": res.scene_id,
                 "state": res.state,
                 "error": res.error,
             })
         except Exception as e:  # noqa: BLE001 - 永不崩服务
             logger.exception("voice turn failed")
             return self._send_json({"ok": False, "error": str(e)})
+
+    # ---- 常驻语音唤醒（VAD 监听）----
+    _wake_state: dict = {"loop": None, "handler": None, "last": None, "pipeline": None}
+
+    def _get_wake_loop(self):
+        st = FabricHubHTTPHandler._wake_state
+        if st["loop"] is None:
+            try:
+                from core.fabric.voice_wake import VoiceWakeLoop, make_wake_turn_handler
+                from core.fabric.voice_chiplet import VoicePipeline
+                pipe = VoicePipeline(user_id="wake")
+                handler, last = make_wake_turn_handler(pipeline=pipe, user_id="wake")
+                loop = VoiceWakeLoop(on_utterance=handler)
+                st.update(loop=loop, handler=handler, last=last, pipeline=pipe)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("init wake loop failed")
+                return None
+        return st["loop"]
+
+    def _post_voice_wake_start(self) -> None:
+        loop = self._get_wake_loop()
+        if loop is None:
+            return self._send_json({"ok": False, "error": "唤醒模块初始化失败"}, status=500)
+        if not loop.health():
+            return self._send_json({
+                "ok": False,
+                "running": False,
+                "health": False,
+                "vad_engine": loop.vad_engine_name(),
+                "error": loop.last_error or "无麦克风/输入设备；请用浏览器 🎤 按钮",
+            }, status=409)
+        ok = loop.start()
+        return self._send_json({
+            "ok": bool(ok),
+            "running": loop.running,
+            "health": True,
+            "vad_engine": loop.vad_engine_name(),
+            "sample_rate": loop.sample_rate,
+            "note": "常驻监听已开启；说话即自动触发 STT→AOS→TTS 整回合（0.3s 级响应）。",
+        })
+
+    def _post_voice_wake_stop(self) -> None:
+        loop = FabricHubHTTPHandler._wake_state["loop"]
+        if loop is not None:
+            loop.stop()
+        return self._send_json({"ok": True, "running": False})
+
+    def _get_voice_wake_status(self) -> None:
+        st = FabricHubHTTPHandler._wake_state
+        loop = st["loop"]
+        if loop is None:
+            return self._send_json({
+                "ok": True, "running": False, "health": False,
+                "vad_engine": None,
+                "last_result": None,
+                "note": "尚未初始化；POST /api/voice/wake/start 触发（需麦克风）。",
+            })
+        return self._send_json({
+            "ok": True,
+            "running": loop.running,
+            "health": loop.health(),
+            "vad_engine": loop.vad_engine_name(),
+            "total_utterances": loop.total_utterances,
+            "last_result": st.get("last"),
+        })
 
     # ---- LNN（液态神经网络时间序列推理）----
     def _get_lnn_info(self) -> None:

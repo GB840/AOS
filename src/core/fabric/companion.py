@@ -427,6 +427,11 @@ def build_living_home_html(companion: Companion) -> str:
     font-size:15px;cursor:pointer}
   #mic{background:#3a2a6c}
   #mic.on{background:#c0392b}
+  #wake{background:#1d6c4a;font-size:15px}
+  #wake.on{background:#16a34a;box-shadow:0 0 12px #16a34a}
+  #planLbl{display:flex;align-items:center;gap:3px;color:#9fb3d9;font-size:13px;
+    cursor:pointer;user-select:none;padding:0 6px}
+  #planLbl input{accent-color:#2a6cff}
   #speak{background:#2a4a6c}
   #speak.off{opacity:.45}
   #sceneModal{position:fixed;inset:0;display:none;background:#05060c;z-index:50}
@@ -448,8 +453,10 @@ def build_living_home_html(companion: Companion) -> str:
 <div id="bubble"></div>
 <div id="dock">
   <input id="say" placeholder="对着 __NAME__ 说点什么…（试试「做个宇宙粒子星河」）" autocomplete="off">
+  <label id="planLbl" title="深度规划：走 ag2 把任务拆成多步执行"><input type="checkbox" id="plan">🧠</label>
   <button id="mic" title="语音输入">🎤</button>
   <button id="speak" title="语音播报">🔊</button>
+  <button id="wake" title="常驻聆听（自动唤醒，说话即触发）">🔅</button>
   <button id="send">发送</button>
 </div>
 <div id="sceneModal"><iframe id="sceneFrame" src=""></iframe></div>
@@ -504,12 +511,13 @@ function say(text){
   if(!text.trim()) return;
   bubble.textContent='💭 思考中…'; bubble.classList.add('show');
   moodLine.textContent='状态：思考中…';
-  fetch('/api/companion/message',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text, voice: voiceOn})})
+  const plan = document.getElementById('plan').checked;
+  fetch('/api/voice/turn',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({transcript:text, plan:plan})})
     .then(r=>r.json()).then(d=>{
       bubble.textContent=d.reply||'…'; bubble.classList.add('show');
-      if(d.mood_emoji) document.querySelector('#hud .nm').textContent=d.mood_emoji+' '+d.companion.name;
-      moodLine.textContent='状态：'+ (d.mood_emoji||'🌙') +' '+ (d.reply? '回应中':'');
+      if(d.planner_used) moodLine.textContent='状态：已用 '+d.planner_used+' 规划多步执行';
+      else moodLine.textContent='状态：回应中';
       if(d.scene_id){ setTimeout(()=>openScene(d.scene_id), 600); }
       voiceOut(d);
     }).catch(e=>{ bubble.textContent='哎呀，和伙伴的连接抖了一下：'+e; bubble.classList.add('show'); });
@@ -535,6 +543,43 @@ if('webkitSpeechRecognition' in window || 'SpeechRecognition' in window){
   rec.onresult=e=>{ const t=e.results[0][0].transcript; say(t); };
   mic.onclick=()=>{ if(rec.recording){ rec.stop(); mic.classList.remove('on'); } else { rec.start(); mic.classList.add('on'); } };
 } else { mic.style.display='none'; }
+
+// ===== 常驻唤醒（前端 Web Audio VAD，零服务端麦克风依赖）=====
+// 思路：用 AudioContext 实时算麦克风能量(RMS)，超阈值即认为「在说话」，
+// 自动拉起 Web Speech 识别；识别完再回到监听。形成「说话即唤醒」的常驻循环。
+// 这是 0.3 秒级唤醒的浏览器侧实现（无需服务端有声卡）。
+const wakeBtn=document.getElementById('wake');
+let wakeOn=false, wakeStream=null, wakeRAF=null, wakeCtx=null, wakeAnalyser=null;
+function wakeVAD(){
+  if(!wakeOn||!wakeAnalyser) return;
+  const buf=new Uint8Array(wakeAnalyser.frequencyBinCount);
+  wakeAnalyser.getByteTimeDomainData(buf);
+  let sum=0; for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum+=v*v; }
+  const rms=Math.sqrt(sum/buf.length);
+  if(rms>0.045 && rec && !rec.recording){ try{ rec.start(); }catch(e){} }
+  wakeRAF=requestAnimationFrame(wakeVAD);
+}
+wakeBtn.onclick=async()=>{
+  if(wakeOn){
+    wakeOn=false; wakeBtn.classList.remove('on');
+    if(wakeRAF) cancelAnimationFrame(wakeRAF);
+    if(wakeStream){ wakeStream.getTracks().forEach(t=>t.stop()); wakeStream=null; }
+    if(rec&&rec.recording){ try{rec.stop();}catch(e){} }
+    moodLine.textContent='状态：常驻聆听已关';
+    return;
+  }
+  if(!rec){ alert('当前浏览器不支持语音识别，无法常驻聆听'); return; }
+  try{
+    wakeStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    wakeCtx=new (window.AudioContext||window.webkitAudioContext)();
+    const src=wakeCtx.createMediaStreamSource(wakeStream);
+    wakeAnalyser=wakeCtx.createAnalyser(); wakeAnalyser.fftSize=512;
+    src.connect(wakeAnalyser);
+    wakeOn=true; wakeBtn.classList.add('on');
+    moodLine.textContent='状态：常驻聆听中…（说话即唤醒）';
+    wakeVAD();
+  }catch(e){ alert('无法访问麦克风：'+e); }
+};
 
 // 欢迎语
 bubble.textContent=__GREET__; bubble.classList.add('show');
