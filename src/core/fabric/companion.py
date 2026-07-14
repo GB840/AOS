@@ -217,8 +217,14 @@ def _route_hub(capability: str, payload: dict) -> dict:
         return {"ok": False, "error": f"hub 路由失败: {e}"}
 
 
-def handle_companion_message(text: str, user_id: str = "default") -> dict:
-    """编排：感知 → 记忆 → 规划（意图） → 执行（AOS 能力） → 回应。"""
+def handle_companion_message(text: str, user_id: str = "default",
+                             voice: bool = False) -> dict:
+    """编排：感知 → 记忆 → 规划（意图） → 执行（AOS 能力） → 回应。
+
+    voice=True 时，若服务端有可用 TTS 引擎（kokoro/edge-tts/XTTS），额外合成
+    audio_url 让前端播放；否则 audio_url=None，前端自动改用浏览器
+    speechSynthesis 朗读（诚实降级，全链路不崩）。
+    """
     text = (text or "").strip()
     companion = Companion.load(user_id)
     companion.react("thinking")  # 先进入「思考」态
@@ -273,14 +279,35 @@ def handle_companion_message(text: str, user_id: str = "default") -> dict:
         companion.remember_user(text)
 
     companion.save()
+    # 语音：可选合成（优雅降级）
+    audio_url = None
+    tts_engine = None
+    if voice:
+        audio_url, tts_engine = _tts_if_wanted(reply)
     return {
         "ok": True,
         "reply": reply,
         "mood": companion.mood,
         "mood_emoji": companion.mood_emoji,
         "scene_id": scene_id,
+        "audio_url": audio_url,
+        "tts_engine": tts_engine,
         "companion": _companion_view(companion),
     }
+
+
+def _tts_if_wanted(reply: str):
+    """尝试服务端 TTS；不可用则 (None, None) 让前端浏览器朗读兜底。"""
+    try:
+        from .adapters.tts_adapter import TTSAdapter
+        from .adapter import InvokeRequest
+        r = TTSAdapter().invoke(InvokeRequest(
+            capability="voice.tts", payload={"text": reply}))
+        if r.ok:
+            return r.data.get("audio_url"), r.data.get("engine")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("伴侣语音合成降级到浏览器: %s", e)
+    return None, None
 
 
 # ---- 小工具 ----
@@ -371,10 +398,12 @@ def build_living_home_html(companion: Companion) -> str:
   #say{flex:1;background:#0c0f1e;border:1px solid #2a3a6a;border-radius:12px;color:#dff;
     padding:11px 14px;font-size:15px;outline:none}
   #say::placeholder{color:#567}
-  #send,#mic{background:#2a6cff;border:none;color:#fff;border-radius:12px;padding:0 16px;
+  #send,#mic,#speak{background:#2a6cff;border:none;color:#fff;border-radius:12px;padding:0 16px;
     font-size:15px;cursor:pointer}
   #mic{background:#3a2a6c}
   #mic.on{background:#c0392b}
+  #speak{background:#2a4a6c}
+  #speak.off{opacity:.45}
   #sceneModal{position:fixed;inset:0;display:none;background:#05060c;z-index:50}
   #sceneModal.show{display:block}
   #sceneModal iframe{width:100%;height:100%;border:0}
@@ -394,7 +423,8 @@ def build_living_home_html(companion: Companion) -> str:
 <div id="bubble"></div>
 <div id="dock">
   <input id="say" placeholder="对着 __NAME__ 说点什么…（试试「做个宇宙粒子星河」）" autocomplete="off">
-  <button id="mic" title="语音">🎤</button>
+  <button id="mic" title="语音输入">🎤</button>
+  <button id="speak" title="语音播报">🔊</button>
   <button id="send">发送</button>
 </div>
 <div id="sceneModal"><iframe id="sceneFrame" src=""></iframe></div>
@@ -434,17 +464,29 @@ if(window.AOS_SCENE) window.__aosOnSceneReady(window.AOS_SCENE);
 // ===== 对话：把话传给伙伴，它去调能力 =====
 const bubble=document.getElementById('bubble');
 const moodLine=document.getElementById('moodLine');
+// 语音播报：优先播放服务端合成的 audio_url；否则用浏览器 speechSynthesis 朗读。
+const synth = window.speechSynthesis;
+let voiceOn = !!synth;
+const speakBtn=document.getElementById('speak');
+function syncSpeakBtn(){ speakBtn.classList.toggle('off', !voiceOn); }
+speakBtn.onclick=()=>{ voiceOn=!voiceOn; if(!voiceOn&&synth) synth.cancel(); syncSpeakBtn(); };
+syncSpeakBtn();
+function voiceOut(d){
+  if(d.audio_url){ const a=new Audio(d.audio_url); a.play().catch(()=>{}); return; }
+  if(voiceOn && synth && d.reply){ try{ synth.cancel(); const u=new SpeechSynthesisUtterance(d.reply); u.lang='zh-CN'; u.rate=1.0; synth.speak(u);}catch(e){} }
+}
 function say(text){
   if(!text.trim()) return;
   bubble.textContent='💭 思考中…'; bubble.classList.add('show');
   moodLine.textContent='状态：思考中…';
   fetch('/api/companion/message',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text})})
+    body:JSON.stringify({text, voice: voiceOn})})
     .then(r=>r.json()).then(d=>{
       bubble.textContent=d.reply||'…'; bubble.classList.add('show');
       if(d.mood_emoji) document.querySelector('#hud .nm').textContent=d.mood_emoji+' '+d.companion.name;
       moodLine.textContent='状态：'+ (d.mood_emoji||'🌙') +' '+ (d.reply? '回应中':'');
       if(d.scene_id){ setTimeout(()=>openScene(d.scene_id), 600); }
+      voiceOut(d);
     }).catch(e=>{ bubble.textContent='哎呀，和伙伴的连接抖了一下：'+e; bubble.classList.add('show'); });
 }
 function openScene(id){
@@ -460,7 +502,7 @@ document.getElementById('sceneClose').onclick=()=>{
 document.getElementById('send').onclick=()=>{ const i=document.getElementById('say'); say(i.value); i.value=''; };
 document.getElementById('say').addEventListener('keydown',e=>{ if(e.key==='Enter'){ say(e.target.value); e.target.value=''; }});
 
-// ===== 语音 NUI（Web Speech API，纯浏览器）=====
+// ===== 语音输入 NUI（Web Speech API，纯浏览器）=====
 const mic=document.getElementById('mic'); let rec=null;
 if('webkitSpeechRecognition' in window || 'SpeechRecognition' in window){
   const SR = window.SpeechRecognition||window.webkitSpeechRecognition;

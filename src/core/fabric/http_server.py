@@ -21,6 +21,12 @@ Endpoints:
   GET  /?info=1               service info (JSON, for API clients)
   GET  /api/companion         companion identity + state (双域记忆视图)
   POST /api/companion/message {"text"} -> 伙伴编排：感知/记忆/规划/执行/回应
+  # 语音芯粒（方案三：语音是内核的一个可替换能力，非独立助手）
+  POST /api/voice/stt         {"transcript"|"audio_path"|"audio_b64"} -> {text, engine}
+  POST /api/voice/tts         {"text","voice?","lang?"} -> {text, audio_url, engine}
+  POST /api/voice/turn        {"transcript"|"audio"*} -> 听→想→说 全链路 {reply, audio_url, mood, state}
+  GET  /api/voice/info        STT/TTS 引擎可用性探测（诚实）
+  GET  /api/voice/audio/{id}  托管 TTS 合成音频（mp3/wav）
 
 The HTTP MCP path reuses src.mcp.protocol.MCPProtocol verbatim, so FabricHub
 instantly gains an HTTP MCP surface that mirrors v5's /api/mcp shape — the two
@@ -190,6 +196,10 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._get_companion()
         if path.startswith("/scene/"):
             return self._serve_scene(path[len("/scene/"):])
+        if path == "/api/voice/info":
+            return self._get_voice_info()
+        if path.startswith("/api/voice/audio/"):
+            return self._serve_voice_audio(path[len("/api/voice/audio/"):])
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     def do_POST(self):
@@ -205,6 +215,12 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_3d_generate(body)
         if path == "/api/companion/message":
             return self._post_companion_message(body)
+        if path == "/api/voice/stt":
+            return self._post_voice_stt(body)
+        if path == "/api/voice/tts":
+            return self._post_voice_tts(body)
+        if path == "/api/voice/turn":
+            return self._post_voice_turn(body)
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     # ---- endpoints ----
@@ -350,11 +366,121 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": "text required"}, status=400)
         try:
             from core.fabric import companion as _companion
-            result = _companion.handle_companion_message(text, "default")
+            result = _companion.handle_companion_message(
+                text, "default", voice=bool(body.get("voice", False)))
             return self._send_json(result)
         except Exception as e:  # noqa: BLE001 - 永不崩服务
             logger.exception("companion message failed")
             return self._send_json({"ok": False, "error": str(e)})
+
+    # ---- 语音芯粒（方案三）----
+    @staticmethod
+    def _voice_audio_dir() -> str:
+        import os
+        return os.environ.get(
+            "AOS_VOICE_AUDIO_DIR",
+            os.path.join("data", "workspaces", "fabric", "voice_audio"),
+        )
+
+    def _get_voice_info(self) -> None:
+        try:
+            from core.fabric.adapters.stt_adapter import STTAdapter
+            from core.fabric.adapters.tts_adapter import TTSAdapter
+            stt = STTAdapter()
+            tts = TTSAdapter()
+            self._send_json({
+                "ok": True,
+                "stt": {
+                    "engine": stt._engine,
+                    "live": bool(stt.health()),
+                    "detail": stt.health_detail(),
+                },
+                "tts": {
+                    "engine": tts._engine,
+                    "live": bool(tts.health()),
+                    "detail": tts.health_detail(),
+                },
+                "note": "live=false 时前端自动改用浏览器 Web Speech 兜底，全链路不崩。",
+            })
+        except Exception as e:  # noqa: BLE001
+            self._send_json({"ok": False, "error": str(e)})
+
+    def _post_voice_stt(self, body: dict) -> None:
+        try:
+            from core.fabric.adapters.stt_adapter import STTAdapter
+            from core.fabric.adapter import InvokeRequest
+            payload = {}
+            for k in ("transcript", "audio_path", "audio_b64", "audio_suffix"):
+                if body.get(k) is not None:
+                    payload[k] = body[k]
+            r = STTAdapter().invoke(InvokeRequest(capability="voice.stt", payload=payload))
+            if not r.ok:
+                return self._send_json({"ok": False, "error": r.error}, status=422)
+            return self._send_json({"ok": True, **r.data})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("voice stt failed")
+            return self._send_json({"ok": False, "error": str(e)})
+
+    def _post_voice_tts(self, body: dict) -> None:
+        text = (body.get("text") or body.get("prompt") or "").strip()
+        if not text:
+            return self._send_json({"ok": False, "error": "text required"}, status=400)
+        try:
+            from core.fabric.adapters.tts_adapter import TTSAdapter
+            from core.fabric.adapter import InvokeRequest
+            payload = {"text": text}
+            for k in ("voice", "lang", "language", "speaker_wav"):
+                if body.get(k) is not None:
+                    payload[k] = body[k]
+            r = TTSAdapter().invoke(InvokeRequest(capability="voice.tts", payload=payload))
+            if not r.ok:
+                return self._send_json({"ok": False, "error": r.error}, status=422)
+            return self._send_json({"ok": True, **r.data})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("voice tts failed")
+            return self._send_json({"ok": False, "error": str(e)})
+
+    def _post_voice_turn(self, body: dict) -> None:
+        try:
+            from core.fabric.voice_chiplet import handle_voice_turn
+            res = handle_voice_turn(
+                transcript=(body.get("transcript") or body.get("text") or ""),
+                audio_path=body.get("audio_path", ""),
+                audio_b64=body.get("audio_b64", ""),
+                user_id=body.get("user_id", "default"),
+                barge_window=float(body.get("barge_window", 3.0)),
+            )
+            return self._send_json({
+                "ok": res.ok,
+                "user_text": res.user_text,
+                "reply": res.reply,
+                "audio_url": res.audio_url,
+                "tts_engine": res.tts_engine,
+                "mood": res.mood,
+                "state": res.state,
+                "error": res.error,
+            })
+        except Exception as e:  # noqa: BLE001 - 永不崩服务
+            logger.exception("voice turn failed")
+            return self._send_json({"ok": False, "error": str(e)})
+
+    def _serve_voice_audio(self, fid: str) -> None:
+        # 防目录穿越：只用 basename
+        import os
+        fname = os.path.basename(fid)
+        if ".." in fname or "/" in fname or "\\" in fname:
+            return self._send_json({"error": "bad id"}, status=400)
+        fpath = os.path.join(self._voice_audio_dir(), fname)
+        if not os.path.isfile(fpath):
+            return self._send_json({"error": "audio not found"}, status=404)
+        ctype = "audio/mpeg" if fname.lower().endswith(".mp3") else "audio/wav"
+        data = open(fpath, "rb").read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
 
 
 def serve(host: str = "0.0.0.0", port: int = 8123) -> None:

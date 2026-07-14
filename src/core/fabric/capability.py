@@ -58,6 +58,13 @@ class Capability(str, Enum):
     WEB_SEARCH = "web.search"
     WEB_FETCH = "web.fetch"  # fetch & extract content from a URL
 
+    # Voice I/O (方案三：语音作为内核的一个可替换芯粒，而非独立助手)
+    # 引擎无关：whisper.cpp / faster-whisper / Web Speech API 都可服务 STT；
+    # edge-tts / kokoro / XTTS / Web Speech API 都可服务 TTS。health() 如实
+    # 反映引擎是否真可用，缺失则优雅降级（浏览器 Web Speech 永远兜底）。
+    VOICE_STT = "voice.stt"   # 语音识别：音频 -> 文本
+    VOICE_TTS = "voice.tts"   # 语音合成：文本 -> 音频
+
     # Data layer (structured external datasets, e.g. ExploreYC YC/a16z portfolio)
     DATA_QUERY = "data.query"
 

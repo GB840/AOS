@@ -78,6 +78,16 @@ try:
 except Exception:  # noqa: BLE001
     ThreejsAdapter = None
 
+try:
+    from .stt_adapter import STTAdapter
+except Exception:  # noqa: BLE001
+    STTAdapter = None
+
+try:
+    from .tts_adapter import TTSAdapter
+except Exception:  # noqa: BLE001
+    TTSAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -94,6 +104,8 @@ __all__ = [
         "SearchAdapter",
         "WebFetchAdapter",
         "ThreejsAdapter",
+        "STTAdapter",
+        "TTSAdapter",
     )
     if globals().get(n) is not None
 ]

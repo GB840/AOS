@@ -1,0 +1,181 @@
+"""TTS 适配器 —— AOS fabric 的 VOICE_TTS 平面（语音合成：文本 -> 音频）。
+
+引擎无关契约（对齐 AOS 第一性「不绑定、未来-proof」）：
+- edge_tts：微软云端 TTS（免费、中文音色好、需联网；国内一般可达）。
+- kokoro：本地神经网络 TTS（pip install kokoro，全离线、质量高）。
+- xtts：Coqui XTTS-v2（本地、支持多语/克隆，体积大）。
+- web_speech：浏览器 speechSynthesis 朗读，服务端只回文本（零依赖兜底）。
+
+重依赖全部惰性导入；health() 如实反映引擎是否真能合成音频。
+缺引擎不谎报 live——companion 前端会改用浏览器 speechSynthesis 兜底。
+
+输出：合成成功写入 AOS_VOICE_AUDIO_DIR（默认 data/workspaces/fabric/voice_audio/），
+返回 {text, audio_url, audio_path, engine}；web_speech 则返回 {text, engine:"web_speech"}，
+audio_url=None，由前端朗读。
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import logging
+import os
+import threading
+
+from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+from ..capability import Capability
+
+logger = logging.getLogger(__name__)
+
+_AUDIO_DIR = os.environ.get(
+    "AOS_VOICE_AUDIO_DIR",
+    os.path.join("data", "workspaces", "fabric", "voice_audio"),
+)
+
+
+def _audio_dir() -> str:
+    os.makedirs(_AUDIO_DIR, exist_ok=True)
+    return _AUDIO_DIR
+
+
+def _pick_engine() -> str:
+    forced = os.environ.get("AOS_TTS_ENGINE")
+    if forced:
+        return forced
+    try:
+        import kokoro  # noqa: F401
+        return "kokoro"
+    except Exception:
+        pass
+    try:
+        import edge_tts  # noqa: F401
+        return "edge_tts"
+    except Exception:
+        return "web_speech"
+
+
+class TTSAdapter(BaseAgentAdapter):
+    """语音合成适配器（VOICE_TTS）。引擎可配、缺依赖优雅降级。"""
+
+    def __init__(self, engine: str | None = None) -> None:
+        self._engine = engine or _pick_engine()
+        self._lock = threading.Lock()
+        logger.info("TTSAdapter: engine=%s", self._engine)
+
+    @property
+    def engine_id(self) -> str:
+        return "tts"
+
+    def advertise_capabilities(self) -> list[Capability]:
+        return [Capability.VOICE_TTS]
+
+    def health(self) -> bool:
+        if self._engine == "web_speech":
+            return True
+        if self._engine == "edge_tts":
+            try:
+                import edge_tts  # noqa: F401
+                return True
+            except Exception:
+                return False
+        if self._engine == "kokoro":
+            try:
+                import kokoro  # noqa: F401
+                return True
+            except Exception:
+                return False
+        if self._engine == "xtts":
+            try:
+                import TTS  # noqa: F401
+                return True
+            except Exception:
+                return False
+        return False
+
+    def health_detail(self) -> dict:
+        ok = self.health()
+        return {
+            "engine": self._engine,
+            "ready": ok,
+            "note": ("web_speech=浏览器朗读兜底" if self._engine == "web_speech"
+                     else f"{self._engine} 需对应库/模型"),
+        }
+
+    def invoke(self, req: InvokeRequest) -> InvokeResult:
+        payload = req.payload or {}
+        text = (payload.get("text") or payload.get("prompt") or "").strip()
+        if not text:
+            return InvokeResult(ok=False, error="TTS 需要 text")
+        # 浏览器兜底：只回文本，由前端 speechSynthesis 朗读
+        if self._engine == "web_speech":
+            return InvokeResult(ok=True, data={"text": text, "engine": "web_speech",
+                                               "audio_url": None})
+        try:
+            audio_bytes, ext = self._synthesize(text, payload)
+        except Exception as e:
+            return InvokeResult(ok=False, error=f"TTS 合成失败({self._engine}): {e}")
+
+        # 落盘并返回可访问 URL
+        digest = hashlib.sha1((self._engine + "|" + text).encode("utf-8")).hexdigest()[:16]
+        fname = f"{digest}.{ext}"
+        fpath = os.path.join(_audio_dir(), fname)
+        with self._lock:
+            with open(fpath, "wb") as fh:
+                fh.write(audio_bytes)
+        return InvokeResult(ok=True, data={
+            "text": text,
+            "engine": self._engine,
+            "audio_path": fpath,
+            "audio_url": f"/api/voice/audio/{digest}.{ext}",
+        })
+
+    # ---- 引擎实现（重依赖惰性导入）----
+    def _synthesize(self, text: str, payload: dict) -> tuple[bytes, str]:
+        if self._engine == "edge_tts":
+            return self._run_edge_tts(text, payload), "mp3"
+        if self._engine == "kokoro":
+            return self._run_kokoro(text, payload), "wav"
+        if self._engine == "xtts":
+            return self._run_xtts(text, payload), "wav"
+        raise RuntimeError(f"未知 TTS 引擎 {self._engine}")
+
+    def _run_edge_tts(self, text: str, payload: dict) -> bytes:
+        import asyncio
+        import edge_tts
+        voice = payload.get("voice") or os.environ.get(
+            "AOS_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
+        comm = edge_tts.Communicate(text, voice)
+        # 收集到内存字节流（不落临时文件）
+        import io
+        buf = io.BytesIO()
+        async def _save():
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+        asyncio.run(_save())
+        return buf.getvalue()
+
+    def _run_kokoro(self, text: str, payload: dict) -> bytes:
+        from kokoro import KPipeline
+        import soundfile as sf
+        import io
+        lang = payload.get("lang", "z")
+        voice = payload.get("voice") or os.environ.get("AOS_TTS_VOICE", "zf_001")
+        pipeline = KPipeline(lang_code=lang)
+        buf = io.BytesIO()
+        # Kokoro 返回生成器；取第一句音频写入 wav 缓冲
+        for _, _, audio in pipeline(text, voice=voice):
+            sf.write(buf, audio, 24000)
+            break
+        return buf.getvalue()
+
+    def _run_xtts(self, text: str, payload: dict) -> bytes:
+        from TTS.api import TTS
+        import soundfile as sf
+        import io
+        model = os.environ.get("AOS_XTTS_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")
+        tts = TTS(model_name=model, progress_bar=False, gpu=False)
+        wav = tts.tts(text=text, speaker_wav=payload.get("speaker_wav"),
+                      language=payload.get("language", "zh"))
+        buf = io.BytesIO()
+        sf.write(buf, wav, 24000)
+        return buf.getvalue()

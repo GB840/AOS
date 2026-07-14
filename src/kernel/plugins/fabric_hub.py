@@ -35,6 +35,8 @@ from core.fabric.adapters import (
     SearchAdapter,
     WebFetchAdapter,
     ThreejsAdapter,
+    STTAdapter,
+    TTSAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -114,6 +116,8 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         CodeExecutionAdapter,  # 本地沙箱代码执行（subprocess 隔离，零依赖）
         FileAdapter,           # 文件读写（workspace 内，路径遍历防护）
         ThreejsAdapter,       # 交互式 3D 场景生成（MEDIA_3D，浏览器端渲染）
+        STTAdapter,           # 语音识别（VOICE_STT：whisper.cpp/faster-whisper/Web Speech）
+        TTSAdapter,           # 语音合成（VOICE_TTS：kokoro/edge-tts/XTTS/Web Speech）
     )
     if a is not None
 )
