@@ -6,7 +6,7 @@
 
 源优先级（**质量最高的实时 API 排最前，国内可达的 HTML 兜底在后**）：
   0. AnySearch 统一实时搜索（api.anysearch.com/mcp，JSON-RPC；免 key 匿名
-     1000次/日，配 ANYSEARCH_API_KEY 提额。返回结构化 Markdown + 真实链接，
+     100次/日，配 ANYSEARCH_API_KEY 提额至 1000次/日。返回结构化 Markdown + 真实链接，
      是 agent 的「实时外脑」，质量最高，排第一）。
   1. 百度 HTML 搜索（baidu.com/s，免 key，国内通）
   2. Bing HTML 搜索（bing.com/search，免 key，国内通）
@@ -104,8 +104,8 @@ class SearchAdapter(BaseAgentAdapter):
         )
 
     # ---- 源 0：AnySearch 统一实时搜索（api.anysearch.com/mcp，JSON-RPC） ----
-    # 设计定位：agent 的「实时外脑」。免 key 匿名 1000 次/日，配 ANYSEARCH_API_KEY
-    # 提额。返回结构化 Markdown（含真实链接），质量远高于 HTML  scraping。
+    # 设计定位：agent 的「实时外脑」。免 key 匿名 100 次/日，配 ANYSEARCH_API_KEY
+    # 提额至 1000 次/日。返回结构化 Markdown（含真实链接），质量远高于 HTML  scraping。
     # 若网络不可达（被墙/超时）快速失败 → 由下方百度/Bing 兜底，不阻塞链路。
     def _search_anysearch(self, query: str, max_results: int) -> dict:
         api_key = os.getenv("ANYSEARCH_API_KEY")
@@ -363,8 +363,8 @@ class SearchAdapter(BaseAgentAdapter):
                     d = json.loads(tc.function.arguments)
                     for s in d.get("search_result", []) or []:
                         sources.append({"title": s.get("title", ""), "url": s.get("url", "")})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("智谱 web_search 结果解析失败: %s", e)
         # 不弄虚：智谱必须真的返回 web_search 结果才算成功，否则如实失败
         if not sources:
             raise RuntimeError(
