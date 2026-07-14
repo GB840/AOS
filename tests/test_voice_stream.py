@@ -138,6 +138,62 @@ def test_sse_stt_stream_endpoint(monkeypatch):
     assert captured[0]["text"] == "你好"
 
 
+def test_stream_reply_tokens_incremental():
+    """reply_token 逐 token yield（不整段憋完再吐）。"""
+    pipe = _pipe(
+        stt_stream=lambda ap: iter(["hello"]),
+        respond=lambda t: {"reply": "dummy"},  # 自定义 respond → 走整段模式
+        tts_stream=lambda t, p: iter([]),
+    )
+
+    # 注入 _stream_chat_reply 模拟逐 token 输出
+    def fake_stream_chat_reply(text):
+        yield "回"
+        yield "应"
+        yield "内"
+        yield "容"
+
+    pipe._stream_chat_reply = fake_stream_chat_reply
+
+    events = list(pipe.handle_voice_turn_stream(transcript="你好"))
+    tokens = [e for e in events if e["type"] == "reply_token"]
+    assert len(tokens) == 4, f"预期 4 个 reply_token，实际 {len(tokens)}"
+    assert [t["text"] for t in tokens] == ["回", "应", "内", "容"]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["reply"] == "回应内容"
+
+
+def test_stream_reply_interrupt_mid_token():
+    """逐 token 中被中断 → 立即停，不再推后续 token 也不到 done。"""
+    pipe = _pipe(
+        stt_stream=lambda ap: iter(["hello"]),
+        respond=lambda t: {"reply": "dummy"},
+        tts_stream=lambda t, p: iter([(b"a", "mp3")]),
+    )
+
+    counter = {"n": 0}
+
+    def checker():
+        counter["n"] += 1
+        return counter["n"] >= 2  # 第 2 次检查触发中断
+
+    def fake_stream_chat_reply(text):
+        yield "A"
+        yield "B"  # checker 在下一个 for 循环迭代返回 True，不推 token
+        yield "C"
+        yield "D"
+
+    pipe._stream_chat_reply = fake_stream_chat_reply
+
+    events = list(pipe.handle_voice_turn_stream(
+        transcript="你好", interrupt_checker=checker))
+    types = [e["type"] for e in events]
+    assert "interrupted" in types
+    assert "done" not in types
+    tokens = [e for e in events if e["type"] == "reply_token"]
+    assert len(tokens) == 1  # 只推了 "A"
+
+
 def test_adapters_expose_streaming_interface():
     """适配器暴露流式接口；supports_streaming 对 web_speech 诚实返回 False。"""
     from core.fabric.adapters.stt_adapter import STTAdapter

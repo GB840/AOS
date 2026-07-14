@@ -141,6 +141,21 @@ class LiteLLMAdapter(BaseAgentAdapter):
             logger.warning("litellm invoke failed: %s", e)
             return InvokeResult(ok=False, error=str(e))
 
+    def stream_invoke(self, req: InvokeRequest) -> "Iterator[str]":
+        """流式 LLM 调用：逐 token yield delta.content。
+
+        复用 _build_kwargs 的模型路由逻辑（zhipu 兼容 / 串味防御），
+        加 stream=True 后遍历 litellm completion 的 chunk 生成器。
+        调用方负责 try/except 包裹以捕获密钥/网络/供应商错误。
+        """
+        litellm = _import_litellm()
+        kwargs = _build_kwargs(req)
+        kwargs["stream"] = True
+        response = litellm.completion(**kwargs)
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
     def health(self) -> bool:
         # A library plane is "live" when the real package is importable.
         try:

@@ -172,6 +172,61 @@ class VoicePipeline:
         from . import companion as _companion
         return _companion.handle_companion_message(text, self.user_id)
 
+    def _stream_chat_reply(self, text: str) -> "Iterator[str]":
+        """流式 chat 应答生成器：逐 token yield，完成后自动保存同伴状态。
+
+        仅当 _respond_fn 为默认（走 companion.handle_companion_message）时才走流式
+        LLM；若调用方注入自定义 respond_fn，整段走 _respond_fn（保持向后兼容）。
+        其他意图（3D/search/task/LNN）同样走整段 _respond_fn。
+        """
+        from . import companion as _companion
+
+        # 自定义 respond_fn（测试 mock 等）→ 整段模式
+        if self._respond_fn is not VoicePipeline._default_respond:
+            resp = self._respond_fn(text)
+            reply = (resp.get("reply") if isinstance(resp, dict) else str(resp)) or ""
+            yield reply
+            return
+
+        comp = _companion.Companion.load(self.user_id)
+        intent = comp.route_intent(text)
+
+        if intent["kind"] != "chat":
+            resp = self._respond_fn(text)
+            reply = (resp.get("reply") if isinstance(resp, dict) else str(resp)) or ""
+            yield reply
+            return
+
+        # chat 意图：流式 LLM token
+        comp.react("thinking")
+        try:
+            from .adapters.litellm_adapter import LiteLLMAdapter
+            from .adapter import InvokeRequest
+            adapter = LiteLLMAdapter()
+            req = InvokeRequest(capability="inference.llm", payload={"prompt": text})
+            full_reply = ""
+            for token in adapter.stream_invoke(req):
+                full_reply += token
+                yield token
+        except Exception as e:
+            logger.warning("流式 LLM 失败，降级本地应答: %s", e)
+            full_reply = _companion._local_ack(comp, text)
+            yield full_reply
+
+        # 流式完成后做同伴副作用（react / 记忆 / 保存）
+        local_ack = _companion._local_ack(comp, text)
+        if full_reply and full_reply != local_ack:
+            comp.react("happy")
+        else:
+            comp.react("calm")
+        comp.remember_user(text)
+        recalled = comp.recall_user_memories(text)
+        if recalled and full_reply == local_ack:
+            snippet = recalled[-1]
+            full_reply = (f"{full_reply} 对了，我记得你之前提过：「{snippet[:40]}」。"
+                          f"等我的语言中枢连上，咱们接着聊。")
+        comp.save()
+
     def _default_tts(self, text: str) -> dict:
         from .adapters.tts_adapter import TTSAdapter
         from .adapter import InvokeRequest
@@ -378,19 +433,16 @@ class VoicePipeline:
                    "state": self.fsm.snapshot()}
             return
         yield {"type": STREAM_REPLY_START}
+        reply = ""
         try:
-            resp = self._respond_fn(user_text)
+            for token in self._stream_chat_reply(user_text):
+                if _interrupted():
+                    yield {"type": STREAM_INTERRUPTED}
+                    return
+                reply += token
+                yield {"type": STREAM_REPLY_TOKEN, "text": token}
         except Exception as e:
             yield {"type": STREAM_DONE, "ok": False, "error": f"响应失败: {e}"}
-            return
-        reply = (resp.get("reply") if isinstance(resp, dict) else str(resp)) or ""
-        mood = resp.get("mood") if isinstance(resp, dict) else None
-        scene_id = resp.get("scene_id") if isinstance(resp, dict) else None
-        artifacts = resp.get("artifacts") if isinstance(resp, dict) else None
-        tts_payload = resp.get("tts_payload") if isinstance(resp, dict) else None
-        yield {"type": STREAM_REPLY_TOKEN, "text": reply}
-        if _interrupted():
-            yield {"type": STREAM_INTERRUPTED}
             return
         self.fsm.on_response_ready()
 
@@ -398,7 +450,7 @@ class VoicePipeline:
         audio_url = None
         tts_engine = None
         try:
-            for chunk, ext in self._tts_stream_fn(reply, tts_payload):
+            for chunk, ext in self._tts_stream_fn(reply, None):
                 if _interrupted():
                     yield {"type": STREAM_INTERRUPTED}
                     return
@@ -408,8 +460,7 @@ class VoicePipeline:
             logger.warning("流式 TTS 失败，前端兜底: %s", e)
         self.fsm.on_speech_end()
         yield {"type": STREAM_DONE, "ok": True, "reply": reply, "user_text": user_text,
-               "audio_url": audio_url, "tts_engine": tts_engine, "mood": mood,
-               "scene_id": scene_id, "artifacts": artifacts,
+               "audio_url": audio_url, "tts_engine": tts_engine,
                "state": self.fsm.snapshot()}
 
     # ---- 一次语音回合 ----
