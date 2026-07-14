@@ -16,6 +16,7 @@ import sys
 import os
 import time
 import logging
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
@@ -2011,11 +2012,17 @@ class UnifiedBrain:
 
 # ---- Singleton ----
 _brain_instance: Optional[UnifiedBrain] = None
+_brain_lock = threading.Lock()
 
 
 def get_brain() -> UnifiedBrain:
-    """Get or create the singleton UnifiedBrain instance."""
+    """Get or create the singleton UnifiedBrain instance.
+
+    双检锁：并发首调时只构造一次，避免重复重型初始化竞态。
+    """
     global _brain_instance
     if _brain_instance is None:
-        _brain_instance = UnifiedBrain()
+        with _brain_lock:
+            if _brain_instance is None:
+                _brain_instance = UnifiedBrain()
     return _brain_instance

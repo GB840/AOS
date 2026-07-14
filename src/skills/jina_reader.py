@@ -76,7 +76,25 @@ class JinaReaderSkill(Skill):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         })
-    
+
+    def close(self) -> None:
+        """释放底层连接池，避免 Session 长期持有 socket。"""
+        sess = getattr(self, "_session", None)
+        if sess is not None:
+            try:
+                sess.close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self) -> "JinaReaderSkill":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
     def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行网页提取任务

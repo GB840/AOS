@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import random
 import socket
@@ -34,6 +35,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 # 闸门阈值（用户定义，Day22-30 B 路线）
@@ -41,7 +43,28 @@ GATE_SPAWN_MS = 500.0
 GATE_RTT_US = 100.0
 GATE_RECOVER_MS = 3000.0
 
-_AOS_SRC = os.environ.get("AOS_SRC", "D:/AOS/src")
+# 密钥类环境变量（绝不透传给隔离子进程）。子进程跑的是第三方适配器代码，
+# 拿到父进程全套密钥等于把 .env 全部拱手送出。默认剥离，适配器确需的 key
+# 由调用方经 SubprocessIsolationLayer.passthrough_env 显式白名单注入。
+_SECRET_ENV_SUFFIXES = (
+    "_API_KEY", "_API_TOKEN", "_SECRET", "_SECRET_KEY", "_TOKEN",
+    "_PASSWORD", "_PASSWD", "_ACCESS_KEY", "_PRIVATE_KEY",
+)
+_SECRET_ENV_PREFIXES = (
+    "OPENAI_", "ANTHROPIC_", "ZHIPU_", "SILICONFLOW_", "DASHSCOPE_",
+    "DEEPSEEK_", "MOONSHOT_", "AWS_", "GCP_", "GOOGLE_", "AZURE_",
+    "COHERE_", "MISTRAL_", "GROQ_", "TOGETHER_",
+)
+
+
+def _is_secret_key(key: str) -> bool:
+    k = key.upper()
+    return (
+        any(k.endswith(s) for s in _SECRET_ENV_SUFFIXES)
+        or any(k.startswith(p) for p in _SECRET_ENV_PREFIXES)
+    )
+
+_AOS_SRC = os.environ.get("AOS_SRC", str(Path(__file__).resolve().parent.parent.parent))
 _CONNECT_TIMEOUT = 30.0
 _MAX_SPAWN_ATTEMPTS = 3
 
@@ -88,6 +111,8 @@ class SubprocessIsolationLayer:
         self._conn = None
         self._spawn_ms: Optional[float] = None
         self._last_rtt_us: Optional[float] = None
+        # 隔离子进程默认拿不到任何密钥；若某适配器确需特定 key，显式声明在此白名单。
+        self.passthrough_env: list[str] = []
 
     # ---- 内部工具 -------------------------------------------------
     @staticmethod
@@ -107,7 +132,12 @@ class SubprocessIsolationLayer:
         return addr
 
     def _build_env(self) -> Dict[str, str]:
-        env = dict(os.environ)
+        # 默认剥离所有密钥类变量，避免第三方适配器代码在隔离子进程里读到父进程密钥。
+        env = {k: v for k, v in os.environ.items() if not _is_secret_key(k)}
+        # 适配器显式白名单的 key 才回灌（例如某隔离芯粒确需 OpenAI key）。
+        for k in self.passthrough_env or []:
+            if k in os.environ:
+                env[k] = os.environ[k]
         env["AOS_SRC"] = _AOS_SRC
         env["PYTHONPATH"] = _AOS_SRC + os.pathsep + env.get("PYTHONPATH", "")
         return env
