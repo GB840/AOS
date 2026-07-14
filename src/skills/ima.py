@@ -258,12 +258,16 @@ class _IMAClient:
         })
 
     def create_note(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
-        # 笔记创建：官方笔记模块路径为 openapi/note/v1/ImportDoc
-        # （另有文档用 ima.qq.com/ima.openapi.v1.ImportDoc，若此路径失败可切换）
-        return self._post("openapi/note/v1/ImportDoc", {
-            "title": ctx.get("title", "AOS 交接笔记"),
-            "content": ctx.get("content", ctx.get("input", "")),
+        # 笔记创建：官方笔记模块路径为 openapi/note/v1/import_doc（全小写，已联网搜证核实）
+        # 重要：IMA 笔记无独立 title 字段，标题即正文首个 '# 标题' 行；
+        # payload = {content_format:1(固定Markdown), content: "# 标题\n\n正文", 可选 folder_id}
+        title = ctx.get("title", "AOS 笔记")
+        body = ctx.get("content", ctx.get("input", ""))
+        md = f"# {title}\n\n{body}" if body else f"# {title}"
+        return self._post("openapi/note/v1/import_doc", {
+            "content": md,
             "content_format": ctx.get("content_format", 1),
+            "folder_id": ctx.get("folder_id", ""),
         })
 
 
