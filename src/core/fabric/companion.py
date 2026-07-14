@@ -229,6 +229,15 @@ class Companion:
             series = [float(n) for n in nums] if nums else None
             return {"kind": "lnn", "payload": {"series": series},
                     "reaction": "curious", "reply_hint": "我用量化液态网络帮你预测～"}
+        # 操控电脑 / 代写代码并执行意图（AOS 的「think→do」落地点）
+        # 注意：含 3D 关键词(场景/宇宙…) 的已在上面被 3d 意图截走，不在此。
+        # 浏览器控制(打开/下载网页)类暂不入此意图——相关产物面板已预留，但
+        # 真实 browser-use 执行链路待接，避免假装能办。
+        if re.search(r"运行|执行|跑(一下|这段|代码)?|写(个|段|个)?(脚本|代码|程序|python|小游戏|连连看|计算器)"
+                     r"|算(一下|斐波|阶乘|质数|平方|求和)|生成(一个|个)?(脚本|代码)"
+                     r"|帮我写|小游戏|连连看|计算器|网页|做一个(小游戏|计算器|网页)", t):
+            return {"kind": "task", "payload": {"prompt": text},
+                    "reaction": "excited", "reply_hint": "我帮你写代码并跑一下～"}
         # 默认：对话
         return {"kind": "chat", "payload": {"prompt": text},
                 "reaction": "thinking", "reply_hint": None}
@@ -262,6 +271,81 @@ def _route_hub(capability: str, payload: dict) -> dict:
         return {"ok": False, "error": f"hub 路由失败: {e}"}
 
 
+def _run_agentic_task(text: str) -> tuple[str, list[dict]]:
+    """操控电脑类任务：尝试真实写代码并执行，把源码/输出作为产物卡片。
+
+    这是 AOS「think→do」闭环里「do」的落地点之一——对标白龙马「用 Qwen
+    拆解指令→调用 Python 执行」的能力，AOS 复用 code_execution_adapter（真实
+    沙箱执行，不弄虚）。
+
+    诚实边界：
+    - 若用户文本含 ```代码块``` 就直接执行它；否则尝试走 LLM 生成代码（需
+      _LLM_ROUTING + 可用 LLM），离线则如实告知「代码生成需连语言中枢」。
+    - 沙箱/依赖不可用 → 返回诚实的错误产物，绝不伪造输出。
+    """
+    artifacts: list[dict] = []
+    has_code_block = "```" in text
+    try:
+        from .adapters.code_execution_adapter import CodeExecutionAdapter
+        from .adapter import InvokeRequest
+        ad = CodeExecutionAdapter()
+        payload = {"content": text}
+        if has_code_block:
+            payload = {"content": text}
+        elif _LLM_ROUTING:
+            # 离线无 LLM 时，交给 code_execution_adapter 自己从指令里尽力提取
+            payload = {"task": text}
+        else:
+            # 离线 + 无代码块：诚实告知，不假装执行
+            artifacts.append({
+                "type": "text", "title": "执行状态",
+                "content": "代码生成需要语言中枢（设 AOS_COMPANION_LLM=1 并接 LLM）。"
+                           "若你在指令里直接贴 ```python 代码块```，我现在就能跑。",
+                "level": "warn",
+            })
+            return ("我现在的代码中枢还没连上，贴一段 ```python``` 代码我就帮你跑；"
+                    "或者把语言中枢打开，我直接帮你写。", artifacts)
+        res = ad.invoke(InvokeRequest(capability="action.code_exec", payload=payload))
+        if res.ok:
+            data = res.data or {}
+            code = (data.get("content") or "").strip()
+            stdout = (data.get("output") or "").strip()
+            lang = data.get("language", "python")
+            if code:
+                artifacts.append({
+                    "type": "code", "title": "执行的代码",
+                    "content": code, "language": lang,
+                })
+            if stdout:
+                artifacts.append({
+                    "type": "text", "title": "运行输出",
+                    "content": stdout,
+                })
+            if not code and not stdout:
+                artifacts.append({
+                    "type": "text", "title": "执行状态",
+                    "content": "执行芯粒没返回内容（可能指令里没有可运行的代码）。",
+                    "level": "warn",
+                })
+            reply = "我跑了一段代码，结果在右边的「产物」面板里 ✨"
+            return reply, artifacts
+        else:
+            artifacts.append({
+                "type": "text", "title": "执行状态",
+                "content": "代码执行芯粒返回失败：" + str(res.error),
+                "level": "warn",
+            })
+            return "想帮你跑代码，但执行芯粒说：" + str(res.error), artifacts
+    except Exception as e:  # noqa: BLE001
+        artifacts.append({
+            "type": "text", "title": "执行状态",
+            "content": "代码执行环境未就绪：" + str(e),
+            "level": "warn",
+        })
+        return ("我的代码执行环境还没准备好（可能缺沙箱依赖），你这个问题我先用"
+                "文字回你。", artifacts)
+
+
 def handle_companion_message(text: str, user_id: str = "default",
                              voice: bool = False) -> dict:
     """编排：感知 → 记忆 → 规划（意图） → 执行（AOS 能力） → 回应。
@@ -284,6 +368,7 @@ def handle_companion_message(text: str, user_id: str = "default",
     scene_id = None
     scene_html = None
     recalled: list[str] = []
+    artifacts: list[dict] = []
 
     if intent["kind"] == "3d":
         res = _invoke_3d(text)
@@ -329,6 +414,13 @@ def handle_companion_message(text: str, user_id: str = "default",
                      f"你换个说法或稍后再试？")
             companion.react("sad")
 
+    elif intent["kind"] == "task":
+        # 操控电脑 / 代写代码并执行：真实跑 code_execution_adapter，产物进面板
+        reply, task_artifacts = _run_agentic_task(text)
+        artifacts.extend(task_artifacts)
+        companion.react("excited")
+        companion.note_experience("task", f"agentic: {text[:40]}")
+
     else:  # chat
         if _LLM_ROUTING:
             res = _route_hub("inference.llm", {"prompt": text})
@@ -363,6 +455,7 @@ def handle_companion_message(text: str, user_id: str = "default",
         "scene_id": scene_id,
         "audio_url": audio_url,
         "tts_engine": tts_engine,
+        "artifacts": artifacts,
         "recalled_user_facts": recalled,
         "companion": _companion_view(companion),
     }
@@ -670,6 +763,29 @@ def build_living_home_html(companion: Companion) -> str:
   #resetPersona{background:#333a55;color:#cdd}
   #closeSettings{background:#222a44;color:#cdd}
   #personaMsg{font-size:12px;margin-top:10px;min-height:16px;color:#6f6}
+  /* ===== 交付结果展示面板（artifacts）：右侧抽屉 ===== */
+  #artifacts{position:fixed;right:0;top:0;height:100%;width:min(420px,92vw);
+    background:rgba(10,12,24,.92);backdrop-filter:blur(10px);border-left:1px solid #2a3a6a;
+    padding:64px 16px 16px;box-sizing:border-box;overflow-y:auto;z-index:40;
+    transform:translateX(105%);transition:transform .35s ease}
+  #artifacts.show{transform:translateX(0)}
+  #artifacts h4{margin:0 0 10px;font-size:14px;color:#9fb3d9;display:flex;align-items:center;gap:6px}
+  #artClose{position:absolute;top:14px;right:14px;background:#333a55;border:none;color:#cdd;
+    border-radius:8px;padding:5px 10px;font-size:13px;cursor:pointer}
+  .art{background:#0e1226;border:1px solid #243056;border-radius:12px;margin-bottom:12px;overflow:hidden}
+  .art .hd{display:flex;align-items:center;gap:6px;padding:8px 10px;font-size:13px;color:#bcd;
+    border-bottom:1px solid #1c2547;background:#11162e}
+  .art .hd .ic{font-size:14px}
+  .art .hd .copy{margin-left:auto;font-size:11px;color:#7fa;cursor:pointer;border:1px solid #2a4a4a;
+    border-radius:6px;padding:2px 7px;background:transparent}
+  .art pre{margin:0;padding:10px 12px;font-size:12.5px;line-height:1.5;color:#dfe;white-space:pre-wrap;
+    word-break:break-word;max-height:320px;overflow:auto;font-family:'SF Mono',Consolas,monospace}
+  .art .txt{padding:10px 12px;font-size:13px;line-height:1.6;color:#cde;white-space:pre-wrap;word-break:break-word}
+  .art .txt.warn{color:#f6b86a}
+  .art img,.art video{width:100%;display:block;max-height:340px;object-fit:contain;background:#000}
+  .art a.link{display:block;padding:10px 12px;color:#7fb6ff;font-size:13px;text-decoration:none;word-break:break-all}
+  .art a.link:hover{text-decoration:underline}
+  .art .meta{font-size:11px;color:#789;padding:6px 12px;border-top:1px solid #1c2547}
 </style>
 </head>
 <body>
@@ -690,6 +806,14 @@ def build_living_home_html(companion: Companion) -> str:
 </div>
 <div id="sceneModal"><iframe id="sceneFrame" src=""></iframe></div>
 <button id="sceneClose">关闭 ✕</button>
+
+<!-- 交付结果展示面板：代码 / 文件 / 图片 / 视频 / 链接 / 文本 / 3D 场景 产物 -->
+<div id="artifacts">
+  <button id="artClose">收起 ✕</button>
+  <h4>📦 产物 / 交付结果</h4>
+  <div id="artList"></div>
+</div>
+
 <div id="err">无法加载 Three.js（需浏览器联网访问 CDN）。<br>请联网后重试，或部署本地 three.js。</div>
 
 <!-- 人设设置面板（谁用谁自己设）-->
@@ -766,6 +890,59 @@ function voiceOut(d){
   if(d.audio_url){ const a=new Audio(d.audio_url); a.play().catch(()=>{}); return; }
   if(voiceOn && synth && d.reply){ try{ synth.cancel(); const u=new SpeechSynthesisUtterance(d.reply); u.lang='zh-CN'; u.rate=1.0; synth.speak(u);}catch(e){} }
 }
+
+// ===== 交付结果展示：把 artifacts 渲染成产物卡片 =====
+function escHtml(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+const ART_ICON={code:'📄',file:'🗂',image:'🖼',video:'🎬',link:'🔗',text:'📝',scene:'🌐'};
+function renderArtifacts(arr){
+  const panel=document.getElementById('artifacts');
+  const list=document.getElementById('artList');
+  list.innerHTML='';
+  if(!arr||!arr.length){ panel.classList.remove('show'); return; }
+  arr.forEach(a=>{
+    const type=a.type||'text';
+    const card=document.createElement('div'); card.className='art';
+    let body='';
+    if(type==='code'){
+      const code=escHtml(a.content||'');
+      body=`<div class="hd"><span class="ic">${ART_ICON.code}</span>${escHtml(a.title||'代码')}`
+        +`<span class="copy" data-code="${escHtml(a.content||'')}">复制</span></div>`
+        +`<pre>${code}</pre>`;
+    } else if(type==='image'||type==='video'){
+      const tag=type==='image'?'img':'video';
+      const attr=type==='video'?'controls':'';
+      body=`<div class="hd"><span class="ic">${ART_ICON[type]}</span>${escHtml(a.title||type)}</div>`
+        +`<${tag} src="${escHtml(a.url||'')}" ${attr}></${tag}>`;
+    } else if(type==='link'){
+      body=`<div class="hd"><span class="ic">${ART_ICON.link}</span>${escHtml(a.title||'链接')}</div>`
+        +`<a class="link" href="${escHtml(a.url||'#')}" target="_blank" rel="noopener">${escHtml(a.url||'')}</a>`;
+    } else if(type==='scene'){
+      body=`<div class="hd"><span class="ic">${ART_ICON.scene}</span>${escHtml(a.title||'3D 场景')}</div>`
+        +`<a class="link" href="javascript:void(0)" data-scene="${escHtml(a.scene_id||'')}">打开 3D 场景 →</a>`;
+    } else { // text / file / 其他
+      const cls=(a.level==='warn')?'txt warn':'txt';
+      const head=(type==='file')?ART_ICON.file:ART_ICON.text;
+      body=`<div class="hd"><span class="ic">${head}</span>${escHtml(a.title||'文本')}`
+        + (a.path?`<span class="copy" data-path="${escHtml(a.path)}">路径</span>`:'') +`</div>`
+        +`<div class="${cls}">${escHtml(a.content||'')}</div>`
+        + (a.path?`<div class="meta">📂 ${escHtml(a.path)}</div>`:'');
+    }
+    if(a.meta) body+=`<div class="meta">${escHtml(a.meta)}</div>`;
+    card.innerHTML=body;
+    list.appendChild(card);
+  });
+  // 复制按钮
+  list.querySelectorAll('.copy').forEach(b=>{
+    b.onclick=()=>{ const t=b.dataset.code||b.dataset.path||''; navigator.clipboard&&navigator.clipboard.writeText(t); b.textContent='已复制'; setTimeout(()=>b.textContent=b.dataset.path?'路径':'复制',1200); };
+  });
+  // 3D 场景卡片点击
+  list.querySelectorAll('[data-scene]').forEach(b=>{
+    b.onclick=()=>{ if(b.dataset.scene) openScene(b.dataset.scene); };
+  });
+  panel.classList.add('show');
+}
+document.getElementById('artClose').onclick=()=>{ document.getElementById('artifacts').classList.remove('show'); };
+
 function say(text){
   if(!text.trim()) return;
   bubble.textContent='💭 思考中…'; bubble.classList.add('show');
@@ -778,6 +955,7 @@ function say(text){
       if(d.planner_used) moodLine.textContent='状态：已用 '+d.planner_used+' 规划多步执行';
       else moodLine.textContent='状态：回应中';
       if(d.scene_id){ setTimeout(()=>openScene(d.scene_id), 600); }
+      if(d.artifacts && d.artifacts.length){ renderArtifacts(d.artifacts); }
       voiceOut(d);
     }).catch(e=>{ bubble.textContent='哎呀，和伙伴的连接抖了一下：'+e; bubble.classList.add('show'); });
 }

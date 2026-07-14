@@ -560,6 +560,7 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 "mood": res.mood,
                 "planner_used": res.planner_used,
                 "scene_id": res.scene_id,
+                "artifacts": res.artifacts or [],
                 "state": res.state,
                 "error": res.error,
             })

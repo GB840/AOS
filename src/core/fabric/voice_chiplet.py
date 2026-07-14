@@ -104,6 +104,7 @@ class VoiceTurnResult:
     mood: Optional[str] = None
     planner_used: Optional[str] = None
     scene_id: Optional[str] = None
+    artifacts: Optional[list] = None
     state: dict = field(default_factory=dict)
     error: Optional[str] = None
 
@@ -259,6 +260,7 @@ class VoicePipeline:
             reply = (resp.get("reply") if isinstance(resp, dict) else str(resp)) or ""
             mood = resp.get("mood") if isinstance(resp, dict) else None
             scene_id = resp.get("scene_id") if isinstance(resp, dict) else None
+            artifacts = resp.get("artifacts") if isinstance(resp, dict) else None
         except Exception as e:
             return VoiceTurnResult(ok=False, user_text=user_text, error=f"响应失败: {e}")
         self.fsm.on_response_ready()
@@ -283,6 +285,7 @@ class VoicePipeline:
             mood=mood,
             planner_used=planner_used,
             scene_id=scene_id,
+            artifacts=artifacts,
             state=self.fsm.snapshot(),
         )
 
