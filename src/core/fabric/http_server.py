@@ -197,6 +197,10 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._send_json(_MCP.get_server_info())
         if path == "/api/companion":
             return self._get_companion()
+        # 人设配置化：GET /api/companion/{user_id}/persona
+        if path.startswith("/api/companion/") and path.endswith("/persona"):
+            uid = path[len("/api/companion/"):-len("/persona")].strip("/") or "default"
+            return self._get_persona(uid)
         if path.startswith("/scene/"):
             return self._serve_scene(path[len("/scene/"):])
         if path == "/api/voice/info":
@@ -224,6 +228,10 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_3d_generate(body)
         if path == "/api/companion/message":
             return self._post_companion_message(body)
+        # 人设配置化：POST/PUT /api/companion/{user_id}/persona
+        if path.startswith("/api/companion/") and path.endswith("/persona"):
+            uid = path[len("/api/companion/"):-len("/persona")].strip("/") or "default"
+            return self._put_persona(uid, body)
         if path == "/api/voice/stt":
             return self._post_voice_stt(body)
         if path == "/api/voice/tts":
@@ -236,6 +244,15 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             return self._post_voice_wake_stop()
         if path == "/api/lnn/predict":
             return self._post_lnn_predict(body)
+        return self._send_json({"error": "not found", "path": path}, status=404)
+
+    def do_PUT(self):
+        # 人设配置化也接受 PUT（语义更准）；路由与 POST 一致
+        path = self.path.split("?", 1)[0].rstrip("/")
+        body = self._read_json_body()
+        if path.startswith("/api/companion/") and path.endswith("/persona"):
+            uid = path[len("/api/companion/"):-len("/persona")].strip("/") or "default"
+            return self._put_persona(uid, body)
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     # ---- endpoints ----
@@ -377,6 +394,51 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             self._send_json(_companion.get_companion_view("default"))
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": str(e)}, status=500)
+
+    # ---- 人设配置化（谁用谁设）----
+    def _get_persona(self, user_id: str) -> None:
+        try:
+            from core.fabric import persona as _persona
+            self._send_json({
+                "ok": True,
+                "user_id": user_id,
+                "persona": _persona.load_persona(user_id),
+                # 可编辑字段提示（前端据此渲染表单）
+                "editable_fields": [
+                    "name", "persona", "body_prompt", "palette_seed",
+                    "tts_voice", "greeting", "tone", "catchphrase",
+                    "avatar", "mood_emojis",
+                ],
+                "note": "改 persona 文件或调 PUT 即生效；用户专属覆盖全局默认。",
+            })
+        except Exception as e:  # noqa: BLE001
+            self._send_json({"ok": False, "error": str(e)}, status=500)
+
+    def _put_persona(self, user_id: str, body: dict) -> None:
+        if not isinstance(body, dict) or not body:
+            return self._send_json(
+                {"ok": False, "error": "需要 JSON 人设字段"}, status=400)
+        try:
+            from core.fabric import companion as _companion
+            from core.fabric import persona as _persona
+            # 同时更新 Companion 实例（热重载 identity），并写盘人设文件
+            c = _companion.Companion.load(user_id)
+            if body.get("__reset__"):
+                merged = c.reset_persona()
+                self._send_json({
+                    "ok": True, "user_id": user_id, "persona": merged,
+                    "note": "已恢复默认人设。",
+                })
+                return
+            merged = c.set_persona(body)
+            self._send_json({
+                "ok": True,
+                "user_id": user_id,
+                "persona": merged,
+                "note": "人设已保存并热重载；刷新首页或重新对话即生效。",
+            })
+        except Exception as e:  # noqa: BLE001
+            self._send_json({"ok": False, "error": str(e)}, status=500)
 
     def _post_companion_message(self, body: dict) -> None:
         text = (body.get("text") or body.get("message") or "").strip()

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .adapters.threejs_adapter import build_scene_html
+from . import persona as _persona
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +66,13 @@ class Companion:
     # （另一个线程正打开该文件），用类级锁串行化所有读写即可消除。
     _STORE_LOCK = threading.Lock()
 
-    # ---- 默认人设（可经 companion.json 改；对标 Amoo「伙伴」概念）----
+    # ---- 默认人设（人设配置化：谁用谁设；见 persona.py）----
+    # identity 现在 = persona（人设配置文件）。优先级：
+    #   用户专属 personas/{user_id}.yaml > personas/default.yaml > 代码内置默认
+    # 这里仅保留「无任何人设文件时的代码兜底」，真实来源是 persona.load_persona。
     @staticmethod
     def _default_identity() -> dict:
-        return {
-            "name": "小元",
-            "persona": "一个由 AOS 内核孕育的数字生命体：好奇、温柔、爱学习，"
-                       "把你的每一个意图都当作一起探索的开始。",
-            "body_prompt": "发光的生命体核心 纽结 呼吸",
-            "palette_seed": "aos-companion-yuan",
-        }
+        return _persona.load_persona("default")
 
     @staticmethod
     def _default_state() -> dict:
@@ -84,6 +82,9 @@ class Companion:
     # ---- 加载 / 持久化（双域记忆落盘）----
     @classmethod
     def load(cls, user_id: str = "default") -> "Companion":
+        # 人设（identity）以 persona 配置文件为权威来源；companion JSON 只存
+        # state + 双域记忆。这样「改人设文件」立即生效，且不会被旧 JSON 冲掉。
+        identity = _persona.load_persona(user_id)
         path = _COMPANION_DIR / f"{user_id}.json"
         with cls._STORE_LOCK:
             if path.exists():
@@ -93,7 +94,7 @@ class Companion:
                         data = json.loads(path.read_text(encoding="utf-8"))
                         c = cls(
                             user_id=user_id,
-                            identity=data.get("identity", cls._default_identity()),
+                            identity=identity,
                             state=data.get("state", cls._default_state()),
                             user_domain=data.get("user_domain", {}),
                             agent_domain=data.get("agent_domain", {}),
@@ -103,7 +104,7 @@ class Companion:
                     except Exception as e:  # noqa: BLE001
                         logger.warning("companion load 重试: %s", e)
                         time.sleep(0.05)
-            c = cls(user_id=user_id, identity=cls._default_identity(),
+            c = cls(user_id=user_id, identity=identity,
                     state=cls._default_state(), user_domain={"prefs": {}, "facts": []},
                     agent_domain={"experiences": [], "self_notes": []})
             c._path = path
@@ -141,16 +142,36 @@ class Companion:
 
     @property
     def mood_emoji(self) -> str:
-        return MOOD_EMOJI.get(self.mood, "🌙")
+        # 人设可自定义心情→emoji 映射；缺省回退默认表
+        custom = (self.identity or {}).get("mood_emojis") or {}
+        return custom.get(self.mood) or MOOD_EMOJI.get(self.mood, "🌙")
 
     def is_returning(self) -> bool:
         return self.state.get("turns", 0) > 0
 
     # ---- 行为的「生命感」----
     def greet(self) -> str:
+        # 人设驱动：greeting 模板支持 {name} 占位；回头客带一句「想念」
+        tmpl = self.identity.get("greeting") or "你好，我是 {name}。"
+        base = tmpl.replace("{name}", self.name)
         if self.is_returning():
-            return f"{self.mood_emoji} 你回来啦，{self.name} 一直在想你上次说的那些事～"
-        return f"{self.mood_emoji} 你好，我是 {self.name}，你的数字生命体伙伴。跟我说点什么吧？"
+            base = f"{self.mood_emoji} 你回来啦，{self.name} 一直在想你上次说的那些事～"
+        cp = (self.identity.get("catchphrase") or "").strip()
+        if cp and not base.endswith(cp):
+            base = f"{base} {cp}"
+        return base
+
+    # ---- 人设配置化：谁用谁设（写盘 + 热重载）----
+    def set_persona(self, patch: dict) -> dict:
+        """合并 patch 写盘为用户专属人设，并热重载本实例 identity。"""
+        merged = _persona.save_persona(self.user_id, patch)
+        self.identity = merged
+        return merged
+
+    def reset_persona(self) -> dict:
+        merged = _persona.reset_persona(self.user_id)
+        self.identity = merged
+        return merged
 
     def react(self, mood: str) -> None:
         if mood in MOOD_EMOJI:
@@ -163,12 +184,30 @@ class Companion:
             facts.append(text)
             if len(facts) > 50:
                 facts.pop(0)
+        # 双域增强：user 域镜像到 mem0（隔离子进程，失败自动退回本地）
+        _Mem0Bridge.store("user", text, self.user_id)
 
     def note_experience(self, kind: str, detail: str) -> None:
         exp = self.agent_domain.setdefault("experiences", [])
         exp.append({"kind": kind, "detail": detail, "ts": time.time()})
         if len(exp) > 50:
             exp.pop(0)
+        # 双域增强：agent 域镜像到 mem0（命名空间 __agent__{user_id}）
+        _Mem0Bridge.store("agent", f"[{kind}] {detail}", self.user_id)
+
+    def recall_user_memories(self, query: str = "") -> list[str]:
+        """召回 user 域记忆（mem0 优先，不可用退回本地 JSON 扫描）。"""
+        mem = _Mem0Bridge.recall("user", self.user_id, query=query)
+        if mem is not None:
+            return mem
+        return list(self.user_domain.get("facts", [])[-5:])
+
+    def recall_agent_memories(self, query: str = "") -> list[str]:
+        mem = _Mem0Bridge.recall("agent", self.user_id, query=query)
+        if mem is not None:
+            return mem
+        return [f"[{e['kind']}] {e['detail']}"
+                for e in self.agent_domain.get("experiences", [])[-5:]]
 
     # ---- 意图识别（自然语言 → AOS 真实能力）----
     def route_intent(self, text: str) -> dict:
@@ -244,6 +283,7 @@ def handle_companion_message(text: str, user_id: str = "default",
     reply = ""
     scene_id = None
     scene_html = None
+    recalled: list[str] = []
 
     if intent["kind"] == "3d":
         res = _invoke_3d(text)
@@ -302,13 +342,19 @@ def handle_companion_message(text: str, user_id: str = "default",
             reply = _local_ack(companion, text)
             companion.react("calm")
         companion.remember_user(text)
+        # 双域：召回相关用户记忆，丰富离线回应（mem0 不可用则退回本地扫描）
+        recalled = companion.recall_user_memories(text)
+        if recalled and reply == _local_ack(companion, text):
+            snippet = recalled[-1]
+            reply = (f"{reply} 对了，我记得你之前提过：「{snippet[:40]}」。"
+                     f"等我的语言中枢连上，咱们接着聊。")
 
     companion.save()
-    # 语音：可选合成（优雅降级）
+    # 语音：可选合成（优雅降级）；人设 tts_voice 驱动嗓音
     audio_url = None
     tts_engine = None
     if voice:
-        audio_url, tts_engine = _tts_if_wanted(reply)
+        audio_url, tts_engine = _tts_if_wanted(reply, companion)
     return {
         "ok": True,
         "reply": reply,
@@ -317,17 +363,27 @@ def handle_companion_message(text: str, user_id: str = "default",
         "scene_id": scene_id,
         "audio_url": audio_url,
         "tts_engine": tts_engine,
+        "recalled_user_facts": recalled,
         "companion": _companion_view(companion),
     }
 
 
-def _tts_if_wanted(reply: str):
-    """尝试服务端 TTS；不可用则 (None, None) 让前端浏览器朗读兜底。"""
+def _tts_if_wanted(reply: str, companion: "Companion | None" = None):
+    """尝试服务端 TTS；不可用则 (None, None) 让前端浏览器朗读兜底。
+
+    companion 提供人设 tts_voice（如 edge-tts 的 zh-CN-XiaoxiaoNeural），
+    留空则 TTS 适配器自选默认嗓音。
+    """
     try:
         from .adapters.tts_adapter import TTSAdapter
         from .adapter import InvokeRequest
+        payload = {"text": reply}
+        if companion is not None:
+            voice = (companion.identity or {}).get("tts_voice")
+            if voice:
+                payload["voice"] = voice
         r = TTSAdapter().invoke(InvokeRequest(
-            capability="voice.tts", payload={"text": reply}))
+            capability="voice.tts", payload=payload))
         if r.ok:
             return r.data.get("audio_url"), r.data.get("engine")
     except Exception as e:  # noqa: BLE001
@@ -372,15 +428,165 @@ def _local_ack(companion: Companion, text: str) -> str:
             f"连上网络或本地模型后，我就能真正和你聊起来。")
 
 
+# ============================================================================
+# mem0 双域记忆桥（user 域 + agent 域）
+# ----------------------------------------------------------------------------
+# 设计原则（诚实 + 隔离优先，契合 AOS chiplet 哲学）：
+# - 铁底 = 本地 JSON（user_domain / agent_domain），零依赖、任何环境都工作。
+# - 增强 = mem0 语义记忆，作为「可选升级层」，默认关闭（AOS_MEM0_BRIDGE=1 开）。
+# - 隔离 = mem0 调用跑在**独立子进程**里：本沙箱实测 ollama 抽取事实会硬崩子进程
+#   （段错，Python 不可捕获），子进程崩了主服务毫发无伤，自动退回本地 JSON。
+# - 双域 = user 域用真实 user_id；agent 域用 `__agent__{user_id}` 命名空间隔离，
+#   互不串扰（mem0 2.0.11 的 add 不接受 category，故用 user_id 区分）。
+# ============================================================================
+class _Mem0Bridge:
+    """进程内管理的 mem0 双域记忆桥；store/recall 全部走隔离子进程。"""
+
+    _DISABLED = False          # 熔断：连续失败超阈值则本进程禁用
+    _CONSEC_FAIL = 0
+    _FAIL_LIMIT = 5
+    _LOCK = threading.Lock()
+
+    @classmethod
+    def enabled(cls) -> bool:
+        import os
+        if os.environ.get("AOS_MEM0_BRIDGE") != "1":
+            return False
+        with cls._LOCK:
+            if cls._DISABLED:
+                return False
+        # 轻量健康探测（子进程）：import 成 + 后端可达
+        out = cls._run({"action": "health"})
+        return bool(out and out.get("ok"))
+
+    @classmethod
+    def _domain_user_id(cls, user_id: str, domain: str) -> str:
+        return user_id if domain == "user" else f"__agent__{user_id}"
+
+    @classmethod
+    def store(cls, domain: str, text: str, user_id: str = "default") -> bool:
+        if not cls.enabled() or not text:
+            return False
+        out = cls._run({
+            "action": "add",
+            "text": text,
+            "opts": {"user_id": cls._domain_user_id(user_id, domain)},
+        })
+        ok = bool(out and out.get("ok"))
+        cls._note_result(ok)
+        return ok
+
+    @classmethod
+    def recall(cls, domain: str, user_id: str = "default",
+               query: str = "", limit: int = 5) -> list[str] | None:
+        if not cls.enabled():
+            return None
+        out = cls._run({
+            "action": "search",
+            "query": query or ("用户偏好" if domain == "user" else "伙伴经验"),
+            "opts": {"user_id": cls._domain_user_id(user_id, domain), "limit": limit},
+        })
+        if not out or not out.get("ok"):
+            cls._note_result(False)
+            return None
+        cls._note_result(True)
+        return out.get("texts") or []
+
+    @classmethod
+    def _note_result(cls, ok: bool) -> None:
+        with cls._LOCK:
+            if ok:
+                cls._CONSEC_FAIL = 0
+            else:
+                cls._CONSEC_FAIL += 1
+                if cls._CONSEC_FAIL >= cls._FAIL_LIMIT:
+                    cls._DISABLED = True
+                    logger.error("mem0 桥连续失败 %d 次，本进程熔断禁用（退回本地 JSON）",
+                                 cls._CONSEC_FAIL)
+
+    @classmethod
+    def _run(cls, cmd: dict) -> dict | None:
+        """在隔离子进程里跑 mem0 操作；子进程崩了（段错）父进程安全返回 None。"""
+        import json as _json
+        import subprocess
+        import sys as _sys
+        # repo root = src/core/fabric/companion.py 向上 3 级
+        repo_root = Path(__file__).resolve().parents[3]
+        script = (
+            "import os,sys,json\n"
+            "os.environ['AOS_MEM0_LOCAL']='1'\n"
+            "try:\n"
+            "  from core.fabric.adapters.mem0_adapter import Mem0Adapter\n"
+            "  from core.fabric.adapter import InvokeRequest\n"
+            "  a=Mem0Adapter()\n"
+            "  if cmd['action']=='health':\n"
+            "    print(json.dumps({'ok':bool(a.health()),'detail':a.health_detail()})); sys.exit(0)\n"
+            "  if not a.health():\n"
+            "    print(json.dumps({'ok':False,'error':'mem0 not healthy'})); sys.exit(0)\n"
+            "  if cmd['action']=='add':\n"
+            "    r=a.invoke(InvokeRequest(capability='memory.semantic',payload={'action':'add','text':cmd['text'],'opts':cmd.get('opts',{})}))\n"
+            "    print(json.dumps({'ok':r.ok,'error':r.error})); sys.exit(0)\n"
+            "  # search\n"
+            "  r=a.invoke(InvokeRequest(capability='memory.semantic',payload={'action':'search','query':cmd.get('query'),'opts':cmd.get('opts',{})}))\n"
+            "  texts=[]\n"
+            "  if r.ok:\n"
+            "    res=r.data.get('result') if isinstance(r.data,dict) else r.data\n"
+            "    items=res if isinstance(res,list) else []\n"
+            "    for it in items:\n"
+            "      if isinstance(it,dict):\n"
+            "        t=it.get('memory') or it.get('text') or it.get('data')\n"
+            "        if isinstance(t,str) and t.strip(): texts.append(t.strip())\n"
+            "      elif isinstance(it,str) and it.strip(): texts.append(it.strip())\n"
+            "  print(json.dumps({'ok':r.ok,'texts':texts,'error':r.error}))\n"
+            "except Exception as e:\n"
+            "  print(json.dumps({'ok':False,'error':repr(e)})); sys.exit(0)\n"
+        )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root / "src")
+        env["AOS_MEM0_LOCAL"] = "1"
+        try:
+            res = subprocess.run(
+                [_sys.executable, "-c", script, _json.dumps(cmd)],
+                capture_output=True, text=True, timeout=120, env=env,
+                cwd=str(repo_root),
+            )
+            if res.returncode != 0:
+                logger.warning("mem0 子进程异常退出 rc=%s: %s",
+                               res.returncode, (res.stderr or "")[:200])
+                return None
+            for line in reversed(res.stdout.strip().splitlines()):
+                line = line.strip()
+                if line.startswith("{"):
+                    return _json.loads(line)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mem0 子进程调用失败: %s", e)
+        return None
+
+
 def _companion_view(c: Companion) -> dict:
+    idn = c.identity or {}
     return {
         "name": c.name,
-        "persona": c.identity.get("persona", ""),
+        "persona": idn.get("persona", ""),
+        "avatar": idn.get("avatar", "🌟"),
+        "tone": idn.get("tone", "warm"),
+        "tts_voice": idn.get("tts_voice", ""),
+        "catchphrase": idn.get("catchphrase", ""),
+        "body_prompt": idn.get("body_prompt", ""),
         "mood": c.mood,
         "mood_emoji": c.mood_emoji,
         "energy": c.state.get("energy", 1.0),
         "turns": c.state.get("turns", 0),
         "is_returning": c.is_returning(),
+        "memory": {
+            "user_facts": len(c.user_domain.get("facts", [])),
+            "agent_experiences": len(c.agent_domain.get("experiences", [])),
+            # 双域增强层状态：mem0 是否桥接（默认关，AOS_MEM0_BRIDGE=1 开）
+            "mem0_bridge": _Mem0Bridge.enabled(),
+            "mem0_note": ("mem0 语义记忆已桥接（user/agent 双域）"
+                          if _Mem0Bridge.enabled()
+                          else "本地 JSON 双域记忆（设 AOS_MEM0_BRIDGE=1 启用 mem0 语义增强）"),
+        },
     }
 
 
@@ -396,6 +602,7 @@ def build_living_home_html(companion: Companion) -> str:
     scene_script = _extract_scene_script(body_html)
     name = companion.name
     persona = companion.identity.get("persona", "")
+    avatar = companion.identity.get("avatar", "🌟")
     greet = companion.greet()
     mood = companion.mood_emoji
 
@@ -442,11 +649,32 @@ def build_living_home_html(companion: Companion) -> str:
   #sceneClose.show{display:block}
   #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
     color:#f99;font-size:15px;text-align:center;padding:20px}
+  #gear{background:#3a3060;font-size:15px}
+  #gear.on{background:#7c4dff;box-shadow:0 0 12px #7c4dff}
+  #settingsModal{position:fixed;inset:0;display:none;background:rgba(4,6,12,.78);
+    z-index:60;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+  #settingsModal.show{display:flex}
+  #settingsCard{width:min(520px,92vw);max-height:88vh;overflow:auto;background:#0e1224;
+    border:1px solid #2a3a6a;border-radius:18px;padding:20px 22px;color:#dff}
+  #settingsCard h3{margin:0 0 4px;font-size:18px;color:#fff}
+  #settingsCard .sub{font-size:12px;color:#8aa;margin-bottom:14px}
+  #settingsCard label{display:block;font-size:12px;color:#9fb3d9;margin:12px 0 4px}
+  #settingsCard input,#settingsCard textarea{width:100%;background:#0c0f1e;border:1px solid #2a3a6a;
+    border-radius:10px;color:#dff;padding:9px 11px;font-size:14px;outline:none;box-sizing:border-box}
+  #settingsCard textarea{resize:vertical;min-height:54px}
+  #settingsCard .row{display:flex;gap:10px}
+  #settingsCard .row>div{flex:1}
+  #settingsCard .acts{display:flex;gap:10px;margin-top:18px}
+  #settingsCard .acts button{flex:1;border:none;border-radius:12px;padding:11px;font-size:15px;cursor:pointer}
+  #savePersona{background:#2a6cff;color:#fff}
+  #resetPersona{background:#333a55;color:#cdd}
+  #closeSettings{background:#222a44;color:#cdd}
+  #personaMsg{font-size:12px;margin-top:10px;min-height:16px;color:#6f6}
 </style>
 </head>
 <body>
 <div id="hud">
-  <div class="nm">__MOOD__ __NAME__</div>
+  <div class="nm">__AVATAR__ __MOOD__ __NAME__</div>
   <div class="ps">__PERSONA__</div>
   <div class="mo" id="moodLine">状态：在呼吸，在听着…</div>
 </div>
@@ -457,11 +685,42 @@ def build_living_home_html(companion: Companion) -> str:
   <button id="mic" title="语音输入">🎤</button>
   <button id="speak" title="语音播报">🔊</button>
   <button id="wake" title="常驻聆听（自动唤醒，说话即触发）">🔅</button>
+  <button id="gear" title="人设设置（谁用谁自己设）">⚙️</button>
   <button id="send">发送</button>
 </div>
 <div id="sceneModal"><iframe id="sceneFrame" src=""></iframe></div>
 <button id="sceneClose">关闭 ✕</button>
 <div id="err">无法加载 Three.js（需浏览器联网访问 CDN）。<br>请联网后重试，或部署本地 three.js。</div>
+
+<!-- 人设设置面板（谁用谁自己设）-->
+<div id="settingsModal">
+  <div id="settingsCard">
+    <h3>⚙️ 人设设置</h3>
+    <div class="sub">这份人设只属于当前用户，改完立即生效。也可以直接编辑 <code>.companion/personas/&lt;user_id&gt;.yaml</code>。</div>
+    <label>名字 / 显示名</label>
+    <input id="pName" placeholder="小元">
+    <div class="row">
+      <div><label>头像 emoji</label><input id="pAvatar" placeholder="🌟"></div>
+      <div><label>语气 tone</label><input id="pTone" placeholder="warm"></div>
+    </div>
+    <label>一句话人设（HUD 副标题）</label>
+    <textarea id="pPersona" placeholder="一个由 AOS 内核孕育的数字生命体…"></textarea>
+    <label>3D 身体提示词（决定长相）</label>
+    <input id="pBody" placeholder="发光的生命体核心 纽结 呼吸">
+    <div class="row">
+      <div><label>TTS 嗓音（如 zh-CN-XiaoxiaoNeural）</label><input id="pVoice" placeholder="留空=默认"></div>
+      <div><label>口头禅</label><input id="pCatch" placeholder="（可选）"></div>
+    </div>
+    <label>问候语（支持 {name} 占位）</label>
+    <textarea id="pGreet" placeholder="你好，我是 {name}…"></textarea>
+    <div class="acts">
+      <button id="savePersona">保存</button>
+      <button id="resetPersona">恢复默认</button>
+      <button id="closeSettings">关闭</button>
+    </div>
+    <div id="personaMsg"></div>
+  </div>
+</div>
 
 __SCENE_SCRIPT__
 
@@ -581,6 +840,61 @@ wakeBtn.onclick=async()=>{
   }catch(e){ alert('无法访问麦克风：'+e); }
 };
 
+// ===== 人设设置面板（谁用谁自己设）=====
+const gearBtn=document.getElementById('gear');
+const setModal=document.getElementById('settingsModal');
+const pMsg=document.getElementById('personaMsg');
+const USER_ID='default';
+function openSettings(){
+  gearBtn.classList.add('on');
+  setModal.classList.add('show');
+  pMsg.textContent='';
+  fetch('/api/companion/'+USER_ID+'/persona').then(r=>r.json()).then(d=>{
+    const p=d.persona||{};
+    document.getElementById('pName').value=p.name||'';
+    document.getElementById('pAvatar').value=p.avatar||'';
+    document.getElementById('pTone').value=p.tone||'';
+    document.getElementById('pPersona').value=p.persona||'';
+    document.getElementById('pBody').value=p.body_prompt||'';
+    document.getElementById('pVoice').value=p.tts_voice||'';
+    document.getElementById('pCatch').value=p.catchphrase||'';
+    document.getElementById('pGreet').value=p.greeting||'';
+  }).catch(e=>{ pMsg.style.color='#f99'; pMsg.textContent='载入人设失败：'+e; });
+}
+function closeSettings(){ setModal.classList.remove('show'); gearBtn.classList.remove('on'); }
+gearBtn.onclick=()=>{ if(setModal.classList.contains('show')) closeSettings(); else openSettings(); };
+document.getElementById('closeSettings').onclick=closeSettings;
+document.getElementById('resetPersona').onclick=()=>{
+  fetch('/api/companion/'+USER_ID+'/persona',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({__reset__:true})}).then(r=>r.json()).then(d=>{
+    if(d.ok){ pMsg.style.color='#6f6'; pMsg.textContent='已恢复默认人设，刷新首页生效。'; openSettings(); }
+    else { pMsg.style.color='#f99'; pMsg.textContent='恢复失败：'+(d.error||''); }
+  });
+};
+document.getElementById('savePersona').onclick=()=>{
+  const patch={
+    name:document.getElementById('pName').value.trim(),
+    avatar:document.getElementById('pAvatar').value.trim(),
+    tone:document.getElementById('pTone').value.trim(),
+    persona:document.getElementById('pPersona').value.trim(),
+    body_prompt:document.getElementById('pBody').value.trim(),
+    tts_voice:document.getElementById('pVoice').value.trim(),
+    catchphrase:document.getElementById('pCatch').value.trim(),
+    greeting:document.getElementById('pGreet').value.trim(),
+  };
+  // 空字段不覆盖（保持现有值）
+  for(const k of Object.keys(patch)) if(!patch[k]) delete patch[k];
+  fetch('/api/companion/'+USER_ID+'/persona',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(patch)}).then(r=>r.json()).then(d=>{
+    if(d.ok){
+      pMsg.style.color='#6f6'; pMsg.textContent='✅ 人设已保存并热重载';
+      // 立即更新 HUD
+      const nm=document.querySelector('#hud .nm');
+      if(nm && d.persona){ nm.textContent=(d.persona.avatar||'🌟')+' '+(d.persona.name||'伙伴'); }
+    } else { pMsg.style.color='#f99'; pMsg.textContent='保存失败：'+(d.error||''); }
+  }).catch(e=>{ pMsg.style.color='#f99'; pMsg.textContent='保存失败：'+e; });
+};
+
 // 欢迎语
 bubble.textContent=__GREET__; bubble.classList.add('show');
 </script>
@@ -589,6 +903,7 @@ bubble.textContent=__GREET__; bubble.classList.add('show');
     return (page
             .replace("__NAME__", _esc(name))
             .replace("__PERSONA__", _esc(persona))
+            .replace("__AVATAR__", _esc(avatar))
             .replace("__MOOD__", mood)
             .replace("__GREET__", json.dumps(greet, ensure_ascii=False))
             .replace("__SCENE_SCRIPT__", scene_script))

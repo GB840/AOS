@@ -7,12 +7,17 @@
   指令/抽取/工具调用类轻任务；复杂推理仍交给大模型——这就是 AOS 的
   「端云合作 / 高低搭配」在 LLM 平面上的体现。
 
-诚实边界（与 STT/TTS 适配器同款）：
-- 重依赖（transformers / litellm）全部惰性导入；权重需用户从 HuggingFace 下载
-  （LiquidAI/LFM2.5-230M 或 GGUF）。未配置/未下载时 health()=False，路由层
-  自动跳过、退回其它 live LLM 供给方，绝不谎报 live。
-- 当前沙箱未下载权重 → 默认 not-live（诚实）。用户主机装好权重 + 设
-  AOS_LFM_MODEL 后即自动成为 live 的轻量供给方。
+真权重加载（本文件核心升级）：
+- 支持两种后端（env AOS_LFM_BACKEND 切换）：
+    * transformers（默认）：AutoModelForCausalLM/AutoTokenizer 真加载 HF safetensors；
+    * llama_cpp：加载本地 GGUF（llama.cpp，CPU/GPU 通吃，更适合边缘）。
+- 权重就绪判定（诚实，绝不谎报 live）：
+    * 本地路径（.gguf/.bin/.safetensors/.onnx）：文件存在即就绪；
+    * HF repo id：检查本机 HF 缓存目录（~/.cache/huggingface/hub/models--*），
+      或显式 AOS_LFM_ASSUME_READY=1（用户确认已下载）；
+    * 否则视为未就绪 → health()=False，路由层自动退回其它 live LLM 供给方。
+- 沙箱实测 HF 被墙、装不了 LFM2 权重 → 默认 not-live（诚实）。用户主机跑
+  tools/fetch-lfm2.ps1 下载到本地后，设 AOS_LFM_MODEL 指向本地路径即自动 live。
 """
 from __future__ import annotations
 
@@ -29,14 +34,26 @@ logger = logging.getLogger(__name__)
 class LFMAdapter(BaseAgentAdapter):
     """LFM2 轻量 LLM 供给方（inference.llm）。"""
 
+    # 高低搭配标记：本供给方是「边缘低功耗」一极（路由层可据此优先轻任务）。
+    tier = "edge"
+
     def __init__(self, model: str | None = None) -> None:
         # 默认模型：LFM2.5-230M（最小、最快、最适合边缘）；可用 env 覆盖。
         self._model = model or os.environ.get(
             "AOS_LFM_MODEL", "LiquidAI/LFM2.5-230M")
         self._engine = "lfm2"
+        # 后端选择：显式 AOS_LFM_BACKEND 优先；否则按权重扩展名自动判定
+        # （.gguf → llama_cpp；其余 HF repo/safetensors → transformers）。
+        env_backend = os.environ.get("AOS_LFM_BACKEND")
+        if env_backend:
+            self._backend = env_backend.lower()
+        elif self._model.lower().endswith(".gguf"):
+            self._backend = "llama_cpp"
+        else:
+            self._backend = "transformers"
         self._lock = threading.Lock()
         self._pipe = None  # 懒加载的生成管道
-        logger.info("LFMAdapter: model=%s", self._model)
+        logger.info("LFMAdapter: model=%s backend=%s", self._model, self._backend)
 
     @property
     def engine_id(self) -> str:
@@ -48,6 +65,13 @@ class LFMAdapter(BaseAgentAdapter):
 
     # ---- 引擎可用性（如实）----
     def _have_runtime(self) -> bool:
+        if self._backend == "llama_cpp":
+            try:
+                import llama_cpp  # noqa: F401
+                return True
+            except Exception:
+                return False
+        # transformers 后端
         try:
             import transformers  # noqa: F401
             return True
@@ -58,13 +82,33 @@ class LFMAdapter(BaseAgentAdapter):
             except Exception:
                 return False
 
+    @staticmethod
+    def _hf_cache_dir(repo_id: str) -> str | None:
+        """检查本机 HF 缓存是否已有该模型（无需联网）。
+
+        HF 缓存目录命名：~/.cache/huggingface/hub/models--<owner>--<name>
+        （repo id 的 '/' 替换为 '--'，并加 'models--' 前缀）。
+        """
+        import glob
+        norm = "models--" + repo_id.replace("/", "--")
+        base = os.path.expanduser(os.path.join("~", ".cache", "huggingface", "hub"))
+        cand = os.path.join(base, norm)
+        if os.path.isdir(cand):
+            return cand
+        # 兜底：glob 模糊匹配（应对命名微调）
+        hits = glob.glob(os.path.join(base, norm + "*"))
+        return hits[0] if hits else None
+
     def _weights_ready(self) -> bool:
-        # GGUF / 本地路径：文件存在即视为就绪
-        if self._model.lower().endswith((".gguf", ".bin", ".safetensors", ".onnx")):
-            return os.path.isfile(self._model)
-        # HF repo id：仅检查环境变量是否显式要求「强制认为就绪」，否则需联网拉取
-        # —— 为诚实起见，不假设已缓存；用户设 AOS_LFM_ASSUME_READY=1 可跳过。
-        return os.environ.get("AOS_LFM_ASSUME_READY", "0") == "1"
+        m = self._model
+        # 本地权重文件
+        if m.lower().endswith((".gguf", ".bin", ".safetensors", ".onnx")):
+            return os.path.isfile(m)
+        # HF repo id：用户显式确认已就绪
+        if os.environ.get("AOS_LFM_ASSUME_READY") == "1":
+            return True
+        # 否则检查本机 HF 缓存（已下载过即就绪，不假设、不联网）
+        return self._hf_cache_dir(m) is not None
 
     def health(self) -> bool:
         return self._have_runtime() and self._weights_ready()
@@ -72,28 +116,34 @@ class LFMAdapter(BaseAgentAdapter):
     def health_detail(self) -> dict:
         return {
             "engine": self._engine,
+            "tier": self.tier,
+            "backend": self._backend,
             "model": self._model,
             "live": self.health(),
             "runtime_available": self._have_runtime(),
             "weights_ready": self._weights_ready(),
-            "note": "需 transformers/litellm + LFM2 权重（HuggingFace LiquidAI/LFM2.5-*）。"
-                    "未就绪时路由层自动退回其它 live LLM 供给方。",
+            "note": "需 transformers/llama_cpp + LFM2 权重（HuggingFace LiquidAI/LFM2.* "
+                    "或本地 GGUF）。未就绪时路由层自动退回其它 live LLM 供给方。",
         }
 
     def _ensure_loaded(self):
         if self._pipe is not None:
             return self._pipe
         try:
-            from transformers import pipeline
-            self._pipe = pipeline(
-                "text-generation",
-                model=self._model,
-                device_map="auto",
-                torch_dtype="auto",
-            )
+            if self._backend == "llama_cpp":
+                from llama_cpp import Llama
+                self._pipe = Llama(model_path=self._model)
+            else:
+                from transformers import pipeline
+                self._pipe = pipeline(
+                    "text-generation",
+                    model=self._model,
+                    device_map="auto",
+                    torch_dtype="auto",
+                )
             return self._pipe
         except Exception as e:
-            raise RuntimeError(f"LFM2 加载失败: {e}")
+            raise RuntimeError(f"LFM2 加载失败 ({self._backend}): {e}")
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         payload = req.payload or {}
@@ -103,15 +153,28 @@ class LFMAdapter(BaseAgentAdapter):
         if not self.health():
             return InvokeResult(
                 ok=False,
-                error="LFM2 权重未就绪（需 transformers/litellm + 下载 "
-                      f"{self._model}）。已退回其它 live LLM 供给方。",
+                error="LFM2 权重未就绪（需 transformers/llama_cpp + 下载 "
+                      f"{self._model} 并设 AOS_LFM_MODEL）。已退回其它 live LLM 供给方。",
             )
         try:
             with self._lock:
                 pipe = self._ensure_loaded()
-                out = pipe(prompt, max_new_tokens=int(payload.get("max_tokens", 128)))
-            text = out[0]["generated_text"] if isinstance(out, list) else str(out)
+                max_tokens = int(payload.get("max_tokens", 128))
+                if self._backend == "llama_cpp":
+                    out = pipe.create_chat_completion(
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=max_tokens,
+                    )
+                    text = (out.get("choices", [{}])[0]
+                            .get("message", {}).get("content", ""))
+                else:
+                    out = pipe(prompt, max_new_tokens=max_tokens)
+                    text = out[0]["generated_text"] if isinstance(out, list) else str(out)
+                    # transformers pipeline 默认把输入拼回输出，去掉原 prompt 前缀
+                    if isinstance(text, str) and text.startswith(prompt):
+                        text = text[len(prompt):].strip()
             return InvokeResult(ok=True, data={"text": text, "engine": "lfm2",
-                                              "model": self._model})
+                                              "model": self._model,
+                                              "backend": self._backend})
         except Exception as e:
             return InvokeResult(ok=False, error=f"LFM2 推理失败: {e}")
