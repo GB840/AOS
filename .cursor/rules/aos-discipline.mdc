@@ -9,6 +9,7 @@ alwaysApply: true
 2. 提交必当场核验：`git commit` 后立刻 `git log -1 --format="%H %s"` 确认 hash 真进 git 再报告。
 3. 回应"虚"质疑：绝不辩解，直接真跑贴原始证据。常见误判根因＝用户主机代码未同步，须点出并给主机复现命令。
 4. 改动最小化：只碰该改的，不美化无关代码，不重构没坏的。每行 diff 可追溯到需求。
+5. 极简优先（Ponytail 阶梯，见 AGENTS.md §10）：写码/架构/文档/流程前先跑七级决策阶梯，能简单高效高质量安全搞定就别复杂；懒但不渎职，安全/信任边界/数据丢失/可访问性不砍。
 
 # 环境事实（照抄别猜）
 - 跑测试：`C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe` + `PYTHONPATH=D:/AOS/src`。
