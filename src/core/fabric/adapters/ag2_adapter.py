@@ -34,7 +34,7 @@ _AG2_AVAILABLE = False
 _AUTOGEN_MODULE = None
 
 
-def _ensure_autogen(timeout: float = 6.0):
+def _ensure_autogen(timeout: float = 180.0):
     """惰性导入 autogen；卡死 / 失败都返回 None（绝不阻塞调用方线程）。
 
     用 daemon 线程跑 import，主线程 join 超时即放弃——这样即便 autogen
@@ -163,6 +163,13 @@ class AG2Adapter(BaseAgentAdapter):
             return InvokeResult(ok=False, error=f"ag2 group chat failed: {e}")
 
     def health(self) -> bool:
+        # 主动尝试导入（prewarm 已在后台预热；预热中 guarded_import 返回 None
+        # 不阻塞，等预热线程完成后再标 live）。仅观测，失败绝不抛。
+        if not _AG2_AVAILABLE:
+            try:
+                _ensure_autogen()
+            except Exception:  # noqa: BLE001
+                pass
         if not _AG2_AVAILABLE:
             return False
         try:

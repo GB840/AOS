@@ -25,15 +25,23 @@ from __future__ import annotations
 import importlib
 import logging
 import threading
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT = 8.0
+_DEFAULT_TIMEOUT = 20.0
+# 分级超时：重型依赖（autogen/ag2 导入极慢，实测 80s+）给足时间，
+# 其余按经验值设定。配合 prewarm() 后台预热，避免 health/初始化被卡死。
+_MODULE_TIMEOUTS: dict = {
+    "autogen": 180.0, "ag2": 180.0,
+    "litellm": 30.0,
+    "mem0ai": 40.0, "mem0": 40.0,
+}
 _PROBED: dict = {}  # name -> module | None (缓存，避免重复探测)
+_WARMING: set = set()  # 正在后台预热中的模块名
 
 
-def guarded_import(name: str, timeout: float = _DEFAULT_TIMEOUT) -> Optional[Any]:
+def guarded_import(name: str, timeout: Optional[float] = None) -> Optional[Any]:
     '''超时线程守卫导入。
 
     用 daemon 线程跑 ``importlib.import_module(name)``，主线程 ``join(timeout)``：
@@ -41,10 +49,16 @@ def guarded_import(name: str, timeout: float = _DEFAULT_TIMEOUT) -> Optional[Any
       * 线程仍存活（卡死）-> 放弃，返回 None，**绝不阻塞调用方**；
       * 缓存结果，重复调用不再探测。
 
-    这是「卡死抓不住」问题的唯一可靠解法：except 抓不住阻塞，但 join 超时能。
+    超时取值优先级：显式参数 > 分级表 ``_MODULE_TIMEOUTS`` > ``_DEFAULT_TIMEOUT``。
+    预热中（``_WARMING``）直接返回 None：避免与 prewarm 后台线程重复 import
+    同一模块（Python import 锁会阻塞等待首个线程），让 health 如实标 dead，
+    预热线程完成后再标 live，全程不卡调用方。
     '''
     if name in _PROBED:
         return _PROBED[name]
+    if name in _WARMING:
+        return None
+    to = timeout if timeout is not None else _MODULE_TIMEOUTS.get(name, _DEFAULT_TIMEOUT)
     box: dict = {}
 
     def _run() -> None:
@@ -55,9 +69,9 @@ def guarded_import(name: str, timeout: float = _DEFAULT_TIMEOUT) -> Optional[Any
 
     th = threading.Thread(target=_run, daemon=True)
     th.start()
-    th.join(timeout)
+    th.join(to)
     if th.is_alive() or 'err' in box:
-        logger.warning('guarded_import: %s unavailable (timeout=%.1fs)', name, timeout)
+        logger.warning('guarded_import: %s unavailable (timeout=%.1fs)', name, to)
         _PROBED[name] = None
         return None
     _PROBED[name] = box.get('m')
@@ -106,7 +120,36 @@ def is_degraded(name: str) -> bool:
     return name in _DEGRADED
 
 
+def prewarm(names: Iterable[str]) -> None:
+    '''后台线程批量预热重依赖，结果缓存到 _PROBED。
+
+    典型用途：FabricHub.__init__ 末尾 prewarm(["autogen","litellm","mem0ai"])
+    让 autogen(80s)/litellm(22s) 在后台慢慢 import，不阻塞初始化与 health。
+    预热期间 guarded_import 命中 _WARMING 直接返回 None（不重复 import 阻塞）。
+    '''
+    for name in names:
+        if name in _PROBED or name in _WARMING:
+            continue
+        _WARMING.add(name)
+
+        def _run(n: str = name) -> None:
+            try:
+                _PROBED[n] = importlib.import_module(n)
+            except Exception:  # noqa: BLE001 - 预热失败 = 该依赖不可用
+                _PROBED[n] = None
+            finally:
+                _WARMING.discard(n)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+
+def is_warming(name: str) -> bool:
+    '''模块是否正在后台预热中（尚未完成首次 import）。'''
+    return name in _WARMING
+
+
 def clear_caches() -> None:
     '''仅供测试隔离使用：清空探测与降级缓存。'''
     _PROBED.clear()
     _DEGRADED.clear()
+    _WARMING.clear()

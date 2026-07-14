@@ -234,6 +234,14 @@ class FabricHub:
             self.add_orchestrator()
         except Exception as e:  # noqa: BLE001 - 编排芯粒注册失败不拖垮枢纽
             _LOG.warning("默认注册编排芯粒失败: %s", e)
+        # 后台预热重型依赖（autogen 80s / litellm 22s import），避免 health/
+        # 初始化被卡死。预热期间 guarded_import 命中 _WARMING 直接返回 None，
+        # health 如实标 dead，预热线程完成后再标 live，全程不阻塞调用方。
+        try:
+            from ..resilience import prewarm
+            prewarm(["autogen", "litellm", "mem0ai", "mem0"])
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- 模拟路由层（仅探测用，生产默认关闭） --------------------
     def set_route_sim_us(self, micros: float) -> None:

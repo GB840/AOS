@@ -22,7 +22,7 @@ How the plane is "turned on" in production:
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Iterator
 
 import logging
 logger = logging.getLogger(__name__)
@@ -41,9 +41,13 @@ LITELLM_CONFIG: dict[str, Any] = {
 
 
 def _import_litellm():
-    """Lazy + 超时守卫导入，避免 import 卡死拖垮调用方。"""
+    """Lazy + 超时守卫导入，避免 import 卡死拖垮调用方。
+
+    超时取 resilience._MODULE_TIMEOUTS["litellm"]=30s，覆盖该包在沙箱负载下
+    偶发 >8s 的导入抖动（实测 6-22s），不再被一刀切 dead。
+    """
     from ..resilience import guarded_import
-    mod = guarded_import("litellm")
+    mod = guarded_import("litellm", timeout=30)
     if mod is None:
         raise ImportError("litellm unavailable (import hung or missing)")
     return mod
