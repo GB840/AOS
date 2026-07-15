@@ -142,7 +142,7 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
 _FALLBACK_CAP = "inference.llm"
 
 # AG2 规划器产出的能力标签，如 [web.search] / [media.image]
-_TAG_RE = re.compile(r"\[([a-z][a-z0-9]*(?:\.[a-z0-9]+)+)\]")
+_TAG_RE = re.compile(r"\[([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\]")
 # AG2 输出形如 `N. [tool] <what to do>`：尖括号是格式分隔符，内部才是真实指令，
 # 需**提取内部**而非整段删除（否则指令会丢）。
 _ANGLE_RE = re.compile(r"<[^>]*>")
