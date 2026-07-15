@@ -394,22 +394,39 @@ def _has_clear_action(text: str) -> bool:
 
 
 def _apply_clarification(intent: Dict[str, Any], answer: str) -> Dict[str, Any]:
-    """根据用户对澄清问题的回答，映射到正确的意图类型。
+    """根据用户对澄清问题的回答，映射到正确的意图类型和具体目标。
 
-    用户回答可能是 a/b/c/d/e，需要对照原始澄清问题中的选项来理解。
+    从澄清问题的选项文本中解析 a) xxx b) yyy，把用户选的字母
+    映射到具体操作（而非仅 `file_ops` 泛类型）。
     """
     answer_lower = answer.strip().lower()
     question = intent.get("clarification_question", "")
 
-    # 通用字母映射（基于常见澄清问题选项结构）
-    letter_map = {
-        "a": "file_ops",       # 整理分类
-        "b": "video_production",  # 做成视频 / 手动精调
-        "c": "file_ops",       # 压缩打包 / 转换格式
-        "d": "file_ops",       # 查找重复 / 压缩
-        "e": "unknown",        # 其他
-    }
+    # 从澄清问题中解析选项 (形如 "a) 整理分类" "b) 做成视频")
+    options = {}
+    for m in re.finditer(r"([a-f])\)\s*([^\n]+)", question):
+        options[m.group(1)] = m.group(2).strip()
 
+    # 字母映射：优先用澄清问题里的具体文本
+    if len(answer_lower) == 1 and answer_lower in options:
+        action_text = options[answer_lower]
+        # 给 goal 注入具体含义而非泛类型
+        intent["goal"] = f"{intent.get('goal','')} → {action_text}"
+        # 根据操作文本判断意图类型
+        if any(kw in action_text for kw in ["整理", "分类", "去重", "改名", "批量", "处理"]):
+            intent["type"] = "file_ops"
+        elif any(kw in action_text for kw in ["视频", "幻灯片", "slideshow"]):
+            intent["type"] = "video_production"
+        elif any(kw in action_text for kw in ["压缩", "打包", "zip"]):
+            intent["type"] = "file_ops"
+        else:
+            intent["type"] = "file_ops"
+        intent["domain"] = intent["type"]
+        intent["needs_clarification"] = False
+        return intent
+
+    # 通用字母映射（退路）
+    letter_map = {"a": "file_ops", "b": "video_production", "c": "file_ops", "d": "file_ops", "e": "unknown"}
     if len(answer_lower) == 1 and answer_lower in letter_map:
         intent["type"] = letter_map[answer_lower]
         intent["domain"] = letter_map[answer_lower]
@@ -417,8 +434,13 @@ def _apply_clarification(intent: Dict[str, Any], answer: str) -> Dict[str, Any]:
         intent["goal"] = f"{intent.get('goal','')} — 用户选择了选项 {answer_lower.upper()}"
     elif answer_lower in ("是", "yes", "y", "ok"):
         intent["needs_clarification"] = False
+    elif any(kw in answer_lower for kw in ["检索", "搜索", "search", "看看", "查", "找"]):
+        # "你先检索" → 先扫描再说明
+        intent["type"] = "research"
+        intent["domain"] = "research"
+        intent["needs_clarification"] = False
+        intent["goal"] = f"先探索 {intent.get('goal','')} 的内容结构，列出文件类型分布"
     else:
-        # 自由文本回答 → 已经合并在用户补充里了
         intent["needs_clarification"] = False
 
     return intent

@@ -337,13 +337,24 @@ class LearningLoop:
         if not hints:
             return task
         # 过滤：去重 + 去纯 URL + 去太短/太长的 + 只保留可操作的
+        actionable_kw = ["install", "pip", "npm", "winget", "choco", "brew", "apt",
+                         "run", "执行", "运行", "安装", "使用", "命令", "下载",
+                         "download", "setup", "配置", "设置", "修改", "change",
+                         "用", "试", "try", "use"]
         good = []
         for h in hints:
             h = h.strip()
-            if not h or len(h) < 5 or len(h) > 300:
+            if not h or len(h) < 8 or len(h) > 300:
                 continue
             if h.startswith("http") and " " not in h:
-                continue  # 纯 URL，不可操作
+                continue  # 纯 URL
+            # 拒收不可操作的碎片：必须含至少一个可操作关键词
+            if not any(kw in h.lower() for kw in actionable_kw):
+                continue
+            # 拒收纯元数据行（license / 版权）
+            skip_prefixes = ("cc ", "by-", "license", "copyright", "©")
+            if any(h.lower().startswith(p) for p in skip_prefixes):
+                continue
             if h not in good:
                 good.append(h)
         if not good:
