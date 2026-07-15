@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -245,6 +246,13 @@ def run(task: str, planner: str = "ag2") -> Dict[str, Any]:
             final = str(t.get("output", ""))[:500]
             break
 
+    # ---- 4. 结构化 Trace（原则 8：可观测性）----
+    trace = _build_structured_trace(task, used_planner, plan_text, steps, data, duration)
+    _save_trace(trace)
+
+    # ---- 5. 置信度评分（原则 6：量化置信）----
+    confidence = _score_confidence(data, steps)
+
     return {
         "task": task,
         "planner": used_planner,
@@ -267,7 +275,111 @@ def run(task: str, planner: str = "ag2") -> Dict[str, Any]:
             ],
             "final": final,
         },
+        "confidence": confidence,
+        "trace_id": trace["task_id"],
         "duration_s": duration,
+    }
+
+
+# ---- 结构化 Trace（原则 8）----------------------------------------
+
+_TRACE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "_traces")
+_TRACE_MAX = 500  # 最多保留 500 条，防磁盘打满
+
+
+def _build_structured_trace(task, planner, plan_text, steps, data, duration):
+    """构建符合原则8规范的JSON Trace。"""
+    import uuid as _uuid
+    return {
+        "task_id": str(_uuid.uuid4())[:8],
+        "timestamp": datetime.datetime.now().isoformat(),
+        "input": {"task": task, "planner": planner, "plan": plan_text},
+        "steps": [
+            {
+                "capability": s.get("capability", ""),
+                "engine": t.get("engine_id", "unknown"),
+                "ok": t.get("ok", False),
+                "output": str(t.get("summary", t.get("output", "")))[:500],
+            }
+            for s, t in zip(steps, data.get("trace", []))
+        ],
+        "output": {
+            "ok_steps": data.get("ok_steps", 0),
+            "failed_steps": data.get("failed_steps", 0),
+            "final": None,
+        },
+        "metrics": {
+            "latency_ms": round(duration * 1000),
+            "ok_steps": data.get("ok_steps", 0),
+            "failed_steps": data.get("failed_steps", 0),
+        },
+    }
+
+
+def _save_trace(trace: dict) -> None:
+    """保存结构化 trace 到磁盘（原则 8 落盘，原则 9 可验证）。"""
+    try:
+        os.makedirs(_TRACE_DIR, exist_ok=True)
+        # 轮转清理
+        existing = sorted(os.listdir(_TRACE_DIR))
+        if len(existing) >= _TRACE_MAX:
+            for old in existing[:_TRACE_MAX // 5]:  # 删最旧的 20%
+                try:
+                    os.remove(os.path.join(_TRACE_DIR, old))
+                except OSError:
+                    pass
+        fname = f"trace_{trace['task_id']}_{int(time.time())}.json"
+        with open(os.path.join(_TRACE_DIR, fname), "w", encoding="utf-8") as f:
+            json.dump(trace, f, ensure_ascii=False, indent=2)
+    except Exception:
+        logger.warning("保存 trace 失败", exc_info=True)
+
+
+# ---- 置信度评分（原则 6）-----------------------------------------
+
+def _score_confidence(data: dict, steps: list) -> dict:
+    """三级置信度评分（低/中/高）。
+
+    原则 6 落地：输出附带结构化原始指标作为置信参考。
+    """
+    ok = data.get("ok_steps", 0)
+    fail = data.get("failed_steps", 0)
+    total = len(steps)
+    trace = data.get("trace", [])
+
+    search_results = 0
+    exit_codes_ok = 0
+    for t in trace:
+        out = str(t.get("output", t.get("summary", "")))
+        if "exe" in out.lower() or "code_exec" in t.get("capability", ""):
+            if t.get("ok"):
+                exit_codes_ok += 1
+        if "search" in t.get("capability", "").lower():
+            # 估算搜索结果条数
+            search_results += out.count("URL") + out.count("http")
+
+    # 三级判定
+    if fail > 0 and ok == 0:
+        level = "low"
+        label = "🔴 低置信"
+    elif total > 0 and ok / total >= 0.8:
+        level = "high"
+        label = "🟢 高置信"
+    else:
+        level = "medium"
+        label = "🟡 中置信"
+
+    return {
+        "level": level,
+        "label": label,
+        "metrics": {
+            "ok_steps": ok,
+            "failed_steps": fail,
+            "total_steps": total,
+            "search_results_approx": search_results,
+            "code_exec_exit_ok": exit_codes_ok,
+            "success_rate": f"{ok/total*100:.0f}%" if total > 0 else "N/A",
+        },
     }
 
 

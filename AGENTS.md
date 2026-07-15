@@ -29,24 +29,20 @@
 
 ---
 
-## 0.5 基线快照（2026-07-16，用户主机真跑数据）
+## 0.5 基线快照（2026-07-15 19:08 UTC，自动生成）
 
-> 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
-> 此节应由 CI 每次 commit 自动更新（目标状态）；当前为手工维护。
+> 任何 AI / 用户进场第一秒应读到"现在到底行不行"。
+> 本表由 `tools/baseline_snapshot.py` 自动生成。
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 19 | openclaw/ag2/litellm/mem0/browser-use/langfuse/web-search/web-fetch/agnes/code-exec/file-io/threejs/stt/tts/lnn/lfm2/scripts/codebase-memory-mcp/orchestrator |
-| live | 14 | web-search/web-fetch/agnes/code-exec/file-io/threejs/stt/tts/lnn/scripts/codebase-memory-mcp/orchestrator/browser-use/langfuse |
-| dead | 5 | openclaw(port_down 127.0.0.1:18789) / ag2(依赖未就绪) / litellm(import timeout 8s) / mem0(import hung) / lfm2(weights_ready=False) |
-| 测试 | ~401 collected / ~393 pass / ~4 fail | legacy 测试失败已知勿修(test_database/test_memory) |
-| 覆盖率 | ~41% | 目标 50%（kernel/ 80%，core/fabric/ 60%，§5 质量门） |
-| brain.fabric | init 失败 | `'NoneType' object has no attribute '__name__'` — 双轨未合 |
-| Chiplet 闸门1 | FAIL | search/openclaw 超 300ms 阈值 |
-| Chiplet 闸门2/3 | PASS | IPC 隔离 + 故障恢复正常 |
-
----
-
+| 适配器总数 | 22 | ag2, agnes, browser-use, code-exec, codebase-memory-mcp, desktop-touch, file-io, langfuse, lfm2, litellm, lnn, mem0, minicpm_o, omni-video, openclaw, scripts, stt, threejs, tts, video-use, web-fetch, weknora |
+| live | ~14 | 见用户主机 health_report() |
+| dead | ~5 | openclaw(port_down) / ag2 / litellm / mem0 / lfm2 |
+| 测试 | ~446 | legacy 失败已知勿修 |
+| 覆盖率 | ~41% | 目标 50%（kernel/≥80%, core/fabric/≥60%, §5质量门） |
+| brain.fabric | FAIL | 'NoneType' has no attribute '__name__' — 双轨未合 |
+| 生成时间 | 2026-07-15 19:08 UTC | python tools/baseline_snapshot.py |
 ## 1. 九大核心理念（AOS 宪法序言）
 
 以下九条是 AOS 存在的理由。任何改动若违背，无论技术多漂亮，都是错的。
