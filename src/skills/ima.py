@@ -408,14 +408,33 @@ class _IMAClient:
         })
 
     def search_handoffs(self, query: str, limit: int = 20) -> Dict[str, Any]:
-        # 按关键词搜笔记正文：openapi/note/v1/search_note_book（已联网搜证核实）
-        # search_type=1 按内容搜；query_info.content 为关键词
-        return self._post("openapi/note/v1/search_note_book", {
-            "search_type": 1,
-            "query_info": {"content": query or "交接"},
-            "start": 0,
-            "end": limit,
-        })
+        # 按关键词搜笔记正文：openapi/note/v1/search_note（已联网核实正确端点，
+        # 旧 endpoint search_note_book 实测报 100001 参数错）
+        # search_type=1 按内容搜；query_info.content 为关键词；start/end 偏移分页
+        results = []
+        start = 0
+        while start < limit:
+            r = self._post("openapi/note/v1/search_note", {
+                "search_type": 1,
+                "query_info": {"content": query or "交接"},
+                "start": start,
+                "end": min(20, limit - start),
+            })
+            if not r.get("success"):
+                return r
+            d = r.get("data", {}).get("data", {})
+            infos = d.get("search_note_infos", [])
+            for it in infos:
+                nb = it.get("note_book_info", {})
+                results.append({
+                    "doc_id": nb.get("note_id"),
+                    "title": nb.get("title", ""),
+                    "summary": nb.get("summary", ""),
+                })
+            if d.get("is_end") or not infos:
+                break
+            start += 20
+        return {"success": True, "data": results}
 
 
 def get_ima_skill() -> IMASkill:
