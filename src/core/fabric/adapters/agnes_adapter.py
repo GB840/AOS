@@ -97,8 +97,16 @@ class AgnesAdapter(BaseAgentAdapter):
         return InvokeResult(ok=False, error=f"agnes: unsupported capability {cap}")
 
     def health(self) -> bool:
-        """诚实判活：必须配置 key，且 Base URL 可达（连接/超时失败才判 dead）。
+        """诚实判活：必须配置有效 key，且真实存活端点 /models 返回 2xx 才算 live。
 
+        历史坑：曾直接探 Base URL(/v1)，Agnes 对 GET /v1 返回 404 Invalid URL，
+        而原代码 `status_code < 500` 把 404 也判成"活着"——典型的假活。
+        改为探 OpenAI 兼容标准存活端点 /models（带 Bearer key），并严格要求 2xx：
+          - 2xx (200) -> 服务真 live 且 key 有效   => True
+          - 401       -> key 无效，适配器无法服务  => False（诚实：不能服务即不健康）
+          - 404       -> URL/服务不对              => False
+          - 5xx       -> 服务端故障                => False
+          - 连接/超时/DNS 异常                     => False
         结果缓存 30s，避免每次构造枢纽都打网络（现有测试套件会多次建枢纽）。
         """
         if not self._api_key:
@@ -108,8 +116,9 @@ class AgnesAdapter(BaseAgentAdapter):
             return self._health_cache[0]
         ok = False
         try:
-            r = _requests().get(self._base, timeout=4, headers=self._headers())
-            ok = r.status_code < 500  # 2xx/3xx/4xx 都算"可达"
+            # 探真实存活端点 /models（而非 /v1，后者 Agnes 返回 404 假活）
+            r = _requests().get(f"{self._base}/models", timeout=6, headers=self._headers())
+            ok = 200 <= r.status_code < 300  # 严格 2xx：404/401/5xx 一律判 dead
         except Exception as e:  # 连接失败 / 超时 / DNS
             logger.debug("agnes health probe failed: %s", e)
             ok = False
