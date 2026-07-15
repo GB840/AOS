@@ -97,6 +97,16 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         topic = payload.get("task") or payload.get("content") or payload.get("text") or "处理上游结果"
         if len(topic) > 1000:
             topic = topic[:1000]
+        # 当推理步的入参疑似来自搜索步（含 URL / "Search Results"），且下
+        # 一步大概率是 code_exec 时，强制 LLM 输出可执行命令而非人话描述。
+        if "search" in topic[:200].lower() or "http" in topic[:500].lower() or "URL" in topic:
+            topic = (
+                f"{topic}\n\n"
+                "Based on the above information, extract the EXACT terminal command "
+                "to install the software on Windows. Output ONLY the command itself "
+                "(like 'winget install ...' or 'choco install ...'), no explanation, "
+                "no markdown, no backticks. If multiple methods exist, pick the simplest one."
+            )
         return ag2.invoke(InvokeRequest(
             capability=Capability.GROUP_ORCHESTRATION.value,
             payload={"text": topic},
