@@ -3,83 +3,97 @@
 本包零依赖：只使用标准库。任何具体实现（litellm / 四个真实 OSS / MCP）
 都是"插件"，由外部接线层经三个 ABC 登记进来，内核从不 hardcode 它们。
 
-公开 API：
+公开 API（惰性导入）：
 - AOSKernel              极简内核（生命周期 / 路由 / 权限）
 - ModelGateway / AgentRuntime / SkillBus   三大可替换层抽象接口
 - 版本化系统（ModuleVersion / VersionRegistry / UpgradeManager / Migration）
 - 事件系统（Event / EventBus / EventEmitter / SystemEvent）
 - 值类型（AgentSpec / AgentInstance / Message / Response / ...）
+
+惰性导入：原先此处急切导入 55 个符号（来自 10 个子模块），任何
+`import kernel` 都会把整套子模块一次性拉入，拖慢轻量使用者。
+改为 `__getattr__` 模式：仅在真正访问 `kernel.X` / `from kernel import X`
+时才加载对应子模块，行为与之前完全一致，但消除了导入期耦合。
+（审计 P1#9：套用 core/__init__.py 的 __getattr__ 模式）
 """
 
-from .auth_bridge import AuthBridge, AuthProvider, AuthResult
-from .compliance import AuditEntry, AuditTrail, ComplianceLayer, ContentGuard, PolicyEngine, PolicyRule
-from .ecology import NaturalSelection, ResourceBudget, ResourceEconomy, SymbiosisDetector
-from .events import Event, EventBus, EventEmitter, SystemEvent
-from .evolution import AgentDNA, Breeder, FitnessScore, FitnessTracker, Gene
-from .future import ComplianceLayer, ModelCapabilityExt, ModelCapabilityProvider, ProtocolAdapter
-from .hippo_scroll import (
-    ArbitrationResponse,
-    CognitionNode,
-    CognitionTrack,
-    Confidence,
-    EvidenceAnchor,
-    EvidenceTrack,
-    HippoScrollEngine,
-    MetacognitivePatrol,
-    Modality,
-    PatrolFinding,
-    PyramidRetriever,
-)
-from .hotswap import HotSwapManager
-from .immunity import AnomalyDetector, CircuitBreaker, CircuitBreakerOpenError, SelfHealer
-from .interfaces import AgentRuntime, ModelGateway, SkillBus
-from .kernel import AOSKernel
-from .types import (
-    AgentInstance,
-    AgentSpec,
-    AgentStatus,
-    ChatChunk,
-    ChatResponse,
-    Message,
-    ModelCapabilities,
-    ModelInfo,
-    Permission,
-    Response,
-    SkillInfo,
-    SkillResult,
-    SkillSpec,
-)
-from .versioning import (
-    Migration,
-    ModuleVersion,
-    UpgradeManager,
-    VersionRegistry,
-    VersionedPlugin,
-)
+import importlib
 
-__all__ = [
-    "AOSKernel",
-    "ModelGateway", "AgentRuntime", "SkillBus",
-    "AgentDNA", "AgentInstance", "AgentSpec", "AgentStatus",
-    "AnomalyDetector",
-    "AuthBridge", "AuthProvider", "AuthResult",
-    "Breeder",
-    "ChatChunk", "ChatResponse",
-    "CircuitBreaker", "CircuitBreakerOpenError",
-    "Event", "EventBus", "EventEmitter",
-    "FitnessScore", "FitnessTracker",
-    "Gene",
-    "HippoScrollEngine",
-    "HotSwapManager",
-    "Message", "Migration",
-    "ModelCapabilities", "ModelCapabilityExt", "ModelCapabilityProvider", "ModelInfo", "ModuleVersion",
-    "NaturalSelection",
-    "Permission",
-    "ProtocolAdapter",
-    "ResourceBudget", "ResourceEconomy", "Response",
-    "SelfHealer",
-    "SkillInfo", "SkillResult", "SkillSpec",
-    "SymbiosisDetector", "SystemEvent",
-    "UpgradeManager",
-    "VersionRegistry", "VersionedPlugin",
-]
+# (公开名 -> (子模块, 属性名))。
+# 注意：ComplianceLayer 在 .compliance 与 .future 中都有定义，原急切导入时
+# .future 行在 .compliance 之后，故最终绑定到 .future；此处须保持同一优先级。
+_LAZY_IMPORTS = {
+    "AuthBridge": (".auth_bridge", "AuthBridge"),
+    "AuthProvider": (".auth_bridge", "AuthProvider"),
+    "AuthResult": (".auth_bridge", "AuthResult"),
+    "AuditEntry": (".compliance", "AuditEntry"),
+    "AuditTrail": (".compliance", "AuditTrail"),
+    "ContentGuard": (".compliance", "ContentGuard"),
+    "PolicyEngine": (".compliance", "PolicyEngine"),
+    "PolicyRule": (".compliance", "PolicyRule"),
+    "NaturalSelection": (".ecology", "NaturalSelection"),
+    "ResourceBudget": (".ecology", "ResourceBudget"),
+    "ResourceEconomy": (".ecology", "ResourceEconomy"),
+    "SymbiosisDetector": (".ecology", "SymbiosisDetector"),
+    "Event": (".events", "Event"),
+    "EventBus": (".events", "EventBus"),
+    "EventEmitter": (".events", "EventEmitter"),
+    "SystemEvent": (".events", "SystemEvent"),
+    "AgentDNA": (".evolution", "AgentDNA"),
+    "Breeder": (".evolution", "Breeder"),
+    "FitnessScore": (".evolution", "FitnessScore"),
+    "FitnessTracker": (".evolution", "FitnessTracker"),
+    "Gene": (".evolution", "Gene"),
+    "ComplianceLayer": (".future", "ComplianceLayer"),
+    "ModelCapabilityExt": (".future", "ModelCapabilityExt"),
+    "ModelCapabilityProvider": (".future", "ModelCapabilityProvider"),
+    "ProtocolAdapter": (".future", "ProtocolAdapter"),
+    "ArbitrationResponse": (".hippo_scroll", "ArbitrationResponse"),
+    "CognitionNode": (".hippo_scroll", "CognitionNode"),
+    "CognitionTrack": (".hippo_scroll", "CognitionTrack"),
+    "Confidence": (".hippo_scroll", "Confidence"),
+    "EvidenceAnchor": (".hippo_scroll", "EvidenceAnchor"),
+    "EvidenceTrack": (".hippo_scroll", "EvidenceTrack"),
+    "HippoScrollEngine": (".hippo_scroll", "HippoScrollEngine"),
+    "MetacognitivePatrol": (".hippo_scroll", "MetacognitivePatrol"),
+    "Modality": (".hippo_scroll", "Modality"),
+    "PatrolFinding": (".hippo_scroll", "PatrolFinding"),
+    "PyramidRetriever": (".hippo_scroll", "PyramidRetriever"),
+    "HotSwapManager": (".hotswap", "HotSwapManager"),
+    "AnomalyDetector": (".immunity", "AnomalyDetector"),
+    "CircuitBreaker": (".immunity", "CircuitBreaker"),
+    "CircuitBreakerOpenError": (".immunity", "CircuitBreakerOpenError"),
+    "SelfHealer": (".immunity", "SelfHealer"),
+    "AgentRuntime": (".interfaces", "AgentRuntime"),
+    "ModelGateway": (".interfaces", "ModelGateway"),
+    "SkillBus": (".interfaces", "SkillBus"),
+    "AOSKernel": (".kernel", "AOSKernel"),
+    "AgentInstance": (".types", "AgentInstance"),
+    "AgentSpec": (".types", "AgentSpec"),
+    "AgentStatus": (".types", "AgentStatus"),
+    "ChatChunk": (".types", "ChatChunk"),
+    "ChatResponse": (".types", "ChatResponse"),
+    "Message": (".types", "Message"),
+    "ModelCapabilities": (".types", "ModelCapabilities"),
+    "ModelInfo": (".types", "ModelInfo"),
+    "Permission": (".types", "Permission"),
+    "Response": (".types", "Response"),
+    "SkillInfo": (".types", "SkillInfo"),
+    "SkillResult": (".types", "SkillResult"),
+    "SkillSpec": (".types", "SkillSpec"),
+    "Migration": (".versioning", "Migration"),
+    "ModuleVersion": (".versioning", "ModuleVersion"),
+    "UpgradeManager": (".versioning", "UpgradeManager"),
+    "VersionRegistry": (".versioning", "VersionRegistry"),
+    "VersionedPlugin": (".versioning", "VersionedPlugin"),
+}
+
+__all__ = list(_LAZY_IMPORTS.keys())
+
+
+def __getattr__(name: str):
+    if name in _LAZY_IMPORTS:
+        module_name, attr = _LAZY_IMPORTS[name]
+        module = importlib.import_module(module_name, __name__)
+        return getattr(module, attr)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
