@@ -224,6 +224,13 @@ class FabricHub:
         #    "capability_map": {"tool_name": "data.query"},  # 可选
         #    "auth_token": "..."}                              # 可选
         self._register_env_mcp_servers()
+        # 腾讯开源 WeKnora 知识引擎：经其 MCP Server(http) 即插即用注册。
+        # 依赖用户主机先起 WeKnora 核心 + http 模式 MCP Server；未配置
+        # WEKNORA_MCP_URL 或不可达时静默跳过，绝不谎报 live。
+        try:
+            self.register_weknora_mcp()
+        except Exception as e:  # noqa: BLE001 - 远端/网络故障不拖垮枢纽
+            _LOG.warning("WeKnora MCP 注册失败(将跳过): %s", e)
         # codebase-memory-mcp 是 stdio-only 的 MCP server（纯 C / 零依赖 / MIT），
         # 现有 register_mcp_server 只接 HTTP(SSE)，接不上它。这里单独接 stdio
         # 传输，并把真实工具「弄进」AOS：二进制缺失时优雅跳过，绝不谎报 live。
@@ -400,6 +407,56 @@ class FabricHub:
                 auth_token=spec.get("auth_token"),
                 timeout=spec.get("timeout", 10.0),
             )
+
+    # ---- WeKnora（腾讯开源 RAG/知识引擎）MCP 即插即用 ------------
+    def register_weknora_mcp(
+        self,
+        url: Optional[str] = None,
+        engine_id: str = "weknora",
+        auth_token: Optional[str] = None,
+        capability_map: Optional[dict] = None,
+        timeout: float = 15.0,
+    ) -> Optional[str]:
+        """把腾讯开源的 WeKnora 知识引擎（经其 MCP Server）注册成 AOS 芯粒。
+
+        WeKnora 是真实开源项目（github.com/Tencent/WeKnora, MIT 许可证）：
+        RAG 问答 + ReAct Agent + 自动 Wiki，覆盖 PDF/Word/图片/Excel 等十余种
+        格式，兼容 20+ 大模型。其 MCP Server 支持 stdio/sse/http 三种传输；
+        这里走 http(Streamable HTTP) 模式，直接复用现有 MCPClientAdapter，
+        零新组件、不弄虚。
+
+        前置（用户主机，沙箱无法跑 Docker）：
+          1) 起 WeKnora 核心：在 WeKnora 仓库 `docker compose up -d`（REST :8080）
+          2) 起 MCP Server(http)：`python weknora_mcp_server.py --transport http
+             --host 0.0.0.0 --port 8081`，并给该进程设 WEKNORA_API_KEY +
+             WEKNORA_BASE_URL（默认 http://localhost:8080/api/v1）以及
+             MCP_SERVER_AUTH_TOKEN（MCP 网络传输鉴权，须与下方 AOS 侧一致）
+        然后 AOS 侧设 WEKNORA_MCP_URL=http://localhost:8081/mcp 即可自动注册。
+
+        capability_map 默认：hybrid_search→data.query，chat→memory.knowledge，
+        agent_chat→cognition.reasoning，wiki_search→memory.knowledge；其余工具
+        未映射时由适配器按 action.tool_use 暴露。返回 engine_id；失败返回 None
+        并记错误（绝不谎报 live）。
+        """
+        url = url or os.environ.get("WEKNORA_MCP_URL")
+        if not url:
+            return None
+        auth_token = auth_token or os.environ.get("WEKNORA_MCP_AUTH_TOKEN")
+        engine_id = os.environ.get("WEKNORA_MCP_ENGINE_ID") or engine_id
+        if capability_map is None:
+            capability_map = {
+                "hybrid_search": "data.query",
+                "chat": "memory.knowledge",
+                "agent_chat": "cognition.reasoning",
+                "wiki_search": "memory.knowledge",
+            }
+        return self.register_mcp_server(
+            server_url=url,
+            engine_id=engine_id,
+            capability_map=capability_map,
+            auth_token=auth_token,
+            timeout=timeout,
+        )
 
     # ---- codebase-memory-mcp（stdio MCP）即插即用 -----------------
     def register_codebase_mcp(
