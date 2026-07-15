@@ -18,6 +18,7 @@ import os
 import json
 import time
 from pathlib import Path
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
 from core.fabric import FabricRegistry
@@ -53,8 +54,11 @@ _LOG = logging.getLogger("aos.fabric.hub")
 # key=session_id, value=[{"task": "...", "response": "..."}, ...]
 # 设计：内存缓存提速热会话；磁盘 JSON 落盘让 CLI 跨进程也能记住对话。
 # 每个会话最多保留最近 5 轮，避免无限增长拖慢上下文注入。
-_SESSIONS: Dict[str, List[Dict[str, str]]] = {}
+# 会话「数量」也设上限：长运行服务若放任唯一 session_id 无限累积会内存泄漏(R-4)。
+# 用 OrderedDict 实现 LRU：访问/写入即移到末尾，超出上限淘汰最久未用的会话。
+_SESSIONS: "OrderedDict[str, List[Dict[str, str]]]" = OrderedDict()
 _SESSION_MAX_TURNS = 5
+_SESSION_MAX_COUNT = 1024  # 最多缓存会话数，超出按 LRU 淘汰，防无限增长
 _SESSION_DIR = Path("data/workspaces/fabric/sessions")
 
 
@@ -65,6 +69,7 @@ def _session_path(session_id: str) -> Path:
 def _load_session(session_id: str) -> List[Dict[str, str]]:
     """加载会话历史：先查内存缓存，没有再读磁盘。"""
     if session_id in _SESSIONS:
+        _SESSIONS.move_to_end(session_id)
         return _SESSIONS[session_id]
     p = _session_path(session_id)
     if p.exists():
@@ -81,6 +86,10 @@ def _load_session(session_id: str) -> List[Dict[str, str]]:
 def _save_session(session_id: str, history: List[Dict[str, str]]) -> None:
     """保存会话历史到内存和磁盘。"""
     _SESSIONS[session_id] = history
+    _SESSIONS.move_to_end(session_id)
+    # LRU 淘汰：超出会话数上限时丢弃最久未访问的会话(R-4)
+    while len(_SESSIONS) > _SESSION_MAX_COUNT:
+        _SESSIONS.popitem(last=False)
     try:
         _SESSION_DIR.mkdir(parents=True, exist_ok=True)
         _session_path(session_id).write_text(
