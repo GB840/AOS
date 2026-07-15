@@ -258,7 +258,7 @@ class LearningLoop:
         fix_hints: List[str] = []
         trace: List[Dict[str, Any]] = []
 
-        while retries <= self._max_retries:
+        while retries < self._max_retries:
             # ---- PREFLIGHT：查记忆库 ----
             preflight_hints = self._memory.get_fix_hints(current_task, "action.code_exec")
             if preflight_hints:
@@ -333,10 +333,22 @@ class LearningLoop:
         }
 
     def _inject_hints(self, task: str, hints: List[str]) -> str:
-        """把修复提示注入任务描述。"""
+        """把修复提示注入任务描述。过滤掉 URL-only / 无意义提示。"""
         if not hints:
             return task
-        uniq = list(dict.fromkeys(hints))[:3]  # 去重，最多3条
+        # 过滤：去重 + 去纯 URL + 去太短/太长的 + 只保留可操作的
+        good = []
+        for h in hints:
+            h = h.strip()
+            if not h or len(h) < 5 or len(h) > 300:
+                continue
+            if h.startswith("http") and " " not in h:
+                continue  # 纯 URL，不可操作
+            if h not in good:
+                good.append(h)
+        if not good:
+            return task
+        uniq = good[:3]
         hint_text = ";\n".join(uniq)
         return (
             f"{task}\n\n"

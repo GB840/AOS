@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -100,13 +101,10 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         # 当推理步的入参疑似来自搜索步（含 URL / "Search Results"），且下
         # 一步大概率是 code_exec 时，强制 LLM 输出可执行命令而非人话描述。
         if "search" in topic[:200].lower() or "http" in topic[:500].lower() or "URL" in topic:
-            topic = (
-                f"{topic}\n\n"
-                "Based on the above information, extract the EXACT terminal command "
-                "to install the software on Windows. Output ONLY the command itself "
-                "(like 'winget install ...' or 'choco install ...'), no explanation, "
-                "no markdown, no backticks. If multiple methods exist, pick the simplest one."
-            )
+            cmd = _extract_command_direct(topic)
+            if cmd:
+                return InvokeResult(ok=True, data={"content": cmd, "command": cmd})
+            # 直接提取失败时回落 ag2 群聊
         return ag2.invoke(InvokeRequest(
             capability=Capability.GROUP_ORCHESTRATION.value,
             payload={"text": topic},
@@ -116,6 +114,45 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         return InvokeResult(ok=True, data={"content": "memory not yet wired in autopilot"})
 
     return InvokeResult(ok=False, error=f"autopilot: 不支持的能力 {capability}")
+
+
+def _extract_command_direct(topic: str) -> str:
+    """从搜索结果里直接提取安装命令（轻量 LLM 调用，绕过 ag2 群聊噪音）。
+
+    返回干净的命令字符串如 "winget install ffmpeg"，失败返回空字符串。
+    """
+    try:
+        from openai import OpenAI
+        import os as _os
+        api_key = _os.environ.get("ZHIPU_API_KEY", "")
+        if not api_key:
+            return ""
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+        )
+        prompt = (
+            f"从以下搜索结果中提取在 Windows 上安装软件的一条终端命令。"
+            f"只输出命令本身（如 winget install xxx 或 choco install xxx），"
+            f"不要任何解释、markdown、反引号。如果搜索结果是中文文章，"
+            f"从中找到 Windows 安装步骤并提取具体命令。\n\n搜索结果:\n{topic[:1500]}"
+        )
+        resp = client.chat.completions.create(
+            model="glm-4-flash",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=100,
+        )
+        cmd = resp.choices[0].message.content.strip()
+        # 清洗：去反引号、去 markdown 标记、去行首的 - * 等
+        cmd = re.sub(r"^```[\w]*\s*|```$", "", cmd, flags=re.MULTILINE).strip()
+        cmd = re.sub(r"^[-*•]\s*", "", cmd).strip()
+        # 只要第一行（最可能是命令的那行）
+        cmd = cmd.split("\n")[0].strip()
+        return cmd if len(cmd) > 3 and len(cmd) < 200 else ""
+    except Exception:
+        logger.warning("_extract_command_direct 失败", exc_info=True)
+        return ""
 
 
 def _guess_language(code: str) -> str:
