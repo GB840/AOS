@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import threading
 from typing import Any, Optional
@@ -68,6 +69,22 @@ class MCPStdioAdapter(BaseAgentAdapter):
             self._start()
 
     # ---- 进程管理 ------------------------------------------------
+    @staticmethod
+    def _child_env() -> dict[str, str]:
+        """给外部 MCP server 子进程一个「干净」环境。
+
+        关键隔离：剥掉 PYTHONPATH / PYTHONHOME / VIRTUAL_ENV。否则当 AOS 以
+        PYTHONPATH=<AOS>/src 启动时，用 subprocess 起的 **Python 版** MCP server
+        会继承这个 PYTHONPATH，把 AOS 的 src 塞进自己的 sys.path，与其自身模块
+        （如 helpers、mcp 等）发生 import 冲突而崩溃退出（returncode=1 → 握手 EOF）。
+        Node / C 二进制的 server 不受影响，本剥离对它们无害；对自带 venv 的 Python
+        server（用绝对路径的 venv python 启动，靠 pyvenv.cfg 定位环境）则正好修复。
+        """
+        env = os.environ.copy()
+        for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+            env.pop(key, None)
+        return env
+
     def _start(self) -> None:
         try:
             self._proc = subprocess.Popen(
@@ -79,6 +96,7 @@ class MCPStdioAdapter(BaseAgentAdapter):
                 text=True,
                 bufsize=1,
                 encoding="utf-8",
+                env=self._child_env(),
             )
         except (FileNotFoundError, OSError) as e:
             # 二进制缺失 / 无法启动：优雅失败，绝不谎报 live。

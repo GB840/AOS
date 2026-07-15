@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import json
 import time
 from pathlib import Path
@@ -244,6 +245,29 @@ class FabricHub:
         # 现有 register_mcp_server 只接 HTTP(SSE)，接不上它。这里单独接 stdio
         # 传输，并把真实工具「弄进」AOS：二进制缺失时优雅跳过，绝不谎报 live。
         self._register_env_codebase_mcp()
+        # Desktop-Touch-MCP：Windows 原生 UIA 桌面视觉执行芯粒（stdio MCP）。
+        # 默认关闭（需在用户 Windows 主机装 Node + 授权辅助功能，沙箱/CI 不拉起
+        # npx）；设 DESKTOP_TOUCH_MCP_ENABLED=1 时启动即自动 npx 拉起并注册。
+        if os.environ.get("DESKTOP_TOUCH_MCP_ENABLED") == "1":
+            try:
+                self.register_desktop_touch_mcp()
+            except Exception as e:  # noqa: BLE001 - 远端/网络故障不拖垮枢纽
+                _LOG.warning("Desktop-Touch-MCP 注册失败(将跳过): %s", e)
+        # Omni-Video Studio MCP（omni-video-mcp，Python stdio MCP 视频剪辑芯粒）。
+        # 默认关闭；设 OMNI_VIDEO_MCP_ENABLED=1 启动时自动拉起。需用户主机装 ffmpeg
+        # + ELEVENLABS_API_KEY + Playwright(chromium)，二进制/依赖缺失时优雅跳过。
+        if os.environ.get("OMNI_VIDEO_MCP_ENABLED") == "1":
+            try:
+                self.register_omni_video_mcp()
+            except Exception as e:  # noqa: BLE001
+                _LOG.warning("Omni-Video MCP 注册失败(将跳过): %s", e)
+        # video-use（npm stdio MCP 轻量视频关键帧提取芯粒）。默认关闭；设
+        # VIDEO_USE_MCP_ENABLED=1 启动时自动 npx 拉起。需 ffmpeg + yt-dlp(URL源)。
+        if os.environ.get("VIDEO_USE_MCP_ENABLED") == "1":
+            try:
+                self.register_video_use_mcp()
+            except Exception as e:  # noqa: BLE001
+                _LOG.warning("video-use MCP 注册失败(将跳过): %s", e)
         # 默认通电编排芯粒：让 system.workflow 能力在构建后即 live，
         # run_task 的底层编排才不会因「no live provider」空转。
         # （之前只有显式 add_orchestrator() 才挂，health_report 里
@@ -466,6 +490,215 @@ class FabricHub:
             auth_token=auth_token,
             timeout=timeout,
         )
+
+    # ---- Desktop-Touch-MCP（Windows 原生 UIA 桌面视觉执行）即插即用 --
+    def register_desktop_touch_mcp(
+        self,
+        command: Optional[list] = None,
+        engine_id: str = "desktop-touch",
+        capability_map: Optional[dict] = None,
+        timeout: float = 30.0,
+    ) -> Optional[str]:
+        """把 Desktop-Touch-MCP（Harusame64，Windows 原生 UI Automation MCP 服务）
+        注册成 AOS 桌面视觉执行芯粒（action.aci 能力）。
+
+        真实开源项目（github.com/Harusame64/desktop-touch-mcp，MIT 许可证）：
+        Rust 原生 UIA 内核（getFocusedElement 2ms）、29+ 工具、强中文(CJK/IME)
+        支持、npx 零配置。通过 AOS 既有的 MCPStdioAdapter 直连其 stdio 传输，
+        零新组件、不弄虚——与 WeKnora / codebase-memory-mcp 同一「万物为我所用」
+        协议级落点。
+
+        前置（用户 Windows 主机，沙箱无桌面跑不了）：
+          1) 装 Node.js v20+（官方测过 v22+）；
+          2) 起 AOS 时自动 `npx -y @harusame64/desktop-touch-mcp`（或设
+             DESKTOP_TOUCH_MCP_CMD 自定义命令，如本地 clone 后的 dist/index.js）；
+          3) 首次运行 npx 会从 GitHub Releases 拉运行时 zip（国内/共享网络可能
+             触发 60 次/小时匿名限速，设 GITHUB_TOKEN 提到 5000/小时）；需装
+             Visual C++ Redistributable（nut-js 原生绑定依赖）；建议把解压目录
+             %USERPROFILE%/.desktop-touch-mcp 加 Defender 白名单，避免被杀软拦截。
+             Windows 下 UIA 一般无需 macOS 式辅助功能开关；急停=鼠标移到屏幕
+             左上角(0,0)10px 内即终止服务。
+        capability_map 默认把桌面发现/操作/截图类 tool 映射到 action.aci；
+        返回 engine_id；失败返回 None 并记错误（MCPStdioAdapter 启动失败即
+        health=False，绝不谎报 live）。
+        """
+        engine_id = os.environ.get("DESKTOP_TOUCH_MCP_ENGINE_ID") or engine_id
+        raw_cmd = command or os.environ.get(
+            "DESKTOP_TOUCH_MCP_CMD", "npx -y @harusame64/desktop-touch-mcp"
+        )
+        if isinstance(raw_cmd, str):
+            raw_cmd = raw_cmd.split()
+        if capability_map is None:
+            capability_map = {
+                "desktop_discover": "action.aci",
+                "desktop_act": "action.aci",
+                "desktop_state": "action.aci",
+                "screenshot": "action.aci",
+                "mouse_click": "action.aci",
+                "mouse_move": "action.aci",
+                "keyboard_type": "action.aci",
+                "keyboard_press": "action.aci",
+                "clipboard_read": "action.aci",
+                "clipboard_write": "action.aci",
+                "window_list": "action.aci",
+                "window_focus": "action.aci",
+            }
+        try:
+            from core.fabric.adapters.mcp_stdio_adapter import MCPStdioAdapter
+            adapter = MCPStdioAdapter(
+                command=list(raw_cmd),
+                engine_id=engine_id,
+                capability_map=capability_map,
+                timeout=timeout,
+            )
+            self._registry.register(adapter)
+            return engine_id
+        except Exception as e:  # noqa: BLE001 - 二进制缺失/握手失败不拖垮枢纽
+            self._errors[f"desktop-touch:{engine_id}"] = repr(e)
+            _LOG.warning("Desktop-Touch-MCP 注册失败 %s: %s", engine_id, e)
+            return None
+
+    # ---- omni-video-mcp（stdio MCP）专业视频剪辑芯粒 ----------------
+    def register_omni_video_mcp(
+        self,
+        command: Optional[list] = None,
+        engine_id: str = "omni-video",
+        capability_map: Optional[dict] = None,
+        timeout: float = 60.0,
+        cwd: Optional[str] = None,
+    ) -> Optional[str]:
+        """把 omni-video-mcp（真实 Python stdio MCP 视频剪辑服务）注册成 AOS
+        media.video 芯粒。
+
+        真实开源项目（github.com/buildwithtaza/omni-video-mcp，企业级视频剪辑 MCP，
+        「Omni-Video Studio MCP」即其别名）。四阶段流水线：omni_video_ingest(摄取
+        转录+视觉场景图) / omni_video_preview(胶片条预览) / omni_video_generate_vfx
+        (Hyperframes 动效) / omni_video_render(FFmpeg 最终母带，支持 EDL 剪辑/LUT
+        调色/音频修复/字幕烧录)。与 Desktop-Touch-MCP 同一「协议级接入」落点——AOS
+        不重写它的脑子，只是用 MCPStdioAdapter 直连 stdio 传输。详情见
+        docs/VIDEO_MCP_INTEGRATION.md。
+
+        前置（用户 Windows 主机）：
+          1) 克隆仓库并装依赖：uv venv && uv pip install -e . && playwright install chromium；
+          2) 系统装 ffmpeg（PATH 可达）；
+          3) 设 ELEVENLABS_API_KEY（高保真逐词转录所需）；
+          4) 设 OMNI_VIDEO_MCP_CMD 指向实际启动命令，如
+             "uv run /d/AI_Model/omni-video-mcp/server.py"（或 "python server.py"）；
+          5) 设 OMNI_VIDEO_MCP_ENABLED=1 后启动 AOS 即自动拉起注册。
+        capability_map 默认把 omni_video_* 工具映射到 media.video；返回 engine_id；
+        失败返回 None 并记错误（MCPStdioAdapter 启动失败即 health=False，绝不谎报 live）。
+        """
+        engine_id = os.environ.get("OMNI_VIDEO_MCP_ENGINE_ID") or engine_id
+        repo = os.environ.get("OMNI_VIDEO_MCP_REPO")
+        raw_cmd = command or os.environ.get("OMNI_VIDEO_MCP_CMD")
+        resolved_cwd = cwd
+        if raw_cmd is None:
+            if repo:
+                resolved_cwd = repo
+                srv = os.path.join(repo, "server.py")
+                # 优先用仓库内 .venv 的 python 直接拉起，避免 uv sync 重触发
+                # 项目自身的 editable build（受限环境会失败且无必要）。
+                venv_py = None
+                for cand in (
+                    os.path.join(repo, ".venv", "Scripts", "python.exe"),
+                    os.path.join(repo, ".venv", "bin", "python"),
+                ):
+                    if os.path.exists(cand):
+                        venv_py = cand
+                        break
+                if venv_py:
+                    raw_cmd = f"{venv_py} {srv}"
+                else:
+                    uv_bin = (
+                        os.environ.get("OMNI_VIDEO_MCP_UV_BIN")
+                        or shutil.which("uv")
+                        or r"C:\Users\Administrator\AppData\Local\hermes\bin\uv"
+                    )
+                    raw_cmd = f"{uv_bin} run {srv}"
+            else:
+                raw_cmd = "uv run server.py"
+        if isinstance(raw_cmd, str):
+            raw_cmd = raw_cmd.split()
+        if capability_map is None:
+            capability_map = {
+                "omni_video_ingest": "media.video",
+                "omni_video_preview": "media.video",
+                "omni_video_generate_vfx": "media.video",
+                "omni_video_render": "media.video",
+            }
+        try:
+            from core.fabric.adapters.mcp_stdio_adapter import MCPStdioAdapter
+            adapter = MCPStdioAdapter(
+                command=list(raw_cmd),
+                engine_id=engine_id,
+                capability_map=capability_map,
+                timeout=timeout,
+                cwd=resolved_cwd,
+            )
+            self._registry.register(adapter)
+            return engine_id
+        except Exception as e:  # noqa: BLE001 - 二进制缺失/握手失败不拖垮枢纽
+            self._errors[f"omni-video:{engine_id}"] = repr(e)
+            _LOG.warning("Omni-Video MCP 注册失败 %s: %s", engine_id, e)
+            return None
+
+    # ---- video-use（stdio MCP）轻量视频关键帧提取芯粒 --------------
+    def register_video_use_mcp(
+        self,
+        command: Optional[list] = None,
+        engine_id: str = "video-use",
+        capability_map: Optional[dict] = None,
+        timeout: float = 60.0,
+    ) -> Optional[str]:
+        """把 video-use（真实 npm stdio MCP 视频关键帧提取服务）注册成 AOS
+        media.video 芯粒。
+
+        真实开源包（npm: video-use，v0.1.1）。MCP 服务+CLI，从本地文件或视频 URL
+        下载并提取关键帧（场景变化检测+兜底 FPS 采样+时间去重），让 AI 用图像+
+        时间戳「看懂」视频。与 Desktop-Touch-MCP 同一「协议级接入」落点。详情见
+        docs/VIDEO_MCP_INTEGRATION.md。
+
+        前置（用户 Windows 主机）：
+          1) 系统装 ffmpeg（PATH 可达）、yt-dlp（仅 URL 源需要）；
+          2) Node.js v20+；
+          3) 设 VIDEO_USE_MCP_CMD 自定义命令（默认 "npx -y video-use"）；
+          4) 设 VIDEO_USE_MCP_ENABLED=1 后启动 AOS 即自动 npx 拉起注册。
+        capability_map 默认把 video_frames_extract/video_probe/video_cleanup 映射到
+        media.video；返回 engine_id；失败返回 None 并记错误（绝不谎报 live）。
+        """
+        engine_id = os.environ.get("VIDEO_USE_MCP_ENGINE_ID") or engine_id
+        raw_cmd = command or os.environ.get("VIDEO_USE_MCP_CMD")
+        if raw_cmd is None:
+            # Windows 优先用全局 npm bin 的 .cmd（subprocess 直接调无扩展名 shim 会 WinError 2 找不到）
+            npm_bin = os.environ.get("APPDATA", "")
+            if npm_bin:
+                cand = os.path.join(npm_bin, "npm", "video-use.cmd")
+                if os.path.exists(cand):
+                    raw_cmd = cand
+            if raw_cmd is None:
+                raw_cmd = "npx -y video-use"
+        if isinstance(raw_cmd, str):
+            raw_cmd = raw_cmd.split()
+        if capability_map is None:
+            capability_map = {
+                "video_frames_extract": "media.video",
+                "video_probe": "media.video",
+                "video_cleanup": "media.video",
+            }
+        try:
+            from core.fabric.adapters.mcp_stdio_adapter import MCPStdioAdapter
+            adapter = MCPStdioAdapter(
+                command=list(raw_cmd),
+                engine_id=engine_id,
+                capability_map=capability_map,
+                timeout=timeout,
+            )
+            self._registry.register(adapter)
+            return engine_id
+        except Exception as e:  # noqa: BLE001 - 二进制缺失/握手失败不拖垮枢纽
+            self._errors[f"video-use:{engine_id}"] = repr(e)
+            _LOG.warning("video-use MCP 注册失败 %s: %s", engine_id, e)
+            return None
 
     # ---- codebase-memory-mcp（stdio MCP）即插即用 -----------------
     def register_codebase_mcp(
