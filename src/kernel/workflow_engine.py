@@ -303,24 +303,29 @@ def _scan_local(intent: Dict[str, Any], user_input: str) -> None:
     scan_result = _scan_directory(target)
     if scan_result:
         intent["local_context"] = scan_result
-        # 根据文件类型推断意图
         by_type = scan_result.get("by_type", {})
-        if by_type.get(".jpg", 0) + by_type.get(".png", 0) + by_type.get(".gif", 0) > 10:
+        # 图片类型检测
+        img_exts = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".ico", ".heic"}
+        img_count = sum(n for ext, n in by_type.items() if ext in img_exts)
+        # 视频类型检测
+        vid_exts = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
+        vid_count = sum(n for ext, n in by_type.items() if ext in vid_exts)
+
+        if img_count > 10:
             intent["needs_clarification"] = True
-            total_imgs = by_type.get(".jpg", 0) + by_type.get(".png", 0) + by_type.get(".gif", 0)
             intent["clarification_question"] = (
-                f"检测到 {target} 下有约 {total_imgs} 张图片 + 其他文件。你想：\n"
-                "  a) 整理分类这些文件\n"
-                "  b) 把图片做成视频\n"
+                f"检测到 {target} 下有 {img_count} 张图片({', '.join(f'{e}({n})' for e,n in by_type.items() if e in img_exts)})。你想：\n"
+                "  a) 整理分类这些图片\n"
+                "  b) 把图片做成视频/幻灯片\n"
                 "  c) 压缩打包\n"
-                "  d) 查找重复文件\n"
-                "  e) 其他（请描述）"
+                "  d) 查找重复图片\n"
+                "  e) 批量处理（改名/转格式/加水印）\n"
+                "  f) 其他（请描述）"
             )
-        elif by_type.get(".mp4", 0) + by_type.get(".avi", 0) + by_type.get(".mov", 0) > 0:
+        elif vid_count > 0:
             intent["needs_clarification"] = True
-            total_vid = by_type.get(".mp4", 0) + by_type.get(".avi", 0) + by_type.get(".mov", 0)
             intent["clarification_question"] = (
-                f"检测到 {target} 下有约 {total_vid} 个视频文件。你想：\n"
+                f"检测到 {target} 下有 {vid_count} 个视频。你想：\n"
                 "  a) 剪辑/合并视频\n"
                 "  b) 转换格式\n"
                 "  c) 提取音频\n"
@@ -338,8 +343,9 @@ def _scan_directory(path: str) -> Optional[Dict[str, Any]]:
         # 磁盘根目录只扫直接子项（不递归），否则 os.walk 在 D:\ 会卡几分钟
         is_root = len(path) <= 3 and path[1] == ":"
 
-        files = []
+        sample_files = []
         by_type: Dict[str, int] = {}
+        total_count = 0
         total_size = 0
         start = time.time()
         max_time = 5  # 最多 5 秒
@@ -363,19 +369,18 @@ def _scan_directory(path: str) -> Optional[Dict[str, Any]]:
                 ext = os.path.splitext(f)[1].lower() or "(无扩展名)"
                 by_type[ext] = by_type.get(ext, 0) + 1
                 total_size += size
-                if len(files) < 10:
-                    files.append({"name": f, "ext": ext, "size": size, "path": fp})
-            if len(files) > 200:
-                break
+                total_count += 1
+                if len(sample_files) < 10:
+                    sample_files.append({"name": f, "ext": ext, "size": size, "path": fp})
 
         top_types = sorted(by_type.items(), key=lambda x: x[1], reverse=True)[:15]
         return {
             "path": path,
             "exists": True,
-            "total_files": len(files) if len(files) < 200 else "200+",
+            "total_files": total_count,
             "total_size_mb": round(total_size / (1024 * 1024), 1),
             "by_type": dict(top_types),
-            "sample_files": [f["name"] for f in files[:5]],
+            "sample_files": [f["name"] for f in sample_files[:5]],
         }
     except Exception as e:
         return {"error": str(e), "exists": False}
@@ -636,17 +641,34 @@ def _deploy_plans(intent, env, installed) -> List[Dict[str, Any]]:
 
 
 def _generic_plans(intent, env, installed) -> List[Dict[str, Any]]:
+    goal = intent.get("goal", "")
     return [{
-        "id": 0, "name": "方案A: 全自动执行",
-        "approach": "AOS 自动搜索→安装→验证",
-        "pros": ["零人工", "自动纠错"],
+        "id": 0, "name": "方案A: 全自动执行（推荐）",
+        "approach": f"AOS 自动搜索→分析→安装→执行→验证，目标: {goal[:50]}",
+        "tools_needed": [],
+        "steps": [
+            f"1. 搜索「{goal[:40]}」相关最佳实践",
+            f"2. 分析搜索结果，提取具体执行步骤",
+            f"3. 安装缺失的工具/依赖",
+            f"4. 执行核心任务",
+            f"5. 验证结果并汇报",
+        ],
+        "pros": ["零人工", "自动纠错", "学习积累"],
         "cons": ["复杂任务可能走偏"],
         "estimated_time": "5-15 分钟",
         "suitability": "常规任务",
         "missing_tools": [],
     }, {
         "id": 1, "name": "方案B: 分步确认",
-        "approach": "每步执行前先展示计划",
+        "approach": "每步执行前先展示计划，你确认后才继续",
+        "tools_needed": [],
+        "steps": [
+            "1. 搜索相关信息并展示结果",
+            "2. 等你确认搜索方向正确",
+            "3. 执行第一步操作",
+            "4. 等你确认结果",
+            "5. 继续后续步骤",
+        ],
         "pros": ["可控", "可随时中断"],
         "cons": ["慢", "需要频繁确认"],
         "estimated_time": "15-30 分钟",
@@ -654,7 +676,13 @@ def _generic_plans(intent, env, installed) -> List[Dict[str, Any]]:
         "missing_tools": [],
     }, {
         "id": 2, "name": "方案C: 仅出方案不执行",
-        "approach": "只搜索最佳实践输出详细步骤",
+        "approach": "只搜索最佳实践输出详细步骤，不自动执行",
+        "tools_needed": [],
+        "steps": [
+            "1. 搜索最佳实践",
+            "2. 分析并整理成可执行文档",
+            "3. 输出 Markdown 格式方案",
+        ],
         "pros": ["最安全", "适合学习"],
         "cons": ["不会自动执行"],
         "estimated_time": "2-5 分钟",
