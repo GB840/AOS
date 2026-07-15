@@ -29,6 +29,24 @@
 
 ---
 
+## 0.5 基线快照（2026-07-16，用户主机真跑数据）
+
+> 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
+> 此节应由 CI 每次 commit 自动更新（目标状态）；当前为手工维护。
+
+| 项 | 数值 | 备注 |
+|----|------|------|
+| 适配器总数 | 19 | openclaw/ag2/litellm/mem0/browser-use/langfuse/web-search/web-fetch/agnes/code-exec/file-io/threejs/stt/tts/lnn/lfm2/scripts/codebase-memory-mcp/orchestrator |
+| live | 14 | web-search/web-fetch/agnes/code-exec/file-io/threejs/stt/tts/lnn/scripts/codebase-memory-mcp/orchestrator/browser-use/langfuse |
+| dead | 5 | openclaw(port_down 127.0.0.1:18789) / ag2(依赖未就绪) / litellm(import timeout 8s) / mem0(import hung) / lfm2(weights_ready=False) |
+| 测试 | ~401 collected / ~393 pass / ~4 fail | legacy 测试失败已知勿修(test_database/test_memory) |
+| 覆盖率 | ~41% | 目标 50%（kernel/ 80%，core/fabric/ 60%，§5 质量门） |
+| brain.fabric | init 失败 | `'NoneType' object has no attribute '__name__'` — 双轨未合 |
+| Chiplet 闸门1 | FAIL | search/openclaw 超 300ms 阈值 |
+| Chiplet 闸门2/3 | PASS | IPC 隔离 + 故障恢复正常 |
+
+---
+
 ## 1. 九大核心理念（AOS 宪法序言）
 
 以下九条是 AOS 存在的理由。任何改动若违背，无论技术多漂亮，都是错的。
@@ -151,29 +169,42 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
 
 - **FabricHub 是唯一内核**，统一持有并调度：**路由 / 记忆 / 上下文主权**。谁都别自己乱管。
   - 代码：`src/kernel/plugins/fabric_hub.py`
+  - ⚠️ 当前 `UnifiedBrain()` 的 fabric 组件 init 失败（`'NoneType' object has no attribute '__name__'`）——
+    kernel 层 FabricHub 干净，但 brain 层 fabric 链路断。双轨未合，方向是统一到 FabricHub。
 - **Chiplet（芯粒）= 被调度的隔离计算单元**。重型/多模态引擎（agnes/ag2）默认跑在**独立子进程**，
   崩溃不传染宿主，可热备切换。这是"故障隔离（crash boundary）"，**不是**自治多 Agent 分解。
 - **按能力（Capability）发现引擎，不按名字**。换任何引擎都不碰核心逻辑。
   - 代码：`src/core/fabric/capability.py`、`src/core/fabric/registry.py`
 - **引擎无关契约**：所有适配器实现 `BaseAgentAdapter`（`src/core/fabric/adapter.py`）。
+- **新增适配器/引擎/芯粒前必须先跑 §10 Ponytail 七级阶梯**，把每级答案贴在 PR 描述中。
 - **对外出口 = 标准 MCP server**（`src/mcp/protocol.py`）：`aos_list_engines / aos_route / aos_invoke_engine`。
 - **编排器**：`OrchestrationChiplet`（`src/kernel/plugins/orchestration_chiplet.py`）真流水线执行器，
   `steps[]` 逐跳经 hub 路由，上一步输出喂下一步；支持 `parallel_groups` 组内并发。
 - **think→do 闭环已收口**：`run_task(planner='ag2')` — ag2 规划文本 → 解析成带 `[AOS能力]` 标签的 steps → 逐跳执行。
 
-**实际注册引擎名**：openclaw / litellm / mem0 / browser-use / langfuse / orchestrator / agnes / ag2 / web-search。
+**实际注册引擎名（19个，按 health_report() 真跑数据）**：
+openclaw / ag2 / litellm / mem0 / browser-use / langfuse / web-search / web-fetch /
+agnes / code-exec / file-io / threejs / stt / tts / lnn / lfm2 / scripts /
+codebase-memory-mcp / orchestrator。
 （CodeWhale / IMA / mistralrs / Page-Agent 是外部愿景，非当前注册名，不要在代码里当真实引擎引用。）
 
 ---
 
 ## 3. 反模式（血训，见到就改，别再犯）
 
-- ❌ **路由只取 `providers[0]` 就停** — 必须遍历所有 live 供给方做故障转移（已在 `route()` 落地，勿回退）。
-- ❌ **把能力焊死在付费远程 key 上** — 见哲学第 4 条。mem0 默认 `AOS_MEM0_LOCAL=1` 走本地。
+以下每条❌附修复证据（file:line），保证读 AGENTS.md 的 AI 可 grep 验证：
+
+- ❌ **路由只取 `providers[0]` 就停** — 必须遍历所有 live 供给方做故障转移。
+  - 修复：`fabric_hub.py:225-273` `route()` 35 行遍历 + 失败跳下一个 + 合并 last_res
+- ❌ **把能力焊死在付费远程 key 上** — 见理念第 4 条。mem0 默认 `AOS_MEM0_LOCAL=1` 走本地。
 - ❌ **虚报能力** — 适配器 `advertise_capabilities()` 只声明它**真能干**的（如 openclaw 只 `CHANNEL_ACCESS`）。
 - ❌ **喂 legacy 双轨** — brain.py / deerflow / swarm_flow / hermes / lemon_orchestrator 是待退役老栈，
-  与 FabricHub 互不打通。**新功能一律进 FabricHub**，不要往 legacy 加料。方向是灭双轨、以 FabricHub 为唯一运行时。
-- ❌ **故障转移丢上游 data** — 全部失败时要返回最后一个供给方的真实结果（保留 trace/ok_steps），不能合成 `data=None`。
+  与 FabricHub 互不打通。**新功能一律进 FabricHub**，不要往 legacy 加料——
+  当前 `brain.fabric` init 失败（`'NoneType' has no attribute '__name__'`），即双轨未合的证据。
+- ❌ **故障转移丢上游 data** — 全部失败时返回最后一个供给方的真实结果（保留 trace/ok_steps），不能合成 `data=None`。
+  - 修复：`fabric_hub.py:228-243` `last_res is not None` 时保留 `data=last_res.data`
+- ❌ **async handler 内调同步阻塞代码** — `main.py` 多处仍在 `async def` 里用同步调用。
+  - 已知违规：`main.py:722-744` / `766-809` / `843-876` / `1389` / `1670-1719`（5 处，见 §5 引用）
 
 ---
 
@@ -208,7 +239,7 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
 - 风格：PEP 8 + Google docstrings，行宽 120，import 顺序 stdlib→third_party→local。
 - 命名：类 `PascalCase`，函数 `snake_case`，常量 `UPPER_SNAKE_CASE`，私有 `_lead`。
 - 单例：模块级 `_instance` + `get_X()` 工厂。错误处理：log 到 WARNING，不静默崩溃。
-- 禁止：`exec/eval` 用户输入、硬编码密钥、async 里阻塞、`print` 当日志、可变默认参数、`__init__.py` 里 import src。
+- 禁止：`exec/eval` 用户输入、硬编码密钥、async 里阻塞（已知违规 5 处，见 §3 反模式）、`print` 当日志、可变默认参数、`__init__.py` 里 import src。
 
 **质量门（提交前自检）：**
 - `ruff check src/ tests/` → 0 error
@@ -216,7 +247,8 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
 - 相关子集 `pytest tests/<相关文件>` 全绿；不确定回归时跑更大范围。
   > 对照：Qoder testing 规则1「测试完整性」、规则3「测试分层」
   > （`references/standards/qoder-rules/quality/testing-spec.zh-CN.md` 规则1 / 3）
-  > 覆盖率基线不倒退 ↔ Qoder testing 规则2「覆盖率目标」
+  > 覆盖率基线不倒退：`kernel/` ≥ 80%，`core/fabric/` ≥ 60%，总覆盖率 ≥ 50%（当前 ~41%，差 9pp）。
+  > ↔ Qoder testing 规则2「覆盖率目标」
 - 真实可跑不弄虚 ↔ Qoder 规则10「确保代码成功编译」、规则6「验证 API 存在」、规则13「只用真实库」
   （`references/standards/qoder-rules/core/requirements-spec.zh-CN.md` 规则10 / 6 / 13）
 - 已知 legacy 债勿误修：`test_database::test_persistence_bridge_on_unified_db`、`test_memory`
@@ -250,7 +282,12 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
   sentence-transformers）。本机 sentence_transformers / ollama / chromadb 已装齐。
 - **推理本地**：mistralrs / ollama 已在 wiring 设计好，启用即用。
 - **绘图**：openclaw 是**本地自托管网关**（127.0.0.1:18789，MIT 免费）。`openclaw gateway run` 或 adapter 的
-  `ensure_gateway()` 自起。openclaw dead 唯一根因＝网关没跑。
+  `ensure_gateway()` 自起。当前 dead 引擎 5 个及根因：
+  - **openclaw** — port_down 127.0.0.1:18789（网关没跑）
+  - **ag2** — 依赖未就绪（autogen import 超时或 ZHIPU_API_KEY 缺失）
+  - **litellm** — guarded_import: litellm unavailable (timeout=8.0s)
+  - **mem0** — import_missing: mem0 unavailable (import hung or missing)
+  - **lfm2** — weights_ready=False（需 HuggingFace 下载权重）
 - **搜索**：AnySearch（免 key）+ 百度/Bing HTML（国内最稳）已多源兜底，不花钱。
 
 ## 8. 生态集成（万物为我所用 —— 5 款真实产品经 MCP 接入）

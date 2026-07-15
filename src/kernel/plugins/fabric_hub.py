@@ -356,6 +356,14 @@ class FabricHub:
             )
         return InvokeResult(
             ok=False,
+            data={
+                "capability": capability,
+                "attempts": attempts,
+                "engine_errors": {
+                    eid: self._errors.get(eid, "unknown")
+                    for eid in [a.split(":")[0].strip() for a in attempts]
+                },
+            },
             error=f"all providers raised [{capability}]: " + " | ".join(attempts),
         )
 
