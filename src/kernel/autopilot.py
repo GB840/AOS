@@ -1,0 +1,294 @@
+"""AOS 自主闭环（Autopilot）：一句话任务 → 自己搜 → 自己装 → 回来汇报。
+
+把 ag2 规划 + plan_bridge 解析 + OrchestrationChiplet 编排 + 真实适配器
+（搜索 / 代码执行 / LLM 推理 / 记忆）串成一条自给自足的管道。
+
+使用方式：
+  python -m kernel.autopilot "在本地装好 ffmpeg 并验证"
+  python -m kernel.autopilot "搜索最新的开源语音识别模型并评估是否适合 Windows"
+
+设计原则：
+  - 零依赖 FabricHub 全量构造（不拖 deerflow / 127 个适配器注册的慢启动）
+  - 所有适配器按需惰性初始化
+  - ag2 不可用时透明降级 heuristic planner
+  - 执行结果清晰可读（不堆 raw JSON）
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import sys
+import time
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+# ---- 适配器惰性单例 ------------------------------------------------
+
+_search: Any = None
+_code_exec: Any = None
+_ag2: Any = None
+
+
+def _get_search():
+    global _search
+    if _search is None:
+        from core.fabric.adapters.search_adapter import SearchAdapter
+        _search = SearchAdapter()
+    return _search
+
+
+def _get_code_exec():
+    global _code_exec
+    if _code_exec is None:
+        from core.fabric.adapters.code_execution_adapter import CodeExecutionAdapter
+        _code_exec = CodeExecutionAdapter()
+    return _code_exec
+
+
+def _get_ag2():
+    global _ag2
+    if _ag2 is None:
+        from core.fabric.adapters.ag2_adapter import AG2Adapter
+        _ag2 = AG2Adapter()
+    return _ag2
+
+
+# ---- 路由胶水 --------------------------------------------------
+
+def _route(capability: str, payload: Dict[str, Any]) -> Any:
+    """把 OrchestrationChiplet 的能力调用派发给真实适配器。"""
+    from core.fabric.adapter import InvokeRequest, InvokeResult
+    from core.fabric.capability import Capability
+
+    if capability == "web.search":
+        ad = _get_search()
+        # 从各种可能的 payload 字段里提取搜索查询
+        query = payload.get("query") or payload.get("task") or ""
+        if not query and "content" in payload:
+            query = str(payload.get("content", ""))
+        query = query.strip()[:300]
+        if not query:
+            return InvokeResult(ok=False, error="autopilot: 搜索步缺少查询词")
+        return ad.invoke(InvokeRequest(
+            capability="web.search",
+            payload={"type": "search", "query": query, "count": 5},
+        ))
+
+    if capability == "action.code_exec":
+        ad = _get_code_exec()
+        code = payload.get("code") or payload.get("task") or ""
+        if not code and "content" in payload:
+            code = str(payload.get("content", ""))
+        code = code.strip()[:2000]
+        if not code:
+            return InvokeResult(ok=False, error="autopilot: 代码执行步缺少代码")
+        return ad.invoke(InvokeRequest(
+            capability="action.code_exec",
+            payload={"code": code, "language": _guess_language(code)},
+        ))
+
+    if capability in ("inference.llm", "cognition.reasoning", "cognition.planning"):
+        ag2 = _get_ag2()
+        from core.fabric.capability import Capability
+        topic = payload.get("task") or payload.get("content") or payload.get("text") or "处理上游结果"
+        if len(topic) > 1000:
+            topic = topic[:1000]
+        return ag2.invoke(InvokeRequest(
+            capability=Capability.GROUP_ORCHESTRATION.value,
+            payload={"text": topic},
+        ))
+
+    if capability == "memory.semantic":
+        return InvokeResult(ok=True, data={"content": "memory not yet wired in autopilot"})
+
+    return InvokeResult(ok=False, error=f"autopilot: 不支持的能力 {capability}")
+
+
+def _guess_language(code: str) -> str:
+    """从代码内容推测语言。"""
+    low = code.strip().lower()
+    if low.startswith(("echo ", "ls ", "pip ", "npm ", "apt ", "brew ", "choco ", "winget ")):
+        return "bash"
+    if any(kw in low for kw in ("function", "const ", "let ", "var ", "console.")):
+        return "javascript"
+    return "bash"  # 默认 bash（安装/系统命令最常见）
+
+
+# ---- 主入口 ------------------------------------------------------
+
+def run(task: str, planner: str = "ag2") -> Dict[str, Any]:
+    """执行一个自主任务。
+
+    Args:
+        task: 自然语言任务（如 "安装 ffmpeg 并验证"）
+        planner: "ag2"（LLM 规划，需智谱 key）或 "heuristic"（纯本地关键词）
+
+    Returns:
+        {
+            "task": str,
+            "planner": str,
+            "plan": str | None,
+            "steps": [...],
+            "execution": {ok_steps, failed_steps, trace, final},
+            "duration_s": float,
+        }
+    """
+    from core.fabric.adapter import InvokeRequest, InvokeResult
+    from core.fabric.capability import Capability
+    from kernel.plugins.plan_bridge import parse_plan_to_steps, heuristic_plan
+    from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
+
+    start = time.time()
+    caps = [
+        "web.search", "action.code_exec", "inference.llm",
+        "memory.semantic", "cognition.reasoning", "cognition.planning",
+    ]
+
+    # ---- 1. 规划 ----
+    plan_text: Optional[str] = None
+    steps: List[Dict[str, Any]] = []
+    used_planner = planner
+
+    if planner == "ag2":
+        try:
+            ag2 = _get_ag2()
+            if ag2.health():
+                res = ag2.invoke(InvokeRequest(
+                    capability=Capability.PLANNING.value,
+                    payload={"topic": task},
+                ))
+                if isinstance(res, InvokeResult) and res.ok and res.data:
+                    plan_text = (res.data.get("plan") or "").strip() or None
+                    if plan_text:
+                        steps = parse_plan_to_steps(plan_text, caps)
+        except Exception:
+            logger.warning("ag2 规划失败，降级 heuristic", exc_info=True)
+
+    if not steps:
+        steps = heuristic_plan(task, caps)
+        used_planner = "heuristic"
+        plan_text = None
+
+    if not steps:
+        return {
+            "task": task, "planner": used_planner,
+            "error": "无法生成任何执行步骤",
+            "duration_s": round(time.time() - start, 1),
+        }
+
+    # ---- 2. 执行 ----
+    oc = OrchestrationChiplet(route_fn=_route)
+    exe_res = oc.invoke(InvokeRequest(
+        capability="workflow.execute",
+        payload={"initial": {"task": task}, "steps": steps},
+    ))
+
+    data = exe_res.data if isinstance(exe_res, InvokeResult) else {}
+    duration = round(time.time() - start, 1)
+
+    # ---- 3. 汇总 ----
+    # 提取最后成功的输出
+    final = None
+    for t in reversed(data.get("trace", [])):
+        if t.get("ok") and t.get("output") is not None:
+            final = str(t.get("output", ""))[:500]
+            break
+
+    return {
+        "task": task,
+        "planner": used_planner,
+        "plan": plan_text,
+        "steps": [
+            {"capability": s["capability"], "in": s.get("in", s.get("in_from", ""))}
+            for s in steps
+        ],
+        "execution": {
+            "ok_steps": data.get("ok_steps", 0),
+            "failed_steps": data.get("failed_steps", 0),
+            "trace": [
+                {
+                    "step": t.get("step"),
+                    "capability": t.get("capability", ""),
+                    "ok": t.get("ok"),
+                    "summary": str(t.get("summary", t.get("output", "")))[:200],
+                }
+                for t in data.get("trace", [])
+            ],
+            "final": final,
+        },
+        "duration_s": duration,
+    }
+
+
+# ---- CLI ---------------------------------------------------------
+
+def _print_result(r: Dict[str, Any]) -> None:
+    """友好打印执行结果。"""
+    exe = r.get("execution", {})
+    trace = exe.get("trace", [])
+
+    print(f"\n{'='*60}")
+    print(f"任务: {r['task']}")
+    print(f"规划器: {r['planner']}")
+    print(f"耗时: {r['duration_s']}s")
+    print(f"结果: {exe.get('ok_steps',0)} 步成功, {exe.get('failed_steps',0)} 步失败")
+    print(f"{'='*60}")
+
+    if r.get("plan"):
+        print(f"\n--- AG2 规划 ---")
+        for line in r["plan"].split("\n"):
+            if line.strip():
+                print(f"  {line.strip()}")
+
+    print(f"\n--- 执行步骤 ---")
+    for i, s in enumerate(r.get("steps", [])):
+        cap = s["capability"]
+        t = trace[i] if i < len(trace) else {}
+        ok = "✅" if t.get("ok") else "❌"
+        summary = t.get("summary", "").replace("\n", " ")[:120]
+        print(f"  {i+1}. [{cap}] {ok} {summary}")
+
+    final = exe.get("final")
+    if final:
+        print(f"\n--- 最终输出 ---")
+        print(f"  {final}")
+
+    if r.get("error"):
+        print(f"\n--- 错误 ---")
+        print(f"  {r['error']}")
+
+
+def main() -> None:
+    """CLI 入口：python -m kernel.autopilot "<任务描述>"
+
+    环境要求：
+      - .env 中 ZHIPU_API_KEY 已配置（ag2 规划必需）
+      - 可选：AOS_LLM_MODEL / AOS_LLM_BASE_URL 覆盖默认智谱 glm-4-flash
+    """
+    if len(sys.argv) < 2:
+        print("用法: python -m kernel.autopilot \"<任务描述>\"")
+        print("示例:")
+        print('  python -m kernel.autopilot "搜索 Python requests 最新版本并安装"')
+        print('  python -m kernel.autopilot "在 Windows 上安装 ffmpeg"')
+        sys.exit(1)
+
+    task = " ".join(sys.argv[1:])
+    print(f"🚀 AOS 自主执行: {task}")
+
+    # 自动加载 .env
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+    except Exception:
+        pass
+
+    r = run(task)
+    _print_result(r)
+
+
+if __name__ == "__main__":
+    main()
