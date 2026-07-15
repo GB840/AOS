@@ -9,7 +9,7 @@ import os
 import logging
 import uuid
 import asyncio
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,9 @@ class ViMaxSubagent:
                 logger.info(f"ViMax 任务执行成功: {result.get('task_id')}")
             else:
                 logger.warning(f"ViMax 任务执行失败: {result.get('error')}")
+            # 结构化交接（opt-in）：跑完自动存 IMA。仅真实执行路径到达此处——
+            # 模拟模式已在 handle 前置分支直接返回，不会把模拟结果当真交接（不弄虚）。
+            self._maybe_store_handoff(input_data, result)
             return result
         except Exception as e:
             logger.error(f"ViMax 子智能体执行失败: {e}", exc_info=True)
@@ -121,6 +124,49 @@ class ViMaxSubagent:
         result = await loop.run_in_executor(None, self._skill.execute, input_data)
         return result
     
+    def _maybe_store_handoff(self, input_data: Dict[str, Any], result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """opt-in 结构化交接：ViMax 任务跑完自动把执行事实存 IMA 知识库。
+
+        仅在 input_data 显式带 auto_handoff=True 且任务成功时触发；IMA 未配置或
+        写失败仅告警，绝不阻断主流程。模拟模式不会到达此处（handle 前置分支已
+        拦截），故不会把模拟结果写成真交接（不弄虚）。
+        """
+        if not input_data.get("auto_handoff") or not result.get("success"):
+            return None
+        try:
+            from core.fabric.handoff import HandoffEnvelope, store_handoff
+            workflow = input_data.get("workflow", "unknown")
+            task_id = (result.get("task_id") or input_data.get("task_id")
+                       or f"vimax-{uuid.uuid4().hex[:8]}")
+            res = result.get("result") or {}
+            envelope = HandoffEnvelope(
+                task_id=str(task_id),
+                title=f"ViMax {workflow}",
+                summary=f"ViMax 工作流 {workflow} 执行完成，状态 {result.get('status')}。",
+                confirmed_facts=[
+                    f"workflow={workflow}",
+                    f"task_id={task_id}",
+                    f"status={result.get('status')}",
+                    f"video_url={result.get('video_url') or res.get('video_url') or 'N/A'}",
+                ],
+                assumptions=["ViMax SDK 已安装并真实执行（非模拟模式）"],
+                risk_boundary=["交接仅记录执行事实，不保证成片质量",
+                               "video_url 有效性需下游核验"],
+                open_questions=["是否需要后续剪辑/发布步骤"],
+                handoff_to=input_data.get("handoff_to", "下一手会话/人"),
+                source=f"ViMaxSubagent.handle({workflow})",
+                tags=["handoff", "vimax", workflow],
+            )
+            store_res = store_handoff(envelope)
+            if store_res.get("success"):
+                logger.info("ViMax 自动交接已存 IMA: %s", store_res.get("result"))
+            else:
+                logger.warning("ViMax 自动交接存 IMA 失败: %s", store_res.get("error"))
+            return store_res
+        except Exception as e:
+            logger.warning("ViMax 自动交接异常（不影响主流程）: %s", e)
+            return None
+
     def _handle_mock(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         模拟模式处理 — 当 ViMax SDK 未安装时返回模拟结果

@@ -70,6 +70,9 @@ class HandoffEnvelope:
         读回时常把 '- ' 转成 '* '），元信息值可能带反引号。解析确定性、不抛异常、未知留空。
         """
         import re
+        # IMA 的 Markdown 存储/读回会把字面下划线转义为 '\_'（避免被当作斜体标记）。
+        # 这里反转移，恢复信封原始语义（task_id / video_url 等字段名与值都含下划线）。
+        md = (md or "").replace("\\_", "_")
         title = ""
         task_id = source = handoff_to = created_at = ""
         tags: List[str] = []
