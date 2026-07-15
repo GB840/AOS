@@ -178,6 +178,13 @@ class OrchestrationChiplet(BaseAgentAdapter):
             if step_prompt:
                 prev_text = extract_text(payload) if isinstance(payload, dict) else str(payload)
                 payload = {"prompt": f"{step_prompt}\n\n上游产出:\n{prev_text}"}
+            # 如果步骤带 instruction（ag2 规划的干净指令），注入 payload
+            # 供下游（如 code_exec）优先使用，因为 in_from:previous 给的是
+            # 上一步的原始输出（如搜索结果），不一定是可执行命令。
+            instruction = step.get("instruction")
+            if instruction and isinstance(payload, dict) and "instruction" not in payload:
+                payload = dict(payload)
+                payload["instruction"] = instruction
         elif step.get("in_from") == "initial":
             field = step.get("field")
             with state.lock:

@@ -82,7 +82,8 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
 
     if capability == "action.code_exec":
         ad = _get_code_exec()
-        code = payload.get("code") or payload.get("task") or ""
+        # 优先用 ag2 规划的干净指令（如 "winget install ffmpeg"）
+        code = payload.get("instruction") or payload.get("code") or payload.get("task") or ""
         if not code and "content" in payload:
             code = str(payload.get("content", ""))
         # 如果内容是推理步的冗长输出，尝试从中提取可执行命令

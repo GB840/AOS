@@ -212,7 +212,10 @@ def parse_plan_to_steps(plan_text: str, available_caps: List[str]) -> List[Dict[
         if i == 0:
             steps.append({"capability": cap, "in": {"task": clean}})
         else:
-            steps.append({"capability": cap, "in_from": "previous"})
+            # in_from: previous 时也保留 clean 指令作 fallback——
+            # 如果上一步输出是不可执行文本（如搜索结果），
+            # 下游可用 clean 覆盖之（如 code_exec 拿 ag2 给出的 winget install 命令）
+            steps.append({"capability": cap, "in_from": "previous", "instruction": clean})
     return steps
 
 

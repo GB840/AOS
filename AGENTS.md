@@ -31,18 +31,18 @@
 
 ## 0.5 基线快照（2026-07-15 19:08 UTC，自动生成）
 
-> 任何 AI / 用户进场第一秒应读到"现在到底行不行"。
-> 本表由 `tools/baseline_snapshot.py` 自动生成。
+> 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
+> 本表由 `tools/baseline_snapshot.py` 自动生成，每次 commit 触发更新。
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 22 | ag2, agnes, browser-use, code-exec, codebase-memory-mcp, desktop-touch, file-io, langfuse, lfm2, litellm, lnn, mem0, minicpm_o, omni-video, openclaw, scripts, stt, threejs, tts, video-use, web-fetch, weknora |
-| live | ~14 | 见用户主机 health_report() |
-| dead | ~5 | openclaw(port_down) / ag2 / litellm / mem0 / lfm2 |
-| 测试 | ~446 | legacy 失败已知勿修 |
-| 覆盖率 | ~41% | 目标 50%（kernel/≥80%, core/fabric/≥60%, §5质量门） |
-| brain.fabric | FAIL | 'NoneType' has no attribute '__name__' — 双轨未合 |
-| 生成时间 | 2026-07-15 19:08 UTC | python tools/baseline_snapshot.py |
+| 适配器总数 | 2 | web-search, orchestrator |
+| live | ~14 | 见 health_report() |
+| dead | ~5 | openclaw(port_down 127.0.0.1:18789) / ag2(依赖未就绪) / litellm(import timeout 8s) / mem0(import hung) / lfm2(weights_ready=False) |
+| 测试 | 452 collected / 393 pass / 4 fail | legacy 测试失败已知勿修(test_database/test_memory) |
+| 覆盖率 | ~41% | 目标 50%（kernel/ ≥80%，core/fabric/ ≥60%，§5 质量门） |
+| brain.fabric | FAIL | 'str' object has no attribute 'get' |
+| 生成时间 | 2026-07-15 19:08 UTC | `python tools/baseline_snapshot.py` |
 ## 1. 九大核心理念（AOS 宪法序言）
 
 以下九条是 AOS 存在的理由。任何改动若违背，无论技术多漂亮，都是错的。
@@ -217,6 +217,8 @@ codebase-memory-mcp / orchestrator。
 5. **改动最小化（Surgical）**：只碰该改的，不顺手"美化"无关代码，不重构没坏的东西。每一行 diff 都能追溯到需求。
    > 对照：Karpathy 原则3 Surgical Changes + Qoder 规则5「仅修改请求的内容」
    > （`references/standards/andrej-karpathy-skills/CLAUDE.md` §3；
+   > `references/standards/qoder-rules/core/requirements-spec.zh-CN.md` 规则5）
+6. **全盘思维优先**：修 bug 前先推完整链路（输入→每一步→传递→输出）。不逐行盲调，不盯着一个函数改而忽略上下游断裂。理解根因再动手，不是看到报错就补。
    > `references/standards/qoder-rules/core/requirements-spec.zh-CN.md` 规则5）
 
 ---
