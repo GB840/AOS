@@ -216,11 +216,9 @@ def install_missing(tool_name: str) -> Tuple[bool, str]:
 # ---- 意图解读 -------------------------------------------------
 
 def analyze_intent(user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
-    """解读用户意图——读链接、文件、上下文，提取完整需求。
+    """解读用户意图——LLM 驱动 + 本地文件扫描 + 意图不明时标记需澄清。
 
-    返回结构化意图：
-      {type, domain, goal, reference_url, reference_content,
-       constraints, complexity, estimated_phases}
+    返回结构化意图。若 needs_clarification=True，Phase 1 会反问用户。
     """
     intent = {
         "raw": user_input,
@@ -229,13 +227,19 @@ def analyze_intent(user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
         "goal": user_input,
         "reference_urls": [],
         "reference_type": None,
+        "needs_clarification": False,
+        "clarification_question": "",
+        "local_context": {},
     }
 
     # 提取 URL
     urls = re.findall(r"https?://[^\s]+", user_input)
     intent["reference_urls"] = urls
 
-    # 判断任务类型
+    # 如果是本地路径/盘符 → 扫描文件系统
+    _scan_local(intent, user_input)
+
+    # URL 类型识别
     if urls:
         url = urls[0].lower()
         if any(d in url for d in ["youtube.com", "youtu.be", "bilibili.com", "b23.tv"]):
@@ -243,8 +247,18 @@ def analyze_intent(user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
             intent["domain"] = "video_production"
             intent["reference_type"] = "video"
             intent["goal"] = _extract_goal_from_input(user_input)
-            # 尝试下载/分析视频内容
-            intent["reference_content"] = _fetch_url_content(urls[0])
+            # 视频分析需要澄清：做什么类型的视频？
+            if not _has_clear_action(user_input):
+                intent["needs_clarification"] = True
+                intent["clarification_question"] = (
+                    "你想用这个视频做什么？\n"
+                    "  a) 模仿它的风格做类似视频\n"
+                    "  b) 提取它的脚本/文字\n"
+                    "  c) 分析它的剪辑手法\n"
+                    "  d) 其他（请描述）"
+                )
+            else:
+                intent["reference_content"] = _fetch_url_content(urls[0])
         elif any(d in url for d in ["github.com", "gitlab.com"]):
             intent["type"] = "code_analysis"
             intent["domain"] = "software"
@@ -253,22 +267,191 @@ def analyze_intent(user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
         else:
             intent["type"] = "web_reference"
             intent["reference_content"] = _fetch_url_content(urls[0])
-    elif any(kw in user_input for kw in ["视频", "剪辑", "拍摄", "短视频", "vlog"]):
-        intent["type"] = "video_production"
-        intent["domain"] = "video_production"
-    elif any(kw in user_input for kw in ["部署", "上线", "服务器", "docker"]):
-        intent["type"] = "deployment"
-        intent["domain"] = "devops"
-    elif any(kw in user_input for kw in ["装", "安装", "install", "setup"]):
-        intent["type"] = "installation"
-        intent["domain"] = "system"
+    else:
+        # 无 URL：关键词 + LLM 联合判断
+        intent = _llm_analyze_intent(intent, user_input, env)
 
     # 评估复杂度
     has_video = intent["type"] == "video_production" or intent["reference_type"] == "video"
-    has_gpu = bool(env.get("gpu"))
-    intent["complexity"] = "high" if has_video else "medium"
+    intent["complexity"] = "high" if has_video else ("medium" if has_video else "low")
     intent["estimated_phases"] = 5 if has_video else 3
 
+    return intent
+
+
+def _scan_local(intent: Dict[str, Any], user_input: str) -> None:
+    """扫描用户提到的本地路径/盘符，返回文件统计。"""
+    # 匹配盘符或路径
+    path_patterns = [
+        r"([A-Za-z])\s*[盘:]",      # D盘 / D:
+        r"([A-Za-z]:[/\\]\S*)",      # D:\path
+    ]
+    target = None
+    for pat in path_patterns:
+        m = re.search(pat, user_input)
+        if m:
+            target = m.group(1) if "盘" in pat else m.group(0).rstrip(".,;")
+            break
+
+    if not target:
+        return
+
+    # 如果只是盘符 → 补全为根目录
+    if len(target) == 1:
+        target = target + ":\\"
+
+    scan_result = _scan_directory(target)
+    if scan_result:
+        intent["local_context"] = scan_result
+        # 根据文件类型推断意图
+        by_type = scan_result.get("by_type", {})
+        if by_type.get(".jpg", 0) + by_type.get(".png", 0) + by_type.get(".gif", 0) > 10:
+            intent["needs_clarification"] = True
+            total_imgs = by_type.get(".jpg", 0) + by_type.get(".png", 0) + by_type.get(".gif", 0)
+            intent["clarification_question"] = (
+                f"检测到 {target} 下有约 {total_imgs} 张图片 + 其他文件。你想：\n"
+                "  a) 整理分类这些文件\n"
+                "  b) 把图片做成视频\n"
+                "  c) 压缩打包\n"
+                "  d) 查找重复文件\n"
+                "  e) 其他（请描述）"
+            )
+        elif by_type.get(".mp4", 0) + by_type.get(".avi", 0) + by_type.get(".mov", 0) > 0:
+            intent["needs_clarification"] = True
+            total_vid = by_type.get(".mp4", 0) + by_type.get(".avi", 0) + by_type.get(".mov", 0)
+            intent["clarification_question"] = (
+                f"检测到 {target} 下有约 {total_vid} 个视频文件。你想：\n"
+                "  a) 剪辑/合并视频\n"
+                "  b) 转换格式\n"
+                "  c) 提取音频\n"
+                "  d) 压缩视频\n"
+                "  e) 其他（请描述）"
+            )
+
+
+def _scan_directory(path: str) -> Optional[Dict[str, Any]]:
+    """扫描目录，返回文件统计。大目录只扫浅层，防卡死。"""
+    try:
+        if not os.path.exists(path):
+            return {"error": f"路径不存在: {path}", "exists": False}
+
+        # 磁盘根目录只扫直接子项（不递归），否则 os.walk 在 D:\ 会卡几分钟
+        is_root = len(path) <= 3 and path[1] == ":"
+
+        files = []
+        by_type: Dict[str, int] = {}
+        total_size = 0
+        start = time.time()
+        max_time = 5  # 最多 5 秒
+        max_depth = 0 if is_root else 2
+
+        for root, dirs, filenames in os.walk(path):
+            if time.time() - start > max_time:
+                break
+            depth = root.replace(path, "").count(os.sep)
+            if depth > max_depth:
+                del dirs[:]
+                continue
+            for f in filenames:
+                if time.time() - start > max_time:
+                    break
+                fp = os.path.join(root, f)
+                try:
+                    size = os.path.getsize(fp)
+                except OSError:
+                    continue
+                ext = os.path.splitext(f)[1].lower() or "(无扩展名)"
+                by_type[ext] = by_type.get(ext, 0) + 1
+                total_size += size
+                if len(files) < 10:
+                    files.append({"name": f, "ext": ext, "size": size, "path": fp})
+            if len(files) > 200:
+                break
+
+        top_types = sorted(by_type.items(), key=lambda x: x[1], reverse=True)[:15]
+        return {
+            "path": path,
+            "exists": True,
+            "total_files": len(files) if len(files) < 200 else "200+",
+            "total_size_mb": round(total_size / (1024 * 1024), 1),
+            "by_type": dict(top_types),
+            "sample_files": [f["name"] for f in files[:5]],
+        }
+    except Exception as e:
+        return {"error": str(e), "exists": False}
+
+
+def _has_clear_action(text: str) -> bool:
+    """检查输入是否包含明确操作指令。"""
+    action_kw = ["模仿", "做", "制作", "生成", "创建", "分析", "提取", "下载",
+                 "make", "create", "generate", "analyze", "download", "仿"]
+    return any(kw in text.lower() for kw in action_kw)
+
+
+def _apply_clarification(intent: Dict[str, Any], answer: str) -> Dict[str, Any]:
+    """根据用户对澄清问题的回答，映射到正确的意图类型。
+
+    用户回答可能是 a/b/c/d/e，需要对照原始澄清问题中的选项来理解。
+    """
+    answer_lower = answer.strip().lower()
+    question = intent.get("clarification_question", "")
+
+    # 通用字母映射（基于常见澄清问题选项结构）
+    letter_map = {
+        "a": "file_ops",       # 整理分类
+        "b": "video_production",  # 做成视频 / 手动精调
+        "c": "file_ops",       # 压缩打包 / 转换格式
+        "d": "file_ops",       # 查找重复 / 压缩
+        "e": "unknown",        # 其他
+    }
+
+    if len(answer_lower) == 1 and answer_lower in letter_map:
+        intent["type"] = letter_map[answer_lower]
+        intent["domain"] = letter_map[answer_lower]
+        intent["needs_clarification"] = False
+        intent["goal"] = f"{intent.get('goal','')} — 用户选择了选项 {answer_lower.upper()}"
+    elif answer_lower in ("是", "yes", "y", "ok"):
+        intent["needs_clarification"] = False
+    else:
+        # 自由文本回答 → 已经合并在用户补充里了
+        intent["needs_clarification"] = False
+
+    return intent
+
+
+def _llm_analyze_intent(intent: Dict[str, Any], user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
+    """用 LLM 分析无 URL 的用户意图。LLM 不可用时回落关键词匹配。"""
+    # 先跑本地关键词快速判断
+    keyword_map = {
+        "video_production": ["视频", "剪辑", "拍摄", "短视频", "vlog", "画面", "字幕", "配音"],
+        "deployment": ["部署", "上线", "服务器", "docker", "k8s", "nginx"],
+        "installation": ["装", "安装", "install", "setup", "配置"],
+        "file_ops": ["整理", "分类", "删除", "移动", "压缩", "打包", "去重", "改名", "批量"],
+    }
+    for task_type, kws in keyword_map.items():
+        if any(kw in user_input for kw in kws):
+            intent["type"] = task_type
+            intent["domain"] = task_type
+            if task_type == "file_ops" and not _has_clear_action(user_input):
+                intent["needs_clarification"] = True
+                intent["clarification_question"] = (
+                    f"你想对文件做什么操作？\n"
+                    "  a) 按类型整理到不同文件夹\n"
+                    "  b) 批量重命名\n"
+                    "  c) 查找并删除重复文件\n"
+                    "  d) 压缩打包\n"
+                    "  e) 其他（请描述）"
+                )
+            return intent
+
+    # 关键词也不行 → 标记需澄清
+    intent["needs_clarification"] = True
+    intent["clarification_question"] = (
+        f"我没完全理解「{user_input[:60]}」具体要做什么。能再描述一下吗？比如：\n"
+        "  你想达到什么效果？\n"
+        "  涉及什么类型的文件/内容？\n"
+        "  有没有参考链接？"
+    )
     return intent
 
 
@@ -618,7 +801,7 @@ class WorkflowEngine:
     def phase4_execute(self, plan_index: int) -> Dict[str, Any]:
         """Phase 4: 执行选中方案。
 
-        先装缺失工具 → 执行步骤 → 出预览。
+        先装缺失工具 → 调用 autopilot 真执行 → 返回结果。
         """
         if plan_index < 0 or plan_index >= len(self.state.plans):
             return {"error": f"方案索引 {plan_index} 无效"}
@@ -635,14 +818,41 @@ class WorkflowEngine:
             if ok:
                 installed.append(tool)
 
-        # 执行（目前是 mock，Phase 4 的完整实现在后续迭代）
-        self.state.execution_result = {
-            "plan": plan["name"],
-            "plan_index": plan_index,
-            "missing_tools_installed": installed,
-            "status": "executed_preview_ready",
-            "preview_note": "预览已生成（Phase 4 完整实现在后续迭代）",
-        }
+        # 构建执行任务
+        goal = self.state.intent.get("goal", self.state.user_input)
+        steps_text = "\n".join(plan.get("steps", []))
+        task = f"执行方案「{plan['name']}」\n目标: {goal}\n步骤:\n{steps_text}"
+
+        # 真执行：调用 learning_loop（含失败重试+学习）
+        try:
+            from kernel.learning_loop import LearningLoop
+            loop = LearningLoop(max_retries=2)
+            result = loop.run(task, planner="ag2")
+            self.state.execution_result = {
+                "plan": plan["name"],
+                "plan_index": plan_index,
+                "missing_tools_installed": installed,
+                "status": "executed",
+                "autopilot_result": result,
+            }
+        except Exception as e:
+            logger.warning("LearningLoop 不可用，降级 autopilot: %s", e)
+            try:
+                from kernel.autopilot import run as autopilot_run
+                result = autopilot_run(task)
+                self.state.execution_result = {
+                    "plan": plan["name"],
+                    "plan_index": plan_index,
+                    "missing_tools_installed": installed,
+                    "status": "executed",
+                    "autopilot_result": result,
+                }
+            except Exception as e2:
+                self.state.execution_result = {
+                    "error": f"执行失败: {e2}",
+                    "status": "failed",
+                }
+
         self.save()
         return self.state.execution_result
 
@@ -711,38 +921,104 @@ def main() -> None:
         sys.exit(1)
 
     engine = WorkflowEngine()
+    env = probe_environment()
 
-    # Phase 1
-    _print_phase_header(1, "意图解读")
+    # ---- Phase 1: 意图解读（含澄清循环） ----
     intent = engine.phase1_intent(user_input)
+    while intent.get("needs_clarification"):
+        _print_phase_header(1, "意图解读 — 需要确认")
+        if intent.get("local_context"):
+            lc = intent["local_context"]
+            print(f"  📁 扫描 {lc.get('path')}: {lc.get('total_files')} 个文件, "
+                  f"{lc.get('total_size_mb')} MB")
+            by_type = lc.get("by_type", {})
+            if by_type:
+                top3 = sorted(by_type.items(), key=lambda x: x[1], reverse=True)[:5]
+                print(f"     文件类型: {', '.join(f'{ext}({n})' for ext, n in top3)}")
+            if lc.get("sample_files"):
+                print(f"     示例: {', '.join(lc['sample_files'][:5])}")
+        print(f"\n  ❓ {intent['clarification_question']}")
+        answer = input("\n  你的选择 (a/b/c/d/e 或直接描述): ").strip()
+        if not answer or answer.lower() == "q":
+            print("已退出")
+            sys.exit(0)
+        # 尝试用澄清映射把 a/b/c 解析成具体意图
+        intent = _apply_clarification(intent, answer)
+        if not intent.get("needs_clarification"):
+            break  # 映射成功，退出澄清循环
+        # 映射失败 → 合并用户补充到原始输入，重新分析
+        user_input = f"{user_input} —— 用户补充: {answer}"
+        intent = engine.phase1_intent(user_input)
+
+    _print_phase_header(1, "意图解读")
     print(f"  类型: {intent.get('type')}")
     print(f"  领域: {intent.get('domain')}")
     print(f"  目标: {intent.get('goal', '')[:100]}")
+    lc = intent.get("local_context", {})
+    if lc and lc.get("total_files"):
+        print(f"  本地: {lc.get('total_files')} 文件, {lc.get('total_size_mb')} MB")
     if intent.get("reference_content"):
         ref = str(intent["reference_content"])[:200]
         print(f"  参考: {ref}")
     input("\n  [Enter] 继续 → Phase 2 环境探测")
 
-    # Phase 2
+    # ---- Phase 2 ----
     _print_phase_header(2, "环境探测")
     env = engine.phase2_probe()
     print(f"  {format_env_report(env)}")
     input("\n  [Enter] 继续 → Phase 3 方案生成")
 
-    # Phase 3
+    # ---- Phase 3 ----
     _print_phase_header(3, "多方案提案")
     plans = engine.phase3_plans()
     _print_plans(plans)
 
-    choice = input(f"\n  选择方案 (0-{len(plans)-1}) 或 q 退出: ").strip()
+    choice = input(f"\n  选择方案 (A/B/C 或 0-{len(plans)-1}) 或 q 退出: ").strip()
     if choice.lower() == "q":
         print("已保存状态，下次可恢复")
         sys.exit(0)
-    try:
-        idx = int(choice)
-    except ValueError:
+    idx = _parse_choice(choice, len(plans))
+    if idx is None:
         print("无效选择")
         sys.exit(1)
+
+    # ---- Phase 4 ----
+    _print_phase_header(4, "执行")
+    print(f"  ⚡ 正在执行方案 {idx}「{plans[idx]['name']}」...")
+    result = engine.phase4_execute(idx)
+    if result.get("status") == "executed":
+        ar = result.get("autopilot_result", {})
+        print(f"  规划器: {ar.get('planner', '?')}")
+        exe = ar.get("execution", {})
+        print(f"  结果: {exe.get('ok_steps', 0)} 成功 / {exe.get('failed_steps', 0)} 失败")
+        print(f"  耗时: {ar.get('duration_s', ar.get('total_duration_s', '?'))}s")
+    else:
+        print(f"  ❌ 执行失败: {result.get('error', '未知错误')}")
+
+    approval = input("\n  审核通过？(y/n): ").strip().lower()
+    if approval == "y":
+        engine.confirm(True)
+        _print_phase_header(5, "多平台发布")
+        pub = engine.phase5_publish()
+        print(f"  {json.dumps(pub, ensure_ascii=False, indent=2)}")
+        print("\n✅ 工作流完成！")
+    else:
+        print("❌ 审核未通过，工作流暂停。状态已保存。")
+
+    print(f"\n状态文件: {engine.state_file}")
+
+
+def _parse_choice(choice: str, max_idx: int) -> Optional[int]:
+    """解析用户选择：支持 0/1/2 和 A/B/C/a/b/c。"""
+    choice = choice.strip().upper()
+    if choice in ("A", "B", "C", "D", "E", "F"):
+        idx = ord(choice) - ord("A")
+        return idx if idx < max_idx else None
+    try:
+        idx = int(choice)
+        return idx if 0 <= idx < max_idx else None
+    except ValueError:
+        return None
 
     # Phase 4
     _print_phase_header(4, "执行")
