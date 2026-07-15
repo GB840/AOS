@@ -85,9 +85,10 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         code = payload.get("code") or payload.get("task") or ""
         if not code and "content" in payload:
             code = str(payload.get("content", ""))
-        code = code.strip()[:2000]
+        # 如果内容是推理步的冗长输出，尝试从中提取可执行命令
+        code = _extract_cmd_from_text(code.strip()[:2000])
         if not code:
-            return InvokeResult(ok=False, error="autopilot: 代码执行步缺少代码")
+            return InvokeResult(ok=False, error="autopilot: 代码执行步缺少可执行命令")
         return ad.invoke(InvokeRequest(
             capability="action.code_exec",
             payload={"code": code, "language": _guess_language(code)},
@@ -154,6 +155,27 @@ def _extract_command_direct(topic: str) -> str:
     except Exception:
         logger.warning("_extract_command_direct 失败", exc_info=True)
         return ""
+
+
+def _extract_cmd_from_text(text: str) -> str:
+    """从推理步的冗长文本里提取可执行命令（兜底，防止 verbose ag2 文本灌入 code_exec）。"""
+    if not text:
+        return ""
+    # 如果本身就是一行干净命令，直接返回
+    text = text.strip()
+    if len(text) < 300 and not "\n" in text:
+        return text
+
+    # 否则从多行文本里找命令行
+    cmd_prefixes = ["winget ", "choco ", "pip ", "npm ", "python ", "brew ", "apt ",
+                    "curl ", "wget ", "git clone", "docker ", "echo "]
+    for line in text.split("\n"):
+        line = line.strip().strip("`\"'")
+        for prefix in cmd_prefixes:
+            if line.lower().startswith(prefix):
+                return line
+    # 没找到 → 返回原文本（让 code_exec 自己试）
+    return text
 
 
 def _guess_language(code: str) -> str:
@@ -290,23 +312,23 @@ _TRACE_MAX = 500  # 最多保留 500 条，防磁盘打满
 def _build_structured_trace(task, planner, plan_text, steps, data, duration):
     """构建符合原则8规范的JSON Trace。"""
     import uuid as _uuid
+    raw_trace = data.get("trace", [])
     return {
         "task_id": str(_uuid.uuid4())[:8],
         "timestamp": datetime.datetime.now().isoformat(),
         "input": {"task": task, "planner": planner, "plan": plan_text},
         "steps": [
             {
-                "capability": s.get("capability", ""),
-                "engine": t.get("engine_id", "unknown"),
+                "capability": t.get("capability", s.get("capability", "")),
                 "ok": t.get("ok", False),
-                "output": str(t.get("summary", t.get("output", "")))[:500],
+                "output": str(t.get("out", t.get("output", t.get("summary", ""))))[:500],
+                "error": str(t.get("error", ""))[:300] if not t.get("ok") else "",
             }
-            for s, t in zip(steps, data.get("trace", []))
+            for s, t in zip(steps, raw_trace)
         ],
         "output": {
             "ok_steps": data.get("ok_steps", 0),
             "failed_steps": data.get("failed_steps", 0),
-            "final": None,
         },
         "metrics": {
             "latency_ms": round(duration * 1000),
