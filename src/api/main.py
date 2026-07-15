@@ -1354,6 +1354,44 @@ async def ima_configure(api_keys: Dict[str, str]):
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
+# ---- Meeting Agent API ----
+class MeetingRequest(BaseModel):
+    transcript: Optional[str] = Field(default=None, description="会议转录文本（无音频时必填）")
+    audio_path: Optional[str] = Field(default=None, description="音频文件路径（服务端 STT）")
+    audio_b64: Optional[str] = Field(default=None, description="音频 base64（前端直传）")
+    audio_suffix: str = Field(default="wav", description="音频后缀（audio_b64 时，默认 wav）")
+    task_id: Optional[str] = Field(default=None, description="任务 ID（缺省自动生成）")
+    title: Optional[str] = Field(default=None, description="会议标题（缺省自动生成）")
+    attendees: Optional[str] = Field(default=None, description="参会人（可选，写入交接信封）")
+    auto_handoff: bool = Field(default=True, description="是否把结构化会议交接信封存 IMA 知识库")
+
+
+@app.post("/api/meeting/run")
+async def meeting_run(req: MeetingRequest):
+    """运行会议自动化流水线：转录 → 摘要/行动项 → 结构化交接存 IMA"""
+    try:
+        from subagents.meeting_agent import get_meeting_subagent
+        payload = req.model_dump(exclude_none=True)
+        agent = get_meeting_subagent()
+        result = await asyncio.to_thread(agent.handle, payload)
+        if result.get("success"):
+            return result
+        else:
+            raise HTTPException(status_code=400, detail=result.get("error", "会议流水线执行失败"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/meeting/operations")
+async def meeting_operations():
+    """列出会议子智能体支持的操作"""
+    try:
+        from subagents.meeting_agent import MeetingAgent
+        return {"operations": MeetingAgent.OPERATIONS}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
 # ---- Orchestrator API ----
 class OrchestratorRunRequest(BaseModel):
     task_id: Optional[str] = Field(None, description="任务 ID（缺省自动生成）")
