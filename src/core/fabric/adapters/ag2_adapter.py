@@ -147,9 +147,14 @@ class AG2Adapter(BaseAgentAdapter):
                 plan_prompt = (
                     "Plan the following task as concrete executable steps for the "
                     "AOS agent system. Available tools (use exactly these names as "
-                    "bracketed tags): web.search, action.aci, media.image, media.video, "
-                    "inference.llm, memory.semantic, action.code_exec, channel.access.\n"
+                    "bracketed tags): web.search, action.code_exec, inference.llm, "
+                    "memory.semantic.\n"
+                    "web.search = search the internet\n"
+                    "action.code_exec = run terminal commands (install, pip, winget, choco on Windows)\n"
+                    "inference.llm = analyze results and make decisions\n"
+                    "memory.semantic = store/recall important information\n"
                     "Output each step on its own line as: N. [tool_name] <what to do>\n"
+                    "IMPORTANT: This is a Windows system. Use winget or choco for installation, NOT brew.\n"
                     "Do NOT describe a human team; describe tool calls the system will "
                     f"execute.\nTask: {topic}"
                 )
