@@ -402,8 +402,72 @@ def run_code_team(requirement: str, lang: str = "python", **kw) -> Dict[str, Any
     return CodeTeamOrchestrator(**kw).run(requirement, lang=lang)
 
 
+def to_a2ui_surface(result: Dict[str, Any]) -> Dict[str, Any]:
+    """把 code_team 的 run() 结果渲染为 A2UI v0.9 surface（声明式、不执行代码）。
+
+    返回合并 surface 字典，可直接交给 a2ui.render_html 显示。沿用 AOS 既有
+    A2UIBuilder（白名单组件 + 转义渲染，跨信任边界安全）。
+    """
+    from core.fabric.a2ui import (A2UIBuilder, text, card, column,
+                                  divider, lit, tabs)
+    b = A2UIBuilder(surface_id="code-team", theme={"primaryColor": "#2a8c6a"})
+    req = result.get("requirement", "")
+    lang = result.get("lang", "python")
+    ok = bool(result.get("ok", False))
+    llm_used = bool(result.get("llm_used", False))
+    b.add("title", text(lit(f"代码团队 · {lang}"), variant="h2"))
+    b.add("meta", text(lit(
+        f"需求：{req}  |  状态：{'✓ 通过' if ok else '✗ 失败'}  |  "
+        f"生成：{'真实 LLM' if llm_used else 'heuristic 脚手架'}"),
+        variant="caption"))
+    b.add("rule", divider())
+
+    # 文件：每个文件一个 Tab（卡片内含代码）
+    file_tabs = []
+    for fname, code in (result.get("files") or {}).items():
+        cid = "file-" + fname
+        b.add(cid, card(cid + "-inner"))
+        b.add(cid + "-inner", text(lit(f"# {fname}\n{code}"), variant="body"))
+        file_tabs.append({"title": lit(fname), "child": cid})
+    if file_tabs:
+        b.add("files", tabs(file_tabs))
+    else:
+        b.add("files", text(lit("（无生成文件）")))
+
+    # 质量门
+    quality = result.get("quality") or {}
+    qparts = []
+    if isinstance(quality, dict):
+        qparts.append(f"passed={quality.get('passed', '?')}")
+        issues = quality.get("issues") or quality.get("errors") or []
+        if isinstance(issues, list):
+            qparts.extend(str(i)[:120] for i in issues[:5])
+    b.add("quality", text(lit("质量门：" + ("；".join(qparts) if qparts else "无报告"))))
+
+    # 执行结果
+    exec_res = result.get("execution") or {}
+    ext = f"ok={exec_res.get('ok')} stage={exec_res.get('stage')}"
+    if exec_res.get("error"):
+        ext += f" error={exec_res.get('error')}"
+    b.add("exec", text(lit("执行：" + ext)))
+    if exec_res.get("output"):
+        b.add("exec-out", text(lit(str(exec_res.get("output"))[:800])))
+
+    b.add("root", column(["title", "meta", "rule", "files", "quality", "exec", "exec-out"]))
+    b.root("root")
+    return b.surface()
+
+
+def render_code_team(result: Dict[str, Any], standalone: bool = True) -> str:
+    """把 code_team 结果渲染为 A2UI 安全 HTML（结构化交付物）。"""
+    from core.fabric.a2ui import render_html
+    return render_html(to_a2ui_surface(result), standalone=standalone)
+
+
 __all__ = [
     "CodeTeamOrchestrator",
     "run_code_team",
+    "to_a2ui_surface",
+    "render_code_team",
     "QualityGate",
 ]

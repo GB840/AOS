@@ -23,7 +23,7 @@ from datetime import datetime
 from utils.config import config
 from core import get_brain
 from core.fabric import a2ui as a2ui_mod
-from kernel.plugins.code_team import CodeTeamOrchestrator, make_llm_generate
+from kernel.plugins.code_team import CodeTeamOrchestrator, make_llm_generate, render_code_team
 from kernel.compliance import QualityGate
 from mcp import MCPMessage
 from core.pool import initialize_pools, close_pools
@@ -2286,6 +2286,24 @@ async def code_team_run(req: CodeTeamRequest):
         result = CodeTeamOrchestrator(llm_generate=llm).run(req.requirement, lang=req.lang)
         result["llm_used"] = llm is not None  # 诚实标注：是否走了真实 LLM
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.post("/api/code_team/render")
+async def code_team_render(req: CodeTeamRequest):
+    """把代码团队结果渲染为 A2UI 可视化 HTML（结构化交付物，可直接浏览器查看）。
+
+    复用 code_team.to_a2ui_surface 把 run() 结果转成 A2UI v0.9 surface，
+    再经 a2ui 安全渲染器输出 HTML（声明式、不执行代码、不注入 HTML）。
+    默认走 heuristic 生成；设 AOS_CODETEAM_LLM=1 则走真实 LLM。
+    """
+    try:
+        llm = make_llm_generate()
+        result = CodeTeamOrchestrator(llm_generate=llm).run(req.requirement, lang=req.lang)
+        result["llm_used"] = llm is not None
+        html = render_code_team(result, standalone=True)
+        return Response(content=html, media_type="text/html")
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
