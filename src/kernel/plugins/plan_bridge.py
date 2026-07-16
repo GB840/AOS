@@ -192,10 +192,25 @@ def _extract_steps(plan_text: str) -> List[str]:
     return steps
 
 
+def _split_cap_prefix(txt: str, available_caps: List[str]):
+    """从 `capname = ` / `capname: ` 前缀提取能力名（ag2 显式标注）。
+
+    AG2 规划常产出 `web.search = search "..."` / `inference.llm = analyze ...`
+    这类带能力前缀的步骤。前缀即真实意图，比关键词推断可靠——否则
+    "analyze search results" 会被 "search" 误命中成 web.search。
+    仅当前缀确为可用能力时才采纳，避免误吞普通文本。返回 (cap_or_None, body)。
+    """
+    m = re.match(r"^\s*([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\s*[=:]\s*", txt, re.I)
+    if m and m.group(1).lower() in available_caps:
+        return m.group(1).lower(), txt[m.end():].strip()
+    return None, txt
+
+
 def parse_plan_to_steps(plan_text: str, available_caps: List[str]) -> List[Dict[str, Any]]:
     """把自然语言 plan 文本解析成 OrchestrationChiplet 的 steps[]。
 
-    - 每步按语义关键词映射到当前通电能力（available_caps）；
+    - 优先从 AG2 显式标注的 `cap = ` 前缀提取能力（最可靠）；
+    - 兜底按语义关键词映射（可用能力必须 live，不会编排到不存在的引擎）；
     - 首步入参带 task 原文，后续步 in_from=previous 串成流水线；
     - 兜底保证至少一步（不会因解析失败让流水线空转）。
     """
@@ -204,11 +219,21 @@ def parse_plan_to_steps(plan_text: str, available_caps: List[str]) -> List[Dict[
         steps_text = [plan_text]
     steps: List[Dict[str, Any]] = []
     for i, txt in enumerate(steps_text):
-        cap = _pick_capability(txt, available_caps)
-        # 先剥 [cap] 标签；`<what to do>` 内部才是真实指令，提取而非删除。
-        stripped = _TAG_RE.sub("", txt).strip(" .;-").strip()
-        inner = _ANGLE_INNER_RE.search(stripped)
-        clean = inner.group(1).strip() if inner else _ANGLE_RE.sub("", stripped).strip(" .;-").strip()
+        # 优先从 ag2 显式前缀 `<cap> = ` / `<cap>: ` 提取能力（ag2 已标注，
+        # 比关键词推断可靠；避免 "analyze search results" 误命中 web.search）。
+        cap, body = _split_cap_prefix(txt, available_caps)
+        if cap is None:
+            cap = _pick_capability(txt, available_caps)
+            body = txt
+        # 再剥 [cap] 标签（兜底兼容 N. [web.search] <...> 形式）
+        body = _TAG_RE.sub("", body).strip(" .;-").strip()
+        # 处理 <...>：仅当整段被 <...> 包裹（AG2 格式分隔符）才提取内部；
+        # 若 <...> 只是命令里的内联占位符（如 `echo <version>`），保留原样，
+        # 交由 autopilot._fill_placeholders 从上游文本填值（不丢、不伪造）。
+        if re.fullmatch(r"<[^>]*>", body):
+            clean = body[1:-1].strip()
+        else:
+            clean = body
         if i == 0:
             steps.append({"capability": cap, "in": {"task": clean}})
         else:

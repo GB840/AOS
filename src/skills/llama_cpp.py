@@ -347,8 +347,8 @@ class LlamaCppSkill(Skill):
                             "port": LLAMA_SERVER_PORT,
                         },
                     }
-            except requests.ConnectionError:
-                pass
+            except requests.ConnectionError as e:
+                logger.debug("Llama.cpp 服务器尚未就绪，重试中: %s", e)
             
             self._server_process.terminate()
             self._server_process.wait(timeout=5)
@@ -375,11 +375,11 @@ class LlamaCppSkill(Skill):
                             "size": parts[2],
                             "note": "可用的 Ollama 模型",
                         })
-        except Exception:
-            pass
-        
+        except Exception as e:
+            logger.warning("获取 Ollama 模型列表失败: %s", e)
+
         return alternatives
-    
+
     def _stop_server(self) -> Dict[str, Any]:
         """停止 Llama.cpp 服务器"""
         if not self._server_running:

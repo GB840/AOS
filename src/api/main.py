@@ -3,6 +3,7 @@ import os
 import time
 import json
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -213,6 +214,30 @@ class SubAgentInvokeRequest(BaseModel):
 
 # ---- Startup / Shutdown ----
 
+# 专用隔离线程池：brain 重型 health_check 走这里，避免占用默认事件循环线程池
+# （默认池被其余端点共享；health_check 卡住会拖垮整池 → 拒绝服务）。
+# lambda 形式确保 brain 代理的懒构造发生在隔离线程内，而非事件循环线程。
+_BRAIN_HEALTH_TIMEOUT = 60
+_BRAIN_INIT_TIMEOUT = 180
+_BRAIN_HEALTH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="aos-brain-health"
+)
+
+
+async def _brain_health_check(timeout: float = _BRAIN_HEALTH_TIMEOUT):
+    """带超时护栏的 brain.health_check（隔离线程池执行）。
+
+    health_check 内部可能触发 brain 首次构造（~2min）及若干组件同步自检；
+    用专用单线程池 + asyncio.wait_for 限定最长时间，既不在默认池中占坑，
+    也不会因某组件卡死而无限挂起调用方。
+    """
+    loop = asyncio.get_event_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(_BRAIN_HEALTH_EXECUTOR, lambda: brain.health_check()),
+        timeout=timeout,
+    )
+
+
 async def _deferred_brain_init(app):
     """后台初始化 brain（重型，~2min）：不阻塞启动事件，避免 /health 超时误杀。
 
@@ -222,7 +247,7 @@ async def _deferred_brain_init(app):
     try:
         # 后台任务内同步调重型 health_check 仍会阻塞事件循环（包含 brain 首次构造 ~2min），
         # 故移入线程池，避免 /health 在启动期被拖垮。
-        h = await asyncio.to_thread(brain.health_check)
+        h = await _brain_health_check(timeout=_BRAIN_INIT_TIMEOUT)
         logger.info("Health: %s", h["status"])
         for name, info in h["components"].items():
             logger.info("  %s: %s", name, info.get("status") or info.get("type", "?"))
@@ -412,7 +437,7 @@ async def health_check_deep():
     now = time.time()
     if _HEALTH_CACHE["data"] is not None and (now - _HEALTH_CACHE["ts"]) < _HEALTH_TTL:
         return _HEALTH_CACHE["data"]
-    data = await asyncio.to_thread(brain.health_check)
+    data = await _brain_health_check()
     _HEALTH_CACHE["data"] = data
     _HEALTH_CACHE["ts"] = now
     return data

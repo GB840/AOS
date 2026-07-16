@@ -24,7 +24,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -20,6 +20,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List
 
+import logging
+
+_LOG = logging.getLogger(__name__)
+
 from kernel.events import Event, EventBus, SystemEvent
 
 
@@ -262,8 +266,8 @@ class SelfHealer:
     def _heal(self, action: str, target: str, reason: str, execute: Callable):
         try:
             execute()
-        except Exception:
-            pass
+        except Exception as e:
+            _LOG.warning("SelfHealer: heal action '%s' for '%s' failed: %s", action, target, e)
         record = _HealAction(action=action, target=target, reason=reason)
         with self._lock:
             self._history.append(record)

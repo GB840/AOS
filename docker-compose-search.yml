@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  anysearch:
+    image: opensearchproject/opensearch:latest
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - anysearch_data:/usr/share/opensearch/data
+
+volumes:
+  anysearch_data:

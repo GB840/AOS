@@ -129,7 +129,15 @@ def extract_text(out: Any) -> str:
             for d in data:
                 if isinstance(d, dict) and d.get("url"):
                     parts.append(f"图片: {d['url']}")
-    text = "\n".join(p for p in parts if p).strip()
+    # 去重：同一段文本出现在多个字段时只计一次（如 OrchestrationChiplet 把
+    # content 同值投影到 text），否则下游写文件步会拿到「内容\n内容」双份。
+    seen: set[str] = set()
+    unique_parts: list[str] = []
+    for p in parts:
+        if p and p not in seen:
+            seen.add(p)
+            unique_parts.append(p)
+    text = "\n".join(unique_parts).strip()
     # 5) 终极兜底：上游 out 可能被序列化成字符串（如 images 字段是 str 而非 list），
     #    做一次 URL 扫描，把所有 http(s) 链接捞出来，避免「有真实产出却投影成空」。
     if not text:

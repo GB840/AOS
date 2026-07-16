@@ -80,23 +80,23 @@ class SkillLearningSystem:
                 with open(feedbacks_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.feedbacks = [FeedbackRecord(**item) for item in data]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("加载反馈数据失败: %s", e)
         
         if improvements_file.exists():
             try:
                 with open(improvements_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.improvements = [SkillImprovement(**item) for item in data]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("加载改进数据失败: %s", e)
         
         if performance_file.exists():
             try:
                 with open(performance_file, "r", encoding="utf-8") as f:
                     self.performance_history = json.load(f)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("加载性能历史失败: %s", e)
     
     def _save_data(self):
         feedbacks_file = self.storage_path / "feedbacks.json"

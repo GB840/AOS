@@ -171,7 +171,9 @@ class FrontendDesignSkill(Skill):
     - Zero external dependencies
     """
 
-    def __init__(self, output_dir="D:/AOS/outputs"):
+    def __init__(self, output_dir=None):
+        if output_dir is None:
+            output_dir = str(Path(__file__).resolve().parent.parent.parent / "outputs")
         meta = SkillMeta(
             name="frontend-design",
             description=(

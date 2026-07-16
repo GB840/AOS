@@ -236,8 +236,8 @@ class MetaOrchestratorEngine:
                 "event_type": event_type,
                 "payload": payload or {},
             }, block=False)
-        except Exception:  # pragma: no cover - 队列异常绝不阻断路由
-            pass
+        except Exception as e:  # pragma: no cover - 队列异常绝不阻断路由
+            logger.warning("日志入队失败(忽略): %s", e)
 
     def _log_worker(self) -> None:
         """后台守护线程: 消费日志队列并写入 evolution_log。"""
@@ -270,5 +270,5 @@ class MetaOrchestratorEngine:
         """等待所有待写入的 evolution_log 落库 (测试/关闭时调用)。"""
         try:
             self._log_queue.join()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("evolution_log flush 超时或异常: %s", e)

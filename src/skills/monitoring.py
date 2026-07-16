@@ -81,8 +81,8 @@ class SkillMonitor:
                 with open(metrics_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.metrics = [SkillMetric(**item) for item in data]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("加载监控指标数据失败: %s", e)
     
     def _save_data(self):
         metrics_file = self.storage_path / "metrics.json"

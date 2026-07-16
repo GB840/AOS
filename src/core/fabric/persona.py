@@ -170,13 +170,6 @@ def reset_persona(user_id: str) -> dict:
     return load_persona(user_id)
 
 
-# 导入即确保「全局默认人设模板」存在（幂等、失败静默），方便人直接改文件。
-try:
-    ensure_default_template()
-except Exception:  # noqa: BLE001
-    pass
-
-
 def ensure_default_template() -> Path:
     """确保全局默认人设模板文件存在（带注释，方便人直接改）。
 
@@ -201,3 +194,10 @@ def ensure_default_template() -> Path:
         except Exception as e:  # noqa: BLE001
             logger.warning("默认人设模板写盘失败: %s", e)
     return path
+
+
+# 导入即确保「全局默认人设模板」存在（幂等、失败静默），方便人直接改文件。
+try:
+    ensure_default_template()
+except Exception:  # noqa: BLE001
+    pass

@@ -28,6 +28,24 @@ from .base import Skill
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_async_run(coro):
+    """安全地在同步上下文中运行协程：如果已有事件循环在运行则创建新循环在线程中执行。"""
+    import concurrent.futures
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # 已在事件循环中（如 asyncio.to_thread），在新线程中创建独立循环
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+
 LOOP_COMPONENTS = {
     "scheduler": {
         "name": "定时任务",
@@ -394,7 +412,8 @@ class LoopEngineeringSkill(Skill):
         if not input_data:
             return {"success": False, "error": "缺少输入数据"}
         
-        result = asyncio.run(loop.run(input_data))
+        # 使用 _safe_async_run 避免在已有事件循环中调用 asyncio.run() 导致 RuntimeError
+        result = _safe_async_run(loop.run(input_data))
         
         return {
             "success": True,

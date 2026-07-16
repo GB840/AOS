@@ -21,6 +21,8 @@ import logging
 import os
 import threading
 
+from typing import Iterator
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -37,6 +39,24 @@ def _audio_dir() -> str:
     return _AUDIO_DIR
 
 
+def _safe_async_run(coro):
+    """安全地在同步上下文中运行协程：如果已有事件循环在运行则创建新循环在线程中执行。"""
+    import asyncio
+    import concurrent.futures
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # 已在事件循环中（如 asyncio.to_thread），在新线程中创建独立循环
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+
 def _pick_engine() -> str:
     forced = os.environ.get("AOS_TTS_ENGINE")
     if forced:
@@ -44,8 +64,8 @@ def _pick_engine() -> str:
     try:
         import kokoro  # noqa: F401
         return "kokoro"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("kokoro 引擎不可用，尝试下一引擎: %s", e)
     try:
         import edge_tts  # noqa: F401
         return "edge_tts"
@@ -214,7 +234,8 @@ class TTSAdapter(BaseAgentAdapter):
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
                     buf.write(chunk["data"])
-        asyncio.run(_save())
+        # 使用 _safe_async_run 避免在已有事件循环中调用 asyncio.run() 导致 RuntimeError
+        _safe_async_run(_save())
         return buf.getvalue()
 
     def _run_kokoro(self, text: str, payload: dict) -> bytes:

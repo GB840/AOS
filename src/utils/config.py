@@ -3,6 +3,9 @@ from pydantic import field_validator, Field, model_validator, AliasChoices
 from typing import Optional
 from pathlib import Path
 import os
+import logging
+
+_LOG = logging.getLogger(__name__)
 
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -42,7 +45,7 @@ class Config(BaseSettings):
     APP_NAME: str = "能体操作系统v5.0零成本版"
     APP_VERSION: str = "5.0.0"
     APP_ENV: str = "development"
-    DEBUG: bool = True
+    DEBUG: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
@@ -72,6 +75,21 @@ class Config(BaseSettings):
     SANDBOX_API_ENABLED: bool = Field(
         default=False,
         validation_alias=AliasChoices("AOS_SANDBOX_API_ENABLED", "SANDBOX_API_ENABLED"),
+    )
+
+    # 安全边界：sandbox exec 端点命令白名单。只有匹配这些前缀的命令才允许执行。
+    # 可通过环境变量 AOS_SANDBOX_ALLOWED_COMMANDS 覆盖（JSON 数组字符串）。
+    SANDBOX_ALLOWED_COMMANDS: list = Field(
+        default=["ls", "cat", "echo", "pwd", "whoami", "date", "head", "tail",
+                 "wc", "grep", "find", "file", "stat", "df", "du", "env",
+                 "python --version", "python -c", "node --version", "node -e"],
+        validation_alias=AliasChoices("AOS_SANDBOX_ALLOWED_COMMANDS", "SANDBOX_ALLOWED_COMMANDS"),
+    )
+
+    # 安全边界：是否要求请求体中 confirm=true 才执行命令（防误触/自动化滥用）。
+    SANDBOX_REQUIRE_CONFIRM: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("AOS_SANDBOX_REQUIRE_CONFIRM", "SANDBOX_REQUIRE_CONFIRM"),
     )
 
     # ===== 状态后端 (团队级可插拔 seam: sqlite(个人) -> postgres(团队/公司)) =====
@@ -361,8 +379,8 @@ try:
                 os.environ.setdefault(_k, _v)
                 if not _k.startswith("AOS_"):
                     os.environ.setdefault("AOS_" + _k, _v)
-except Exception:
-    pass
+except Exception as e:
+    _LOG.warning(".env 文件解析失败，跳过注入: %s", e)
 
 config = Config()
 

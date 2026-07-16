@@ -94,7 +94,7 @@ echo.
 echo 启动 Web 控制台...
 echo 浏览器打开 http://localhost:8000
 start http://localhost:8000
-%PYTHON% aos_server.py
+rem %PYTHON% aos_server.py
 goto menu
 
 :skills

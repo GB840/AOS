@@ -148,8 +148,8 @@ def verify_api_key_hash(api_key: str, hashed_key: str) -> bool:
         try:
             # 执行虚假比较防止时序信息泄露
             bcrypt.checkpw(b"fake_key", b"$2b$12$fake_hash_for_constant_time_protection")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("虚假 bcrypt 恒定时间比较失败: %s", e)
         logger.error(f"API密钥验证异常(已防止时序泄露): {type(e).__name__}")
         return False
 

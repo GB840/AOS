@@ -191,8 +191,8 @@ class CodebaseMemorySkill(Skill):
                                         "file": file_path,
                                         "matches": matches[:5],
                                     })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("文件搜索读取失败 (%s): %s", file_path, e)
         
         return {
             "success": True,
@@ -262,8 +262,8 @@ class CodebaseMemorySkill(Skill):
                                         "line": i,
                                         "context": line.strip(),
                                     })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("函数调用搜索读取失败 (%s): %s", file_path, e)
         
         return {
             "success": True,
@@ -293,8 +293,8 @@ class CodebaseMemorySkill(Skill):
                                     "file": file_path,
                                     "impact_level": "high" if content.count(query) > 5 else "medium",
                                 })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("引用搜索读取失败 (%s): %s", file_path, e)
         
         return {
             "success": True,
@@ -328,8 +328,8 @@ class CodebaseMemorySkill(Skill):
                                         "line": i,
                                         "definition": line.strip(),
                                     })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("定义搜索读取失败 (%s): %s", file_path, e)
         
         return {
             "success": True,
@@ -366,8 +366,8 @@ class CodebaseMemorySkill(Skill):
                                 elif line.strip().startswith("class "):
                                     name = line.strip().split("class ")[1].split("(")[0].split(":")[0]
                                     symbols["classes"].append({"name": name, "file": file_path})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("符号扫描读取失败 (%s): %s", file_path, e)
         
         return {
             "success": True,
@@ -491,8 +491,8 @@ class CodebaseMemorySkill(Skill):
                                     imports.append(line.strip())
                             if imports:
                                 dependencies[file_path] = {"imports": imports[:10]}
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("依赖扫描读取失败 (%s): %s", file_path, e)
         
         return {
             "success": True,
@@ -559,8 +559,8 @@ class CodebaseMemorySkill(Skill):
                             
                             if file_complexity > 100:
                                 complexity["complex_files"].append(file_path)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("复杂度分析读取失败 (%s): %s", file_path, e)
         
         return {
             "success": True,

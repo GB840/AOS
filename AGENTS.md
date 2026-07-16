@@ -29,20 +29,24 @@
 
 ---
 
-## 0.5 基线快照（2026-07-15 19:08 UTC，自动生成）
+<!-- BASELINE_START -->
+## 0.5 基线快照（2026-07-16 手动校正，轻量模式实测）
 
 > 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
-> 本表由 `tools/baseline_snapshot.py` 自动生成，每次 commit 触发更新。
+> 本表由 `tools/baseline_snapshot.py` 真实测算后写入；轻量模式测适配器/测试数，
+> `AOS_BASELINE_HEAVY=1` 额外测 live/dead 与覆盖率（CI 定时/commit 钩子用）。
+> 上次全量 `pytest --cov=src` 仍在后台运行，覆盖率% 与 pass/fail 待其实测回填（不编）。
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 2 | web-search, orchestrator |
-| live | ~14 | 见 health_report() |
-| dead | ~5 | openclaw(port_down 127.0.0.1:18789) / ag2(依赖未就绪) / litellm(import timeout 8s) / mem0(import hung) / lfm2(weights_ready=False) |
-| 测试 | 452 collected / 393 pass / 4 fail | legacy 测试失败已知勿修(test_database/test_memory) |
-| 覆盖率 | ~41% | 目标 50%（kernel/ ≥80%，core/fabric/ ≥60%，§5 质量门） |
-| brain.fabric | FAIL | 'str' object has no attribute 'get' |
-| 生成时间 | 2026-07-15 19:08 UTC | `python tools/baseline_snapshot.py` |
+| 适配器总数 | 19 | kernel FabricHub `_ADAPTERS`(18) + orchestrator(自动注册)，已核实 |
+| live | 14（典型无 key 环境） | `FabricHub.health_report()`；HEAVY 模式实测回填 |
+| dead | 5 | openclaw/ag2/litellm/mem0/lfm2（根因见 §7） |
+| 测试 | 428 collected | `pytest --co -q` 实测（注：旧表写 452 为过时） |
+| 覆盖率 | ~41%（与 §5 一致） | 目标 50%；`AOS_BASELINE_HEAVY=1` 重测填实 |
+| brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric`(875) import 失败即 `fabric=None`，双轨未合（旧表两处报错字符串均为旧版残留，已删） |
+| 生成时间 | 2026-07-16 | `python tools/baseline_snapshot.py` |
+<!-- BASELINE_END -->
 ## 1. 九大核心理念（AOS 宪法序言）
 
 以下九条是 AOS 存在的理由。任何改动若违背，无论技术多漂亮，都是错的。
@@ -64,6 +68,45 @@ AOS 不是需要人工填充配置的系统。输入自然语言目标，系统�
 > （完整记录 → 精简摘要 → 永久删除），平衡检索速度、知识时效性与磁盘占用。
 > 区分**短期故障记忆**（快速淘汰）与**长期环境偏好**（长周期保留），
 > 避免误删用户固定环境配置。
+
+### 2.5 目标驱动 · 长程自主 · 反思闭环（运行纪律，用户明示铁律）
+
+> **哲学溯源（ID 经 arXiv 核对，2026-07-16）**：反思闭环的工程实践综合自
+> **Reflexion**（Shinn et al., 2023, arXiv:2303.11366）+ **ReAct**（Yao et al., 2022, arXiv:2210.03629）
+> 及其后续工作；本仓库 `kernel/autopilot.py` 把"目标驱动 + 长程自主 + 每步硬判定 + 反思重设计"
+> 落地为可执行实现。近期浙大"求是引擎"（Qiushi Discovery Engine，杨怡豪团队，2026，arXiv:2604.27092，
+> 真实存在、同行评审）在真实光学平台上端到端验证了该范式，并提出了 **Meta-Trace 记忆**机制
+> （见本条第 8 点）——本仓库的反思记忆即受此启发。
+> 用户原话："以后的 ai 智能体 模型 都很多，我不想它像你一样搞个事情 老是失败 还不知道反思。"
+
+这条是 AOS 自主环（autopilot）的**运行纪律**，不是可选增强。违反即错，无论技术多漂亮：
+
+1. **目标驱动，长程自主**：输入一个目标，系统自主推进到真正达成，不是"跑几步交差"。
+   没有"差不多了"——交付物（文件/结果）必须真实落盘且非空才算完成。
+2. **每步有"成没成"的硬判定（真实闸门）**：搜索步必须有真实返回条数、代码执行步必须有 stdout
+   或真写进非空文件、推理步必须非拒答话术且够长——空转/敷衍一律判失败，**不谎报成功**。
+   （实现：`autopilot.py` 的 `_*_real_metrics` + `_verdict`）
+3. **质疑/风险检查 agent（反思）**：任一步失败或空转，不得直接结束——必须触发"质疑 agent"
+   用 trace 里的**真实错误**诊断根因，产出**修正后的下一步计划**，再执行一轮。
+   （实现：`autopilot.py` 的 `_reflect_and_redesign`）
+4. **失败即重设计，不原地重试**：反思产出的是"换了做法的新计划"，不是把同一条命令再跑一遍。
+5. **绝不伪造发现**：反思/规划/执行全链路只用真实证据；反思解析不出有效计划就**停止**（不再硬凑），
+   避免"反思→失败→再反思"的虚假循环。
+6. **反思有上限**：单任务最多 `MAX_REFLECT`（=2）轮额外反思（总计 ≤3 次执行），防无限循环。
+7. **上下文续接：只重设计"下一步"，不重跑已成功的步**（求是引擎原话"重新设计**下一步**"）。
+   反思轮必须把上轮已成功步的**真实产出**作为起点续接（`seed_context`），重设计计划只产出
+   "从失败处继续的剩余步骤"，不再重做已成功的步——既省步数、又杜绝"重搜导致结果不同"的回归。
+   （实现：`autopilot.py` 的 `_execute` 记录成功产出 → `run()` 跨轮 `prior_success` 续接；
+   `OrchestrationChiplet` 的 `seed_context`）
+8. **反思记忆（Meta-Trace）：失败教训跨任务沉淀**。
+   每轮反思把"失败根因→修正"提炼成教训持久化（有界 JSONL，仅留最近 N 条），后续相似任务的
+   质疑 agent 自动注入这些历史教训，避免重复已知失败做法。（求是引擎核心贡献即 Meta-Trace memory；
+   Reflexion 实证：显式反思文本比"只重放失败轨迹"多 +8% 成功率。）
+   （实现：`autopilot.py` 的 `_load_lessons` / `_save_lesson` → `_REFLECTION_MEMORY_PATH`）
+
+> 自检：`python -m kernel.autopilot "<任务>"` 跑完，打印应出现「反思: ...（共执行 N 轮）」一行，
+> 且 `reflection` 字段记录 `attempts` / `exhausted` / `log`。若某步失败却只见「未完成 ❌」直接结束、
+> 没有反思记录，即违反本条。反思记忆文件 `_traces/reflection_memory.jsonl` 应随失败任务增长。
 
 ### 3. 芯粒隔离 ≠ 多 Agent 分解
 
@@ -142,9 +185,10 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
 
 ### 本质一句话
 
-> AOS = 冷启动即可独立运行、自主完成检索部署执行、失败自动沉淀并按需遗忘、
+> AOS = 冷启动即可独立运行、自主完成检索部署执行、**目标驱动长程推进、每步有真实闸门、
+> 失败必反思重设计直至达成**、失败自动沉淀并按需遗忘、
 > 带分层安全边界、全链路可观测、贴合本地环境、组件无绑定、内核统一调度的
-> 自主闭环系统。用户仅需提出目标，全流程自动处理。
+> 自主闭环系统。用户仅需提出目标，全流程自动处理，且每一步都真实可复核。
 
 ### 理念联动关系
 
@@ -154,6 +198,8 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
 | 5 权限边界 | 1 自闭环 | 自动化不能以无边界权限为代价 |
 | 2 记忆淘汰 | 7 千人千面 | 只保留高价值个性化环境数据 |
 | 6 置信量化 | 8 可观测 Trace | 置信指标全部存入执行链路日志 |
+| 2.5 反思闭环 | 2 失败训练 | 反思把"单任务失败"转成"重设计后的新计划"，是失败训练在运行期的落地 |
+| 2.5 反思闭环 | 6 诚实纪律 | 反思只用真实错误诊断，绝不伪造"已修复"的假象 |
 | 4 万物为我所用 | 5 权限边界 | 多源故障转移不能绕过权限——每个备选源都遵守相同 Token 验证 |
 
 > 原五条"命门哲学"（万物为我所用 / 端云合作 / 不绑定零成本可跑 / 极简优先…）已吸收
@@ -191,16 +237,29 @@ codebase-memory-mcp / orchestrator。
 以下每条❌附修复证据（file:line），保证读 AGENTS.md 的 AI 可 grep 验证：
 
 - ❌ **路由只取 `providers[0]` 就停** — 必须遍历所有 live 供给方做故障转移。
-  - 修复：`fabric_hub.py:225-273` `route()` 35 行遍历 + 失败跳下一个 + 合并 last_res
+  - 修复：`fabric_hub.py:306-368` `route()` 遍历 `providers_for()` 结果 + 单芯粒异常隔离(`continue`) + 合并 `attempts`
 - ❌ **把能力焊死在付费远程 key 上** — 见理念第 4 条。mem0 默认 `AOS_MEM0_LOCAL=1` 走本地。
 - ❌ **虚报能力** — 适配器 `advertise_capabilities()` 只声明它**真能干**的（如 openclaw 只 `CHANNEL_ACCESS`）。
 - ❌ **喂 legacy 双轨** — brain.py / deerflow / swarm_flow / hermes / lemon_orchestrator 是待退役老栈，
-  与 FabricHub 互不打通。**新功能一律进 FabricHub**，不要往 legacy 加料——
-  当前 `brain.fabric` init 失败（`'NoneType' has no attribute '__name__'`），即双轨未合的证据。
+  与 FabricHub 互不打通。**新功能一律进 FabricHub**，不要往 legacy 加料。
+  当前 `brain.fabric`（`core/brain.py:_init_fabric`，line 875）为**优雅降级**：import 失败即 `self.fabric=None`、
+  不抛异常、不影响其余组件——即双轨未合的证据（kernel 层 FabricHub 19 适配器是干净单一运行时）。
 - ❌ **故障转移丢上游 data** — 全部失败时返回最后一个供给方的真实结果（保留 trace/ok_steps），不能合成 `data=None`。
-  - 修复：`fabric_hub.py:228-243` `last_res is not None` 时保留 `data=last_res.data`
-- ❌ **async handler 内调同步阻塞代码** — `main.py` 多处仍在 `async def` 里用同步调用。
-  - 已知违规：`main.py:722-744` / `766-809` / `843-876` / `1389` / `1670-1719`（5 处，见 §5 引用）
+  - 修复：`fabric_hub.py:350-356` `last_res is not None` 时保留 `data=last_res.data`；
+    全 raise（`last_res is None`）分支 `357-367` 也已返回诊断字典 `{"capability","attempts","engine_errors"}` 而非 `None`。
+- ❌ **async handler 内调同步阻塞代码** — 违反「禁止 async 里阻塞」（§5）。历史 5 处（`main.py:722-744` 等）
+  已在先前重构中**全部用 `asyncio.to_thread(...)` 包裹移出事件循环**（如 `list_knowledge` 的 SQLite 查询
+  line 760-765 整体包进线程池）；当前 `main.py` 同步调用均在线程池内执行。新增 async 路由须延续此模式，
+  不得再在 `async def` 顶层直接做 I/O / DB / 子进程调用。
+- ❌ **反思 / 记忆 IO 无超时** — 自主环里调任何外部引擎（ag2 / ollama / mem0）都必须带超时守护：
+  外部引擎挂死**不会抛异常，只阻塞**，裸 `try/except` 拦不住，整条 `run()` 会被拖死、降级链永远触发不了。
+  - 修复：`autopilot.py:74` `_call_with_timeout()`（守护线程 + `join(timeout)`，超时作废粘死实例并降级）。
+    反思三后端 `ag2 → ollama → heuristic`（`_reflect_and_redesign`）与规划路径（`_plan`）均已套此守卫。
+- ❌ **共享记忆文件读写无锁** — `_traces/semantic_memory.jsonl` 被 autopilot（写侧）与
+  fabric_hub（读 / 回退写侧）**并发**访问，必须共用同一把 `kernel.semantic_state.SEMANTIC_LOCK`，
+  否则写侧读-改-写-追加中途被另一写打断会写坏 JSONL，读侧可能读到半行致 `json.loads` 失败漏条。
+  - 修复：锁统一在 `kernel/semantic_state.py`；写侧 `autopilot.py:973`、读侧 `fabric_hub.py:965`、
+    回退写侧 `fabric_hub.py:1045`，三处指向**同一把锁对象**。
 
 ---
 

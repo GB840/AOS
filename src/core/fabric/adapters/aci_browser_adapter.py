@@ -27,6 +27,24 @@ def _import_browser_use():
     return Agent
 
 
+def _safe_async_run(coro):
+    """安全地在同步上下文中运行协程：如果已有事件循环在运行则创建新循环在线程中执行。"""
+    import asyncio
+    import concurrent.futures
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # 已在事件循环中（如 asyncio.to_thread），在新线程中创建独立循环
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+
 class BrowserUseAdapter(BaseAgentAdapter):
     """Thin wrapper over the real browser-use agent (the "hands" plane)."""
 
@@ -49,7 +67,8 @@ class BrowserUseAdapter(BaseAgentAdapter):
             Agent = _import_browser_use()
             task = req.payload.get("task", "")
             agent = Agent(task=task, llm=self._llm)
-            result = asyncio.run(agent.run())
+            # 使用 _safe_async_run 避免在已有事件循环中调用 asyncio.run() 导致 RuntimeError
+            result = _safe_async_run(agent.run())
             return InvokeResult(ok=True, data={"result": str(result)})
         except Exception as e:  # no LLM / no browser binary installed
             logger.warning("browser-use invoke failed: %s", e)

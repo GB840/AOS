@@ -89,10 +89,10 @@ async def _liveness_loop(interval: float = 15.0) -> None:
                     ) as r:
                         if r.status < 500:
                             _liveness[name] = time.monotonic()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as e:
+                    logger.warning("上游探活请求失败: %s", e)
+        except Exception as e:
+            logger.warning("探活会话创建失败: %s", e)
         await asyncio.sleep(interval)
 
 
@@ -215,8 +215,8 @@ async def _proxy_http(request: Request, prefix: str, cfg: dict):
         finally:
             try:
                 resp.release()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("释放上游响应连接失败: %s", e)
 
     resp_headers = {}
     for k, v in resp.headers.items():
@@ -273,8 +273,8 @@ async def _proxy_ws(websocket: WebSocket, prefix: str, cfg: dict):
                                 b = msg.get("bytes")
                                 if b is not None:
                                     await up.send_bytes(b)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("WebSocket 客户端到上游转发异常: %s", e)
 
             async def up_to_client():
                 try:
@@ -290,8 +290,8 @@ async def _proxy_ws(websocket: WebSocket, prefix: str, cfg: dict):
                             aiohttp.WSMsgType.ERROR,
                         ):
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("WebSocket 上游到客户端转发异常: %s", e)
 
             await asyncio.gather(
                 asyncio.create_task(client_to_up()),
@@ -303,8 +303,8 @@ async def _proxy_ws(websocket: WebSocket, prefix: str, cfg: dict):
     finally:
         try:
             await websocket.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("关闭 WebSocket 连接失败: %s", e)
 
 
 async def probe_upstreams() -> dict:

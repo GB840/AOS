@@ -56,13 +56,16 @@ class _RunState:
     """顺序/并发共享的执行状态；所有写操作加锁，保证线程安全。"""
 
     def __init__(self, initial: Dict[str, Any], task_id: Optional[str] = None,
-                 auto_handoff: bool = False) -> None:
+                 auto_handoff: bool = False, seed_context: Optional[Dict[str, Any]] = None) -> None:
         self.lock = threading.Lock()
         self.initial = initial
         self.task_id = task_id or str(uuid.uuid4())[:8]
         self.auto_handoff = auto_handoff
-        self.last_success_out: Optional[Dict[str, Any]] = None
-        self.context: Optional[Dict[str, Any]] = None
+        # 上下文续接（求是引擎式反思）：反思轮把上轮已成功步的真实产出
+        # 作为起点，使「重设计下一步」的首步能拿到正确上游输入，且不再重跑
+        # 已成功的步（避免回归 + 省步数）。seed=None 时行为不变。
+        self.last_success_out: Optional[Dict[str, Any]] = seed_context
+        self.context: Optional[Dict[str, Any]] = seed_context
         self.ok_steps = 0
         self.failed_steps = 0
         self.trace: List[Dict[str, Any]] = []
@@ -100,14 +103,16 @@ class OrchestrationChiplet(BaseAgentAdapter):
 
         # —— 顺序路径（既有行为，保持不变）——
         state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
-                          auto_handoff=spec.get("auto_handoff", False))
+                          auto_handoff=spec.get("auto_handoff", False),
+                          seed_context=spec.get("seed_context"))
         for idx, step in enumerate(steps):
             self._run_step(idx, step, state)
         return self._finalize(state)
 
     def _invoke_parallel(self, steps, spec, parallel_groups) -> InvokeResult:
         state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
-                          auto_handoff=spec.get("auto_handoff", False))
+                          auto_handoff=spec.get("auto_handoff", False),
+                          seed_context=spec.get("seed_context"))
         covered: set[int] = set()
         for group in parallel_groups:
             idxs = self._resolve_group(group, steps)
@@ -185,6 +190,11 @@ class OrchestrationChiplet(BaseAgentAdapter):
             if instruction and isinstance(payload, dict) and "instruction" not in payload:
                 payload = dict(payload)
                 payload["instruction"] = instruction
+            # 把原始任务带下去，供推理步知道要产出什么（否则只能看到上游材料，
+            # 容易把搜索结果原样回显而非合成报告）。
+            if isinstance(payload, dict) and state.initial.get("task") and "original_task" not in payload:
+                payload = dict(payload)
+                payload["original_task"] = state.initial.get("task")
         elif step.get("in_from") == "initial":
             field = step.get("field")
             with state.lock:
@@ -206,8 +216,10 @@ class OrchestrationChiplet(BaseAgentAdapter):
             state.last_success_out = out_ctx  # 供后续 in_from:previous 依赖
             state.context = out_ctx
             state.ok_steps += 1
+            _rm = step_out.get("real_metrics") if isinstance(step_out, dict) else None
             state.trace.append({"step": idx, "capability": _as_str(cap),
-                                "ok": True, "out": _brief(step_out)})
+                                "ok": True, "out": _brief(step_out),
+                                **({"real_metrics": _rm} if _rm is not None else {})})
 
     @staticmethod
     def _finalize(state: _RunState, parallel: bool = False) -> InvokeResult:

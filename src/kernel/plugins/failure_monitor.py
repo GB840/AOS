@@ -138,8 +138,8 @@ class FailureMonitor:
                         "message": rec.message,
                     },
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("FailureMonitor: Langfuse trace failed (non-critical): %s", e)
 
     # ---- 统计 ----
 

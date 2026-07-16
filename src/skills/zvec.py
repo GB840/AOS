@@ -120,8 +120,8 @@ class ZvecSkill(Skill):
             
             try:
                 zvec.init()
-            except RuntimeError:
-                pass
+            except RuntimeError as e:
+                logger.debug("Zvec 初始化异常(预期内): %s", e)
             
             self._init_zvec()
         except ImportError:

@@ -20,7 +20,8 @@ import sys
 import time
 
 # 轻量 import：仅保证能解析报文。合成芯粒不依赖任何重引擎/网络。
-sys.path.insert(0, os.environ.get("AOS_SRC", "D:/AOS/src"))
+_src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.environ.get("AOS_SRC", _src_dir))
 
 
 def _make_synthetic_handler(task_us: float):

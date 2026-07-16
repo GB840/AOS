@@ -206,8 +206,8 @@ class SkillMarketplace:
             try:
                 with open(reviews_file, "r", encoding="utf-8") as f:
                     reviews = json.load(f)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("加载评价数据失败: %s", e)
         
         reviews.append({
             "rating": rating,

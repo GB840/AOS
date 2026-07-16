@@ -39,6 +39,7 @@ the architecture-first principle: one kernel owns routing/memory/context.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -77,8 +78,8 @@ def _load_dotenv_best_effort() -> None:
                     continue
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(".env 加载失败（非致命，继续运行）: %s", e)
 
 
 # One protocol instance reused for every /api/mcp request. Its handlers call
@@ -174,8 +175,42 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    # ---- security: token auth boundary ----
+    def _check_auth(self) -> bool:
+        """Enforce Bearer token auth.
+
+        Security boundary:
+        - AOS_FABRIC_HTTP_TOKEN must be set in the environment; otherwise
+          the server should not be running. If present, every request
+          MUST carry ``Authorization: Bearer <token>`` with matching value.
+          Mismatch or missing header → 401.
+        Returns True when the request is authorised, False when a 401 has
+        already been sent.
+        """
+        expected = os.environ.get("AOS_FABRIC_HTTP_TOKEN", "").strip()
+        if not expected:
+            self._send_json(
+                {"error": "internal server error"},
+                status=500,
+            )
+            return False  # can't auth without token
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            presented = auth_header[len("Bearer "):].strip()
+            # Constant-time comparison to mitigate timing side-channels.
+            if hmac.compare_digest(presented, expected):
+                return True
+        # Auth failed — reject with 401.
+        self._send_json(
+            {"error": "unauthorized", "hint": "set Authorization: Bearer <token>"},
+            status=401,
+        )
+        return False
+
     # ---- routing ----
     def do_GET(self):
+        if not self._check_auth():
+            return
         raw = self.path
         path = raw.split("?", 1)[0].rstrip("/")
         if path in ("", "/"):
@@ -218,6 +253,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         return self._send_json({"error": "not found", "path": path}, status=404)
 
     def do_POST(self):
+        if not self._check_auth():
+            return
         path = self.path.split("?", 1)[0].rstrip("/")
         body = self._read_json_body()
         if path == "/api/chat":
@@ -256,6 +293,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         # 人设配置化也接受 PUT（语义更准）；路由与 POST 一致
+        if not self._check_auth():
+            return
         path = self.path.split("?", 1)[0].rstrip("/")
         body = self._read_json_body()
         if path.startswith("/api/companion/") and path.endswith("/persona"):
@@ -615,8 +654,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("SSE 流关闭写入 [DONE] 失败（客户端可能已断开）: %s", e)
 
     def _post_voice_stt_stream(self, body: dict) -> None:
         """流式 STT：接收一段音频，SSE 推 partial transcript（前端边录边出字）。"""
@@ -809,14 +848,26 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def serve(host: str = "0.0.0.0", port: int = 8123) -> None:
+def serve(host: str | None = None, port: int = 8123) -> None:
     """Start the FabricHub HTTP serving mode (blocking).
+
+    Security:
+      - Only binds to 127.0.0.1 (localhost only).
+      - Requires ``AOS_FABRIC_HTTP_TOKEN`` to be set; without it the server will
+        reject all requests with 401.
 
     The kernel is built lazily on the first request that needs it; this call
     returns as soon as the socket is bound, so /health stays instant even while
     the (heavy) isolation wiring spins up in the background.
     """
     _load_dotenv_best_effort()
+    host = "127.0.0.1"  # Hard lock to localhost
+    token = os.environ.get("AOS_FABRIC_HTTP_TOKEN", "").strip()
+    if not token:
+        logger.error(
+            "AOS_FABRIC_HTTP_TOKEN is not set — FabricHub HTTP server cannot start."
+        )
+        raise RuntimeError("AOS_FABRIC_HTTP_TOKEN required for security")
     httpd = ThreadingHTTPServer((host, port), FabricHubHTTPHandler)
     logger.info(
         "AOS FabricHub HTTP serving on http://%s:%d (kernel built lazily on first use)",

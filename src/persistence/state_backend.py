@@ -53,8 +53,8 @@ class SQLiteStateBackend(StateBackend):
     def close(self) -> None:
         try:
             self.conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("SQLite 连接关闭失败: %s", e)
 
 
 class PostgresStateBackend(StateBackend):
@@ -85,8 +85,8 @@ class PostgresStateBackend(StateBackend):
     def close(self) -> None:
         try:
             self._engine.dispose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Postgres 引擎释放失败: %s", e)
 
 
 _backend: Optional[StateBackend] = None
@@ -113,6 +113,6 @@ def reset_state_backend() -> None:
     if _backend is not None:
         try:
             _backend.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("状态后端关闭失败: %s", e)
         _backend = None

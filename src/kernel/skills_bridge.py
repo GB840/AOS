@@ -13,6 +13,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+import logging
+
+_LOG = logging.getLogger(__name__)
+
 from kernel.interfaces import SkillBus
 from kernel.types import SkillResult, SkillSpec
 
@@ -101,8 +105,8 @@ class SkillsBridge:
             try:
                 self._bus.register_skill(spec)
                 count += 1
-            except Exception:
-                pass
+            except Exception as e:
+                _LOG.warning("SkillsBridge: failed to register skill '%s': %s", spec.skill_id, e)
         return count
 
     def call_skill(self, skill_id: str, params: Dict[str, Any]) -> SkillResult:

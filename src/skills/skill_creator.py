@@ -76,7 +76,7 @@ class SkillCreator(Skill):
         )
         super().__init__(meta)
         self._llm_router = llm_router
-        self._output_dir = Path("D:/AOS/src/skills/generated")
+        self._output_dir = Path(__file__).resolve().parent / "generated"
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
     def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:

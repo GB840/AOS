@@ -170,6 +170,14 @@ class ASREngine:
             return {"success": True, "text": result, "provider": "xfyun"}
         except queue.Empty:
             return {"success": False, "error": "讯飞ASR超时"}
+        finally:
+            # 显式关闭 WebSocket 并回收守护线程，避免超时/异常路径下连接与
+            # 线程泄漏（daemon 线程虽不阻塞进程退出，但会一直持有连接直至 GC）。
+            try:
+                ws.close()
+            except Exception:
+                pass
+            ws_thread.join(timeout=2)
 
     def recognize(self, audio_bytes: bytes, format: str = "wav") -> Dict[str, Any]:
         if config.XFYUN_ENABLED and config.XFYUN_API_KEY:

@@ -8,6 +8,7 @@ import threading
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pathlib import Path
+from contextlib import contextmanager
 
 try:
     import chromadb
@@ -98,13 +99,18 @@ def validate_fts_query(query: str) -> bool:
         logger.warning(f"FTS查询操作符过多被拒绝，数量: {operator_count}")
         return False
         
-    # 检查重复字符（可能的DoS尝试）
+    # 检查重复字符（可能的DoS尝试）。
+    # 仅对 ASCII 字母数字应用该规则：中文等 CJK 文本天然存在高重复
+    # （如「哈哈哈哈」「的的的的」），不应被误杀；而连续 ASCII 重复
+    # （如「aaaaa…a」）才是典型 DoS 探活特征。
     from collections import Counter
-    char_counts = Counter(query.lower())
-    most_common_count = char_counts.most_common(1)[0][1] if char_counts else 0
-    if most_common_count > len(query) * 0.8:  # 某个字符占比过高
-        logger.warning("FTS查询可能为DoS攻击（字符重复率过高）")
-        return False
+    ascii_chars = [c for c in query if c.isascii() and c.isalnum()]
+    if ascii_chars:
+        ac = Counter(ascii_chars)
+        mc = ac.most_common(1)[0][1]
+        if mc > len(ascii_chars) * 0.8:  # 某个 ASCII 字符占比过高
+            logger.warning("FTS查询可能为DoS攻击（ASCII字符重复率过高）")
+            return False
     
     # 检查危险模式 - 增强版
     dangerous_patterns = [
@@ -214,26 +220,26 @@ class MemoryManager:
 
         # 注意：core.pool.ConnectionPool 的 acquire/release 均为 async 协程，
         # 而本类所有数据库操作为同步上下文，无法安全 await。旧实现曾在此尝试启用
-        # 连接池并把 _use_connection_pool 置 True，导致 _get_connection() 调用
+        # 连接池并把 _use_connection_pool 置 True，导致 get_connection() 调用
         # 不存在的同步 get_connection() 而抛 AttributeError（见 DEEP_AUDIT 报告 Bug#1）。
         # 统一使用上面的单连接 + 锁模式，不再启用连接池。
         self._use_connection_pool = False
 
         self._init_vector_store()
     
-    def _get_connection(self):
+    @contextmanager
+    def get_connection(self):
         """获取数据库连接（单连接 + 锁，保证线程安全）。
 
         注：core.pool.ConnectionPool 的 acquire/release 均为 async，无法在同步
         上下文中使用，故 MemoryManager 统一走单连接模式（见 __init__ 说明）。
-        """
-        from contextlib import contextmanager
 
-        @contextmanager
-        def single_connection():
-            with self._lock:
-                yield self.sqlite_conn
-        return single_connection()
+        直接以 @contextmanager 装饰方法：调用 ``with self.get_connection() as
+        conn:`` 即进入已就绪的上下文管理器，不再像旧实现那样先返回内部函数引用、
+        再二次调用才生成 CM 对象（反直觉且易误读为返回一个连接对象）。
+        """
+        with self._lock:
+            yield self.sqlite_conn
     
     def close(self):
         """关闭资源"""
@@ -498,7 +504,7 @@ class MemoryManager:
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         
         # 使用连接池避免全局锁竞争，提高并发性能
-        with self._get_connection() as conn:
+        with self.get_connection() as conn:
             cursor = conn.execute(
                 "INSERT INTO conversations (session_id, role, content, metadata) VALUES (?, ?, ?, ?)",
                 (session_id, role, content, meta_json),
@@ -541,7 +547,7 @@ class MemoryManager:
 
     def _execute_query(self, query: str, params: tuple = (), fetch_all: bool = True):
         """执行数据库查询（支持连接池）"""
-        with self._get_connection() as conn:
+        with self.get_connection() as conn:
             cursor = conn.execute(query, params)
             if fetch_all:
                 return cursor.fetchall()
@@ -550,7 +556,7 @@ class MemoryManager:
     
     def _execute_update(self, query: str, params: tuple = ()):
         """执行数据库更新（支持连接池）"""
-        with self._get_connection() as conn:
+        with self.get_connection() as conn:
             conn.execute(query, params)
             conn.commit()
 
@@ -560,7 +566,7 @@ class MemoryManager:
         safe_query = safe_fts_match_query(query)
 
         # 使用连接池避免全局锁竞争
-        with self._get_connection() as conn:
+        with self.get_connection() as conn:
             # 批量查询优化：单次查询获取所有数据
             if session_id:
                 sql = """
@@ -598,7 +604,7 @@ class MemoryManager:
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         
         # 使用连接池避免全局锁竞争
-        with self._get_connection() as conn:
+        with self.get_connection() as conn:
             cursor = conn.execute(
                 "INSERT INTO knowledge (title, content, source, tags, metadata) VALUES (?, ?, ?, ?, ?)",
                 (title, content, source, tags_json, meta_json),

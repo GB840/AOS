@@ -4,8 +4,11 @@ import json
 import base64
 import time
 import tempfile
+import logging
 from pathlib import Path
 from datetime import datetime
+
+_LOG = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -452,8 +455,8 @@ elif page == "🎤 语音交互":
             status_text.error(f"❌ 录音失败: {e}")
             try:
                 p.terminate()
-            except Exception:
-                pass
+            except Exception as e:
+                _LOG.warning("音频进程终止失败: %s", e)
 
 
 # ---- Loop Engineering Page ----
@@ -3306,9 +3309,9 @@ elif page == "🖱️ UI-TARS自动化":
     try:
         from deerflow.path_detect import detect_uitars_path
         uitars_available = detect_uitars_path() is not None
-    except Exception:
-        pass
-    
+    except Exception as e:
+        _LOG.warning("UI-TARS 路径检测失败: %s", e)
+
     status = "🟢 源码可用" if uitars_available else "🔴 未安装"
     st.info(f"UI-TARS 状态: {status}")
     
@@ -4048,9 +4051,9 @@ elif page == "📁 项目导入":
                                     "size": size,
                                     "modified": os.path.getmtime(full_path)
                                 })
-                            except Exception:
-                                pass
-                
+                            except Exception as e:
+                                _LOG.warning("项目文件扫描失败 (%s): %s", full_path, e)
+
                 st.session_state.project_files = {f["full_path"]: f for f in files}
                 st.success(f"扫描完成！发现 {len(files)} 个文件")
                 

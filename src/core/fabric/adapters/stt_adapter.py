@@ -24,6 +24,8 @@ import subprocess
 import tempfile
 import threading
 
+from typing import Iterator
+
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
@@ -185,8 +187,8 @@ class STTAdapter(BaseAgentAdapter):
             if audio_b64 and audio_path and os.path.isfile(audio_path):
                 try:
                     os.remove(audio_path)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("STT 临时音频文件清理失败（非致命）: %s", e)
 
         if not text or not text.strip():
             return InvokeResult(ok=False, error="STT 未识别出文本")

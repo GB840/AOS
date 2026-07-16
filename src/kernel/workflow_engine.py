@@ -216,13 +216,19 @@ def install_missing(tool_name: str) -> Tuple[bool, str]:
 # ---- 意图解读 -------------------------------------------------
 
 def analyze_intent(user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
-    """解读用户意图——LLM 驱动 + 本地文件扫描 + 意图不明时标记需澄清。
+    """解读用户意图——通用、任务无关。
+
+    设计要点（灵活性核心）：
+      不把意图分类成固定任务类型（video/install/deploy/file_ops...），
+      只提取「目标 + 参考材料 + 环境」。至于「怎么做」，完全交给后续的
+      LLM 方案生成 + 通用能力路由（autopilot）去自适应。
+      这样每个人给的任务不一样，系统都能接住，而不是走预设的类型分支。
 
     返回结构化意图。若 needs_clarification=True，Phase 1 会反问用户。
     """
     intent = {
         "raw": user_input,
-        "type": "unknown",
+        "type": "general",          # 仅作 LLM 上下文提示，绝不用于分支路由
         "domain": "general",
         "goal": user_input,
         "reference_urls": [],
@@ -230,53 +236,55 @@ def analyze_intent(user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
         "needs_clarification": False,
         "clarification_question": "",
         "local_context": {},
+        "category_hint": "",        # 轻量提示(视频/代码/文件/部署...)，仅供 LLM 参考
     }
 
     # 提取 URL
     urls = re.findall(r"https?://[^\s]+", user_input)
     intent["reference_urls"] = urls
 
-    # 如果是本地路径/盘符 → 扫描文件系统
+    # 本地路径扫描（让方案生成有本地素材上下文）
     _scan_local(intent, user_input)
 
-    # URL 类型识别
+    # 参考内容抓取（让方案生成有料）
     if urls:
-        url = urls[0].lower()
-        if any(d in url for d in ["youtube.com", "youtu.be", "bilibili.com", "b23.tv"]):
-            intent["type"] = "video_analysis"
-            intent["domain"] = "video_production"
-            intent["reference_type"] = "video"
-            intent["goal"] = _extract_goal_from_input(user_input)
-            # 视频分析需要澄清：做什么类型的视频？
-            if not _has_clear_action(user_input):
-                intent["needs_clarification"] = True
-                intent["clarification_question"] = (
-                    "你想用这个视频做什么？\n"
-                    "  a) 模仿它的风格做类似视频\n"
-                    "  b) 提取它的脚本/文字\n"
-                    "  c) 分析它的剪辑手法\n"
-                    "  d) 其他（请描述）"
-                )
-            else:
-                intent["reference_content"] = _fetch_url_content(urls[0])
-        elif any(d in url for d in ["github.com", "gitlab.com"]):
-            intent["type"] = "code_analysis"
-            intent["domain"] = "software"
-            intent["reference_type"] = "repository"
-            intent["reference_content"] = _fetch_url_content(urls[0])
-        else:
-            intent["type"] = "web_reference"
-            intent["reference_content"] = _fetch_url_content(urls[0])
-    else:
-        # 无 URL：关键词 + LLM 联合判断
-        intent = _llm_analyze_intent(intent, user_input, env)
+        intent["reference_content"] = _fetch_url_content(urls[0])
 
-    # 评估复杂度
-    has_video = intent["type"] == "video_production" or intent["reference_type"] == "video"
-    intent["complexity"] = "high" if has_video else ("medium" if has_video else "low")
-    intent["estimated_phases"] = 5 if has_video else 3
+    # 轻量分类提示：只喂给 LLM 出方案用，永不用于 if/elif 分派
+    intent["category_hint"] = _category_hint(user_input, intent)
+
+    # 意图不明才澄清：没有清晰动作动词、又没有本地上下文时才反问。
+    # 反问用开放式问题（不预设 a/b/c 菜单），保持灵活性。
+    if not _has_clear_action(user_input) and not intent.get("local_context"):
+        intent["needs_clarification"] = True
+        intent["clarification_question"] = (
+            f"我没完全理解「{user_input[:60]}」具体要做什么。能再描述一下吗？\n"
+            "  你想要达到什么效果？\n"
+            "  涉及什么类型的文件/内容？\n"
+            "  有没有参考链接或本地路径？"
+        )
 
     return intent
+
+
+def _category_hint(user_input: str, intent: Dict[str, Any]) -> str:
+    """轻量分类提示（仅供 LLM 出方案参考，绝不用于代码分支）。"""
+    text = user_input.lower()
+    if any(k in text for k in ["视频", "剪辑", "vlog", "字幕", "配音", "短视频"]):
+        return "video"
+    if any(k in text for k in ["部署", "上线", "服务器", "docker", "k8s", "nginx"]):
+        return "deployment"
+    if any(k in text for k in ["装", "安装", "install", "setup", "配置环境"]):
+        return "installation"
+    if any(k in text for k in ["整理", "分类", "删除", "压缩", "打包", "去重", "改名", "批量"]):
+        return "file_ops"
+    if any(k in text for k in ["代码", "脚本", "爬虫", "程序", "函数", "api"]):
+        return "software"
+    if intent.get("reference_urls") and any(
+        d in intent["reference_urls"][0].lower() for d in ["github.com", "gitlab.com"]
+    ):
+        return "code_repo"
+    return "general"
 
 
 def _scan_local(intent: Dict[str, Any], user_input: str) -> None:
@@ -314,23 +322,15 @@ def _scan_local(intent: Dict[str, Any], user_input: str) -> None:
         if img_count > 10:
             intent["needs_clarification"] = True
             intent["clarification_question"] = (
-                f"检测到 {target} 下有 {img_count} 张图片({', '.join(f'{e}({n})' for e,n in by_type.items() if e in img_exts)})。你想：\n"
-                "  a) 整理分类这些图片\n"
-                "  b) 把图片做成视频/幻灯片\n"
-                "  c) 压缩打包\n"
-                "  d) 查找重复图片\n"
-                "  e) 批量处理（改名/转格式/加水印）\n"
-                "  f) 其他（请描述）"
+                f"检测到 {target} 下有 {img_count} 张图片"
+                f"({', '.join(f'{e}({n})' for e, n in by_type.items() if e in img_exts)})。"
+                "你想对它们做什么？请直接描述你的目标（例如：做成视频、按类型分类、压缩打包、去重…）。"
             )
         elif vid_count > 0:
             intent["needs_clarification"] = True
             intent["clarification_question"] = (
-                f"检测到 {target} 下有 {vid_count} 个视频。你想：\n"
-                "  a) 剪辑/合并视频\n"
-                "  b) 转换格式\n"
-                "  c) 提取音频\n"
-                "  d) 压缩视频\n"
-                "  e) 其他（请描述）"
+                f"检测到 {target} 下有 {vid_count} 个视频。你想对它们做什么？"
+                "请直接描述你的目标（例如：合并、转格式、提取音频、压缩…）。"
             )
 
 
@@ -394,92 +394,24 @@ def _has_clear_action(text: str) -> bool:
 
 
 def _apply_clarification(intent: Dict[str, Any], answer: str) -> Dict[str, Any]:
-    """根据用户对澄清问题的回答，映射到正确的意图类型和具体目标。
+    """用户回答了澄清问题。
 
-    从澄清问题的选项文本中解析 a) xxx b) yyy，把用户选的字母
-    映射到具体操作（而非仅 `file_ops` 泛类型）。
+    现在澄清是开放式问题（非 a/b/c 菜单），所以这里只把用户补充并入
+    目标、并解除澄清标记——不再做「字母→任务类型」的硬编码映射
+    （那才是反灵活性的根源）。具体怎么做交给后续 LLM 方案生成。
     """
-    answer_lower = answer.strip().lower()
-    question = intent.get("clarification_question", "")
-
-    # 从澄清问题中解析选项 (形如 "a) 整理分类" "b) 做成视频")
-    options = {}
-    for m in re.finditer(r"([a-f])\)\s*([^\n]+)", question):
-        options[m.group(1)] = m.group(2).strip()
-
-    # 字母映射：优先用澄清问题里的具体文本
-    if len(answer_lower) == 1 and answer_lower in options:
-        action_text = options[answer_lower]
-        # 给 goal 注入具体含义而非泛类型
-        intent["goal"] = f"{intent.get('goal','')} → {action_text}"
-        # 根据操作文本判断意图类型
-        if any(kw in action_text for kw in ["整理", "分类", "去重", "改名", "批量", "处理"]):
-            intent["type"] = "file_ops"
-        elif any(kw in action_text for kw in ["视频", "幻灯片", "slideshow"]):
-            intent["type"] = "video_production"
-        elif any(kw in action_text for kw in ["压缩", "打包", "zip"]):
-            intent["type"] = "file_ops"
-        else:
-            intent["type"] = "file_ops"
-        intent["domain"] = intent["type"]
-        intent["needs_clarification"] = False
+    answer = answer.strip()
+    if not answer or answer_lower(answer) in ("q", "退出", "exit"):
+        # 用户想退出，保持澄清态由调用方处理
         return intent
-
-    # 通用字母映射（退路）
-    letter_map = {"a": "file_ops", "b": "video_production", "c": "file_ops", "d": "file_ops", "e": "unknown"}
-    if len(answer_lower) == 1 and answer_lower in letter_map:
-        intent["type"] = letter_map[answer_lower]
-        intent["domain"] = letter_map[answer_lower]
-        intent["needs_clarification"] = False
-        intent["goal"] = f"{intent.get('goal','')} — 用户选择了选项 {answer_lower.upper()}"
-    elif answer_lower in ("是", "yes", "y", "ok"):
-        intent["needs_clarification"] = False
-    elif any(kw in answer_lower for kw in ["检索", "搜索", "search", "看看", "查", "找"]):
-        # "你先检索" → 先扫描再说明
-        intent["type"] = "research"
-        intent["domain"] = "research"
-        intent["needs_clarification"] = False
-        intent["goal"] = f"先探索 {intent.get('goal','')} 的内容结构，列出文件类型分布"
-    else:
-        intent["needs_clarification"] = False
-
+    # 把补充信息并入目标，供后续 LLM 出方案
+    intent["goal"] = f"{intent.get('goal', '')} —— 用户补充: {answer}"
+    intent["needs_clarification"] = False
     return intent
 
 
-def _llm_analyze_intent(intent: Dict[str, Any], user_input: str, env: Dict[str, Any]) -> Dict[str, Any]:
-    """用 LLM 分析无 URL 的用户意图。LLM 不可用时回落关键词匹配。"""
-    # 先跑本地关键词快速判断
-    keyword_map = {
-        "video_production": ["视频", "剪辑", "拍摄", "短视频", "vlog", "画面", "字幕", "配音"],
-        "deployment": ["部署", "上线", "服务器", "docker", "k8s", "nginx"],
-        "installation": ["装", "安装", "install", "setup", "配置"],
-        "file_ops": ["整理", "分类", "删除", "移动", "压缩", "打包", "去重", "改名", "批量"],
-    }
-    for task_type, kws in keyword_map.items():
-        if any(kw in user_input for kw in kws):
-            intent["type"] = task_type
-            intent["domain"] = task_type
-            if task_type == "file_ops" and not _has_clear_action(user_input):
-                intent["needs_clarification"] = True
-                intent["clarification_question"] = (
-                    f"你想对文件做什么操作？\n"
-                    "  a) 按类型整理到不同文件夹\n"
-                    "  b) 批量重命名\n"
-                    "  c) 查找并删除重复文件\n"
-                    "  d) 压缩打包\n"
-                    "  e) 其他（请描述）"
-                )
-            return intent
-
-    # 关键词也不行 → 标记需澄清
-    intent["needs_clarification"] = True
-    intent["clarification_question"] = (
-        f"我没完全理解「{user_input[:60]}」具体要做什么。能再描述一下吗？比如：\n"
-        "  你想达到什么效果？\n"
-        "  涉及什么类型的文件/内容？\n"
-        "  有没有参考链接？"
-    )
-    return intent
+def answer_lower(s: str) -> str:
+    return s.strip().lower()
 
 
 def _extract_goal_from_input(text: str) -> str:
@@ -511,158 +443,84 @@ def _fetch_url_content(url: str) -> Optional[str]:
 # ---- 多方案生成 -----------------------------------------------
 
 def generate_plans(intent: Dict[str, Any], env: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """基于意图和环境，生成 3+ 套差异化执行方案。
+    """基于意图和环境，生成 3+ 套差异化执行方案（通用、任务无关）。
 
-    每套方案含：
-      - name / approach / tools_needed / steps / pros / cons /
-      - estimated_time / suitability / missing_tools
+    主路径：LLM 根据「目标 + 环境 + 可用能力」产出 3 套真正不同的方案
+    （自动化程度/成本/质量/耗时各异）。LLM 不可用 → 回落 3 套通用方案。
+
+    关键：不使用任何「任务类型 → 模板」的硬编码分支。无论用户给的是
+    「装 ffmpeg」「做视频」「写爬虫」「部署服务」还是任何其它任务，
+    都走同一条通用生成路径，因此每个人想弄的都不一样也能接住。
     """
-    plans = []
-    task_type = intent.get("type", "unknown")
-    has_gpu = bool(env.get("gpu"))
-    installed = set(env.get("installed_tools", {}).keys())
+    plans = _llm_generate_plans(intent, env)
+    if not plans:
+        plans = _universal_fallback_plans(intent, env)
 
-    if task_type in ("video_production", "video_analysis"):
-        plans = _video_plans(intent, env, has_gpu, installed)
-    elif task_type in ("installation", "system"):
-        plans = _install_plans(intent, env, installed)
-    elif task_type in ("deployment",):
-        plans = _deploy_plans(intent, env, installed)
-    else:
-        plans = _generic_plans(intent, env, installed)
-
-    # 用 LLM 增强方案（如果可用）
+    # LLM 增强（可选，失败不影响主流程）
     plans = _llm_enhance_plans(plans, intent, env)
-
     return plans
 
 
-def _video_plans(intent, env, has_gpu, installed) -> List[Dict[str, Any]]:
-    """视频制作类方案。"""
-    ref = intent.get("reference_content", "")
-    goal = intent.get("goal", "制作视频")
-    plans = [
-        {
-            "id": 0, "name": "方案A: 全自动AI流水线（推荐）",
-            "approach": "AI 自动分析参考视频→提取风格/节奏/转场→AI 生成脚本→AI 配音→AI 剪辑→人工审核",
-            "tools_needed": ["ffmpeg", "python", "whisper(语音转文字)", "edge-tts(配音)"],
-            "steps": [
-                "1. 下载参考视频并用 whisper 提取音频+转文字脚本",
-                "2. ag2 分析视频结构（开头/正文/结尾 节奏）",
-                "3. AI 生成新脚本（模仿参考风格）",
-                "4. edge-tts 生成配音",
-                "5. 素材搜索与自动剪辑（ffmpeg 拼接）",
-                "6. 生成预览 → 等审核",
-            ],
-            "pros": ["全自动", "无需手动剪辑", "速度快(~10min)"],
-            "cons": ["AI 剪辑可能不够精细", f"{'需要 GPU 加速' if not has_gpu else 'GPU 可用，效果更好'}"],
-            "estimated_time": "10-15 分钟",
-            "suitability": "适合量产类短视频、产品介绍",
-            "missing_tools": [t for t in ["ffmpeg", "whisper"] if t not in installed],
-        },
-        {
-            "id": 1, "name": "方案B: AI辅助+手动精调",
-            "approach": "AI 生成脚本/分镜/素材建议 → 你在剪映/PR 里手动剪辑 → AI 辅助字幕/配音",
-            "tools_needed": ["剪映/PR(手动安装)", "python"],
-            "steps": [
-                "1. AI 分析参考视频，提取详细分镜脚本",
-                "2. AI 搜索素材链接供你下载",
-                "3. 你手动剪辑（剪映/PR）",
-                "4. AI 生成字幕 SRT 文件",
-                "5. AI 生成多平台标题/标签/描述",
-            ],
-            "pros": ["质量可控", "适合精品内容", "不依赖专业AI工具"],
-            "cons": ["需要手动操作", "耗时较长(~1h)"],
-            "estimated_time": "1-2 小时",
-            "suitability": "适合精品长视频、品牌宣传片",
-            "missing_tools": [],
-        },
-        {
-            "id": 2, "name": "方案C: 极简纯AI方案（零依赖）",
-            "approach": "全部用云端 AI 服务（无需本地安装）→ 生成脚本 → D-ID/HeyGen 生成数字人 → Runway 生成画面 → 在线拼接",
-            "tools_needed": ["浏览器", "D-ID/HeyGen 账号", "Runway 账号"],
-            "steps": [
-                "1. AI 分析参考视频，生成脚本",
-                "2. D-ID/HeyGen 生成数字人口播视频",
-                "3. Runway 生成 B-roll 画面",
-                "4. 在线剪辑平台拼接",
-                "5. 导出 → 审核 → 发布",
-            ],
-            "pros": ["无需安装任何软件", "云端 GPU 效果最好"],
-            "cons": ["需要付费订阅", "处理速度依赖网络", "数据隐私风险"],
-            "estimated_time": "20-30 分钟",
-            "suitability": "适合不差钱、不想折腾环境的用户",
-            "missing_tools": [],
-        },
-    ]
-    return plans
+def _llm_generate_plans(intent: Dict[str, Any], env: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """用 LLM 为任意任务生成 3 套差异化方案。无 key / 不可用返回 []。"""
+    try:
+        from openai import OpenAI
+        api_key = os.environ.get("ZHIPU_API_KEY", "")
+        if not api_key:
+            return []
+        client = OpenAI(api_key=api_key, base_url="https://open.bigmodel.cn/api/paas/v4")
+
+        env_summary = format_env_report(env)
+        goal = intent.get("goal", "")
+        refs = intent.get("reference_urls", [])
+        ref_content = str(intent.get("reference_content", ""))[:1500]
+
+        prompt = (
+            "你是 AOS 自主智能体的方案规划器。用户给了一个开放式任务，"
+            "请基于用户真实环境，生成 3 套**真正不同**的执行方案。\n\n"
+            f"用户目标: {goal}\n"
+            f"参考链接: {refs}\n"
+            f"参考内容摘要: {ref_content}\n"
+            f"用户环境:\n{env_summary}\n\n"
+            "AOS 可用的通用能力与工具（请按需组合，不必全用）:\n"
+            "  - web.search: 联网搜索\n"
+            "  - 终端/代码执行(action.code_exec): 可运行 Windows/Linux 命令、"
+            "pip/winget/choco 安装、python/node 脚本、git 等\n"
+            "  - inference.llm: LLM 推理 / 生成文本 / 写代码\n"
+            "  - 已装工具见上方环境列表；缺什么可现场安装\n"
+            "  - 视频相关任务可调用本地模块 kernel.video_maker "
+            "(generate_video(script, out_path)，script 为分镜文本列表)\n\n"
+            "要求每套方案给出: name, approach, tools_needed(列表), "
+            "steps(列表, 具体可执行), pros(列表), cons(列表), "
+            "estimated_time, suitability, missing_tools(列表, 基于环境判断)。\n"
+            "三套方案要在「自动化程度 / 成本 / 质量 / 耗时」上有明显差异。"
+            "只返回 JSON 数组，不要任何解释或 markdown 包裹。"
+        )
+        resp = client.chat.completions.create(
+            model="glm-4-flash", temperature=0.4, max_tokens=2500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.choices[0].message.content
+        json_match = re.search(r"\[.*\]", text, re.S)
+        if not json_match:
+            return []
+        plans = json.loads(json_match.group())
+        for i, p in enumerate(plans):
+            p["id"] = i
+            p.setdefault("name", f"方案{i+1}")
+            p.setdefault("steps", [])
+            p.setdefault("tools_needed", [])
+            p.setdefault("pros", [])
+            p.setdefault("cons", [])
+            p.setdefault("missing_tools", [])
+        return plans[:5]
+    except Exception:
+        logger.warning("LLM 生成方案失败，回落通用模板", exc_info=True)
+        return []
 
 
-def _install_plans(intent, env, installed) -> List[Dict[str, Any]]:
-    return [{
-        "id": 0, "name": "方案A: winget 自动安装（推荐 Windows）",
-        "approach": "用 Windows 包管理器一键安装",
-        "tools_needed": ["winget"],
-        "steps": ["winget install <目标软件>", "验证安装"],
-        "pros": ["最快", "自动处理依赖"],
-        "cons": ["仅 Windows", "部分软件版本滞后"],
-        "estimated_time": "2-5 分钟",
-        "suitability": "Windows 用户首选",
-        "missing_tools": [t for t in ["winget"] if t not in installed],
-    }, {
-        "id": 1, "name": "方案B: 手动下载安装（最稳）",
-        "approach": "从官网下载安装包手动安装",
-        "steps": ["搜索官方下载页", "下载+安装", "加入 PATH", "验证"],
-        "pros": ["兼容性好", "版本最新"],
-        "cons": ["需要手动操作", "可能遇到墙"],
-        "estimated_time": "10-15 分钟",
-        "suitability": "网络受限环境",
-        "missing_tools": [],
-    }, {
-        "id": 2, "name": "方案C: 源码编译（极客版）",
-        "approach": "克隆源码自己编译",
-        "steps": ["git clone", "安装编译依赖", "make/make install"],
-        "pros": ["完全可控", "最新特性"],
-        "cons": ["需要编译环境", "耗时最长"],
-        "estimated_time": "30-60 分钟",
-        "suitability": "开发者、需要定制功能",
-        "missing_tools": [t for t in ["git", "make"] if t not in installed],
-    }]
-
-
-def _deploy_plans(intent, env, installed) -> List[Dict[str, Any]]:
-    return [{
-        "id": 0, "name": "方案A: Docker 容器化部署",
-        "approach": "Docker 一键拉起",
-        "tools_needed": ["docker"],
-        "steps": ["docker compose up -d"],
-        "pros": ["隔离环境", "一键启动", "跨平台"],
-        "cons": ["需要 Docker", "占用资源多"],
-        "estimated_time": "5 分钟",
-        "suitability": "标准部署",
-        "missing_tools": [t for t in ["docker"] if t not in installed],
-    }, {
-        "id": 1, "name": "方案B: 本地裸机部署",
-        "approach": "直接在宿主机安装运行",
-        "steps": ["装 Python 依赖", "配置 nginx/caddy", "systemd 服务"],
-        "pros": ["性能最好", "无虚拟化开销"],
-        "cons": ["环境冲突风险", "需要 root"],
-        "estimated_time": "20-30 分钟",
-        "suitability": "生产环境",
-        "missing_tools": [],
-    }, {
-        "id": 2, "name": "方案C: 云服务部署",
-        "approach": "推送到云平台（Railway/Vercel/阿里云）",
-        "steps": ["git push", "云平台自动构建"],
-        "pros": ["免运维", "自动扩缩"],
-        "cons": ["需要付费", "网络依赖"],
-        "estimated_time": "10 分钟",
-        "suitability": "快速上线",
-        "missing_tools": [],
-    }]
-
-
-def _generic_plans(intent, env, installed) -> List[Dict[str, Any]]:
+def _universal_fallback_plans(intent: Dict[str, Any], env: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """LLM 不可用时的通用回落：3 套适用于任何任务的方案（无任务假设）。"""
     goal = intent.get("goal", "")
     return [{
         "id": 0, "name": "方案A: 全自动执行（推荐）",
@@ -670,10 +528,10 @@ def _generic_plans(intent, env, installed) -> List[Dict[str, Any]]:
         "tools_needed": [],
         "steps": [
             f"1. 搜索「{goal[:40]}」相关最佳实践",
-            f"2. 分析搜索结果，提取具体执行步骤",
-            f"3. 安装缺失的工具/依赖",
-            f"4. 执行核心任务",
-            f"5. 验证结果并汇报",
+            "2. 分析搜索结果，提取具体执行步骤",
+            "3. 安装缺失的工具/依赖",
+            "4. 执行核心任务",
+            "5. 验证结果并汇报",
         ],
         "pros": ["零人工", "自动纠错", "学习积累"],
         "cons": ["复杂任务可能走偏"],
@@ -868,12 +726,16 @@ class WorkflowEngine:
             if ok:
                 installed.append(tool)
 
-        # 构建执行任务
+        # 通用执行（灵活性核心）：
+        # 不按任务类型分支——视频/爬虫/部署/分析/任何任务都走同一条自主管道。
+        # 把选中方案的「目标 + 具体步骤」交给 autopilot / learning_loop，
+        # 由 LLM 规划器决定如何组合 搜索/代码执行/推理 等通用能力来完成。
+        # 若任务需要视频，方案生成阶段已把 kernel.video_maker 调用写进 steps，
+        # 这里统一执行，无需专属分支。
         goal = self.state.intent.get("goal", self.state.user_input)
         steps_text = "\n".join(plan.get("steps", []))
         task = f"执行方案「{plan['name']}」\n目标: {goal}\n步骤:\n{steps_text}"
 
-        # 真执行：调用 learning_loop（含失败重试+学习）
         try:
             from kernel.learning_loop import LearningLoop
             loop = LearningLoop(max_retries=2)
@@ -905,6 +767,33 @@ class WorkflowEngine:
 
         self.save()
         return self.state.execution_result
+
+    def _detect_artifacts(self, result: Dict[str, Any]) -> List[Dict[str, str]]:
+        """从执行结果里提取产出的文件（通用：视频/图片/csv/zip 等都可）。
+
+        不预设只认视频——任何任务产出的文件都一视同仁地回报给用户。
+        """
+        artifacts = []
+        # 1) 扫描 video_maker 的输出目录（若任务生成了视频）
+        out_dir = os.path.join(os.path.dirname(__file__), "..", "..", "_video_output")
+        if os.path.isdir(out_dir):
+            for f in sorted(os.listdir(out_dir)):
+                fp = os.path.join(out_dir, f)
+                if os.path.isfile(fp) and f.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".png", ".jpg")):
+                    artifacts.append({"type": "media", "path": fp})
+        # 2) 从 autopilot 最终输出里找疑似路径
+        final = (result.get("execution", {}).get("final") or "") if isinstance(result, dict) else ""
+        for m in re.findall(r"([A-Za-z]:[\\/][^\s\"']+\.[a-zA-Z0-9]{1,5}|/[^\s\"']+\.[a-zA-Z0-9]{1,5})", str(final)):
+            if os.path.exists(m):
+                artifacts.append({"type": "file", "path": m})
+        # 去重
+        seen = set()
+        uniq = []
+        for a in artifacts:
+            if a["path"] not in seen:
+                seen.add(a["path"])
+                uniq.append(a)
+        return uniq
 
     def phase5_publish(self, platforms: List[str] | None = None) -> Dict[str, Any]:
         """Phase 5: 审核通过后发布到各平台。"""
@@ -1001,8 +890,7 @@ def main() -> None:
         intent = engine.phase1_intent(user_input)
 
     _print_phase_header(1, "意图解读")
-    print(f"  类型: {intent.get('type')}")
-    print(f"  领域: {intent.get('domain')}")
+    print(f"  类别提示: {intent.get('category_hint') or 'general'}（仅供参考，不用于分支）")
     print(f"  目标: {intent.get('goal', '')[:100]}")
     lc = intent.get("local_context", {})
     if lc and lc.get("total_files"):
@@ -1042,6 +930,12 @@ def main() -> None:
         exe = ar.get("execution", {})
         print(f"  结果: {exe.get('ok_steps', 0)} 成功 / {exe.get('failed_steps', 0)} 失败")
         print(f"  耗时: {ar.get('duration_s', ar.get('total_duration_s', '?'))}s")
+        # 通用产物检测：任何任务产出的文件都回报（视频/图片/csv/...）
+        arts = engine._detect_artifacts(ar)
+        for a in arts:
+            print(f"  📦 产出文件: {a['path']}")
+        if ar.get("final"):
+            print(f"  产出摘要: {str(ar.get('final'))[:200]}")
     else:
         print(f"  ❌ 执行失败: {result.get('error', '未知错误')}")
 

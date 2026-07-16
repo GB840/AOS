@@ -25,23 +25,31 @@ from kernel.plugins.fabric_hub import FabricHub
 from core.fabric.capability import Capability
 
 
-def play_audio_on_windows(data: bytes, sample_rate: int = 24000) -> None:
-    """Output raw audio to default speaker (Windows) - minimal implementation."""
+def local_tts_fallback(text: str) -> bool:
+    """本地 TTS 兜底 (pyttsx3) - 零网络、零成本、Windows 友好"""
     try:
-        # Prefer pyttsx3
         import pyttsx3
         engine = pyttsx3.init()
-        engine.say("Response ready")
+        # 中文适配
+        voices = engine.getProperty('voices')
+        for voice in voices:
+            if 'Chinese' in voice.name or 'ZH' in voice.id.upper():
+                engine.setProperty('voice', voice.id)
+                break
+        engine.say(text)
         engine.runAndWait()
-    except ImportError:
-        print("[Audio] pyttsx3 not available, skipping speaker output")
+        return True
+    except Exception as e:
+        print(f"[本地TTS失败] {e}")
+        return False
 
 
 def composite_voice_response(text: str, hub: FabricHub) -> None:
     """Execute single cycle: text → audio."""
     start = time.perf_counter()
     
-    # Call TTS
+    # 优先经 FabricHub TTS 路由 (在线/高品质)
+    # 没有 live 引擎时诚实降级到本地
     req = {
         "text": text,
         "format": "raw",
@@ -51,21 +59,23 @@ def composite_voice_response(text: str, hub: FabricHub) -> None:
     
     result = hub.route(Capability.VOICE_TTS, req)
     
-    if result.ok and result.data:
-        audio = result.data.get("audio")
-        if audio:
-            play_audio_on_windows(audio)
-        print(f"[Speaking] Duration: {time.perf_counter() - start:.2f}s")
+    if result.ok and result.data and result.data.get("audio"):
+        # TODO: 如果有 audio 数据时的处理
+        print(f"[在线TTS] Duration: {time.perf_counter() - start:.2f}s")
     else:
-        print(f"[TTS Failed] {result.error}")
+        # 降级到本地引擎
+        print(f"[降级本地TTS] {result.error if result.error else '无在线引擎'}")
+        if local_tts_fallback(text):
+            print(f"[本地TTS] Duration: {time.perf_counter() - start:.2f}s")
+        else:
+            print(f"[TTS完全失败]")
 
 
 def main():
-    print("🔊 AOS Voice REPL (Echo → TTS Demo)")
-    print("   - Type your message, press Enter")
-    print("   - The message will be spoken back")
-    print("   - Requires Edge-TTS (free online TTS)")
-    print("   - Ctrl+D to exit")
+    print("🔊 AOS Voice REPL (本地 TTS 闭环)")
+    print("   - 输入文本，立即本地语音播报")
+    print("   - 优先在线 TTS，无网降级 pyttsx3")
+    print("   - Ctrl+D 或 Ctrl+C 退出")
     print("=" * 50)
     
     try:

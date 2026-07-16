@@ -46,8 +46,8 @@ class V5Bridge:
             try:
                 from dotenv import load_dotenv
                 load_dotenv(env_file)
-            except ImportError:
-                pass
+            except ImportError as e:
+                logger.debug("python-dotenv not installed, skipping env file loading: %s", e)
 
         # 内核
         self.system: AOSSystem = build_default_system()

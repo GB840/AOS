@@ -33,8 +33,8 @@ class CodeQualityChecker:
             try:
                 import jsonschema
                 return {"pass": True, "errors": [], "warnings": []}
-            except ImportError:
-                pass
+            except ImportError as e:
+                logger.debug("jsonschema 未安装，跳过 JS 语法检查: %s", e)
         
         return {"pass": len(errors) == 0, "errors": errors, "warnings": []}
     

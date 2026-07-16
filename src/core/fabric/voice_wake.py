@@ -182,8 +182,8 @@ class VoiceWakeLoop:
             try:
                 self._stream.stop()
                 self._stream.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("音频流停止/关闭失败（非致命）: %s", e)
             self._stream = None
         if self._thread is not None:
             self._thread.join(timeout=2)
@@ -279,8 +279,8 @@ def make_wake_turn_handler(pipeline=None, user_id: str = "default"):
         finally:
             try:
                 os.remove(path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("临时音频文件清理失败（非致命）: %s", e)
         last.clear()
         last.update(out)
         return out

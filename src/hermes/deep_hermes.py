@@ -302,8 +302,8 @@ class DeepHermesIntegration:
             if self._on_review_complete:
                 try:
                     self._on_review_complete()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("审查回调执行失败: %s", e)
 
     def enable_review(self, enabled: bool = True) -> None:
         """Enable or disable the background review engine."""

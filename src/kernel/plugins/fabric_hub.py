@@ -909,41 +909,146 @@ class FabricHub:
         return sorted(caps)
 
     # ---- 记忆门面（B 路线：把 mem0 接成 hub 会话/长期记忆） ----------
+    # 离线语义记忆回退源（与 autopilot._SEMANTIC_MEMORY_PATH 同一份文件）：
+    # autopilot 经 _save_semantic_memory 写入，hub 经 memory_recall 召回，
+    # 形成「写→召回」闭环，且不依赖 mem0/ollama 是否通电。
+    # 单一路径真源（与 autopilot._SEMANTIC_MEMORY_PATH 同一文件，经 kernel.semantic_state）
+    from kernel.semantic_state import SEMANTIC_MEMORY_PATH as _SEMANTIC_JSONL
+
     def memory_recall(self, query: str, user_id: str = "default",
                       **opts) -> list:
         """经 fabric 路由召回记忆（memory.semantic）。
 
-        无通电记忆引擎 / 引擎调用失败 → 返回空列表（绝不抛，不拖垮调用方）。
-        这是「任务间记住偏好」的读取端。
+        双后端、诚实降级：
+          1. 优先走 mem0 适配器（resolve_engine 命中且有通电记忆引擎）；
+          2. 若未通电记忆引擎 / mem0 调用失败 / 返回空，则回退读离线语义记忆
+             _traces/semantic_memory.jsonl（autopilot 写入的同一份），用查询词做
+             轻量相关度打分返回；
+          3. 任何异常都返回空列表，绝不抛、不拖垮调用方。
         """
+        # 1) 优先 mem0
         eid = self.resolve_engine(Capability.MEMORY_SEMANTIC.value)
-        if not eid:
+        if eid:
+            try:
+                res = self.invoke_engine(
+                    eid, Capability.MEMORY_SEMANTIC.value,
+                    {"action": "search", "query": query,
+                     "opts": {"user_id": user_id, **opts}},
+                )
+                if isinstance(res, InvokeResult) and res.ok:
+                    mem = (res.data or {}).get("result") or []
+                    # 仅当 mem0 返回非空 list 才采用；返回 dict/空则落 JSONL 回退
+                    if isinstance(mem, list) and mem:
+                        return mem
+            except Exception:
+                _LOG.warning("mem0 记忆召回失败，回退 JSONL", exc_info=True)
+        # 2) 回退：离线语义记忆 JSONL（让「写→召回」闭环真正打通）
+        return self._recall_semantic_jsonl(query, **opts)
+
+    def _recall_semantic_jsonl(self, query: str, limit: int = 5, **opts) -> list:
+        """回退召回：读离线语义记忆 jsonl，用查询词做轻量相关度打分。
+
+        返回与 mem0 端同构的 dict 列表：
+          {"text": <preview/content>, "score": <float>, "ts": ..., "task": ...}
+        无文件 / 解析失败 → 空列表（不抛）。
+        """
+        import re
+        path = self._SEMANTIC_JSONL
+        if not os.path.exists(path):
             return []
-        res = self.invoke_engine(
-            eid, Capability.MEMORY_SEMANTIC.value,
-            {"action": "search", "query": query,
-             "opts": {"user_id": user_id, **opts}},
-        )
-        if isinstance(res, InvokeResult) and res.ok:
-            return (res.data or {}).get("result") or []
-        return []
+        # 轻量分词：拉丁/数字词 + 中文字符（逐字），让中文部分也能做子串/字符级匹配
+        q_tokens = set(re.findall(r"[a-z0-9_]+", (query or "").lower()))
+        q_tokens |= set(re.findall(r"[一-鿿]", (query or "")))
+        scored = []
+        try:
+            from kernel.semantic_state import SEMANTIC_LOCK
+            with SEMANTIC_LOCK:
+                with open(path, encoding="utf-8") as f:
+                    raw_lines = f.readlines()
+            for line in raw_lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    hay = " ".join(
+                        str(rec.get(k, "")) for k in ("task", "preview", "content")
+                    ).lower()
+                    if q_tokens:
+                        overlap = sum(1 for t in q_tokens if t in hay)
+                        score = overlap / len(q_tokens)
+                    else:
+                        score = 0.0
+                    if score > 0:
+                        scored.append({
+                            "text": rec.get("preview") or rec.get("content") or "",
+                            "score": round(score, 3),
+                            "ts": rec.get("ts"),
+                            "task": rec.get("task"),
+                            "source": "semantic_jsonl",
+                        })
+        except Exception:
+            _LOG.warning("回退召回语义记忆失败", exc_info=True)
+            return []
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:limit]
 
     def memory_store(self, text: str, user_id: str = "default",
                      **opts) -> bool:
         """经 fabric 路由持久化记忆（memory.semantic）。
 
-        无通电记忆引擎 / 引擎调用失败（如缺 LLM key）→ 干净返回 False 不抛。
-        这是「任务间记住偏好」的写入端。
+        双后端、诚实降级：
+          - 优先走 mem0 适配器；
+          - 未通电 / 失败 → 回退写离线语义记忆 jsonl（与 autopilot 同文件），
+            保证「写→召回」闭环在无 mem0 时也成立；
+          - 任何异常返回 False 不抛。
         """
         eid = self.resolve_engine(Capability.MEMORY_SEMANTIC.value)
-        if not eid:
+        if eid:
+            try:
+                res = self.invoke_engine(
+                    eid, Capability.MEMORY_SEMANTIC.value,
+                    {"action": "add", "text": text,
+                     "opts": {"user_id": user_id, **opts}},
+                )
+                if isinstance(res, InvokeResult) and res.ok:
+                    return True
+            except Exception:
+                _LOG.warning("mem0 记忆写入失败，回退 JSONL", exc_info=True)
+        # 回退：离线语义记忆 jsonl（与 autopilot._save_semantic_memory 同格式）
+        return self._store_semantic_jsonl(text, **opts)
+
+    def _store_semantic_jsonl(self, text: str, **opts) -> bool:
+        """回退写入：mem0 不可用时把记忆追加到离线语义记忆 jsonl。
+
+        与 autopilot._save_semantic_memory 同格式、同文件，保证两端互通。
+        """
+        import datetime
+        import hashlib
+        path = self._SEMANTIC_JSONL
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            content = (text or "").strip()
+            if not content:
+                return False
+            record = {
+                "ts": datetime.datetime.now().isoformat(),
+                "task": (opts.get("task") or "")[:200],
+                "hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "preview": content[:200].replace("\n", " "),
+                "content": content[:6000],
+                "bytes": len(content.encode("utf-8")),
+            }
+            from kernel.semantic_state import SEMANTIC_LOCK
+            with SEMANTIC_LOCK:
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            return True
+        except Exception:
+            _LOG.warning("回退写入语义记忆失败", exc_info=True)
             return False
-        res = self.invoke_engine(
-            eid, Capability.MEMORY_SEMANTIC.value,
-            {"action": "add", "text": text,
-             "opts": {"user_id": user_id, **opts}},
-        )
-        return isinstance(res, InvokeResult) and res.ok
 
     def run_task(self, task: str, planner: str = "ag2", session_id: str = None) -> Dict[str, Any]:
         """「think→do」自主执行闭环：规划 → 解析成 steps → 编排芯粒逐跳执行。

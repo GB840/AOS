@@ -63,8 +63,9 @@ class FailureMemory:
 
     _DEFAULT_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "_learning_memory", "failure_memory.json")
 
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(self, path: str | None = None, ttl_days: int = 30) -> None:
         self._path = path or self._DEFAULT_PATH
+        self._ttl_days = ttl_days
         self._records: Dict[str, FailureRecord] = {}
         self._load()
 
@@ -73,9 +74,25 @@ class FailureMemory:
             if os.path.exists(self._path):
                 with open(self._path, "r", encoding="utf-8") as f:
                     raw = json.load(f)
+                cutoff = datetime.datetime.now() - datetime.timedelta(days=self._ttl_days)
+                loaded = forgotten = 0
                 for rid, data in raw.items():
-                    self._records[rid] = FailureRecord(**data)
-                logger.info("FailureMemory 加载 %d 条记录", len(self._records))
+                    rec = FailureRecord(**data)
+                    try:
+                        created = datetime.datetime.fromisoformat(rec.created_at)
+                    except Exception:
+                        created = datetime.datetime.now()
+                    # 原则2：失败即训练 + 遗忘（TTL）。过期模式自动丢弃，
+                    # 避免记忆库无限膨胀、旧修复方案过时后仍被注入。
+                    if created < cutoff:
+                        forgotten += 1
+                        continue
+                    self._records[rid] = rec
+                    loaded += 1
+                if forgotten:
+                    logger.info("FailureMemory 遗忘 %d 条过期记录 (TTL=%dd)", forgotten, self._ttl_days)
+                    self._save()  # 持久化遗忘结果
+                logger.info("FailureMemory 加载 %d 条记录", loaded)
         except Exception:
             logger.warning("FailureMemory 加载失败，从空库开始", exc_info=True)
 
@@ -385,13 +402,14 @@ class LearningLoop:
             logger.warning("搜索修复方案失败", exc_info=True)
         return []
 
-    def verify_fix(self, task: str, original_error: str) -> bool:
+    def verify_fix(self, task: str, original_error: str = "") -> bool:
         """验证修复是否真的有效（AIDE² 奖励黑客防御）。
 
         简单验证：重跑 autopilot，看是否还失败。
         更严格的验证（未来）：跑回归测试套件。
         """
-        result = self.autopilot_run(task)
+        from kernel.autopilot import run as autopilot_run
+        result = autopilot_run(task, planner="ag2")
         exe = result.get("execution", {})
         return exe.get("failed_steps", 0) == 0
 

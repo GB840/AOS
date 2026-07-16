@@ -86,8 +86,8 @@ class SkillSandbox:
         if hasattr(self, 'sandbox_dir') and self.sandbox_dir.exists():
             try:
                 shutil.rmtree(self.sandbox_dir)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("沙箱目录清理失败: %s", e)
 
     def _safe_env(self) -> Dict[str, str]:
         """构造不含任何 AOS 密钥的最小环境, 供沙箱子进程使用 (防机密泄露)。"""
@@ -204,8 +204,8 @@ class SkillSandbox:
                             duration_ms=duration_ms,
                             memory_used_mb=result_data.get("memory_used", 0),
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("沙箱结果 JSON 解析失败: %s", e)
             
             if proc.returncode == 0:
                 output = proc.stdout[:self.config.max_output_size]
@@ -414,14 +414,17 @@ with open(result_path, "w", encoding="utf-8") as f:
             return SandboxResult(success=False, error=f"Skill '{skill_name}' not found")
         
         try:
-            code_to_execute = f"""
+            # 防模板注入
+            safe_name = skill_name.replace('"', '\\"').replace('\n', '')
+            safe_context = str(context).replace('"', '\\"').replace('\n', '')
+            code_to_execute = """
 from skills.base import SkillRegistry
 registry = SkillRegistry()
-skill = registry.find_by_name("{skill_name}")
+skill = registry.find_by_name("{name}")
 if skill:
-    result = skill.execute({context})
+    result = skill.execute({ctx})
     print(result)
-"""
+""".format(name=safe_name, ctx=safe_context)
             return self.execute_code(code_to_execute, language="python")
         except Exception as e:
             return SandboxResult(success=False, error=str(e))

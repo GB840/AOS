@@ -96,8 +96,6 @@ class AOSKernel:
         """返回 fabric 通电自检；未登记枢纽返回 None。"""
         hub = self.fabric_hub
         return hub.health_report() if hub is not None else None
-        for p in (permissions or []):
-            self._permissions[f"{p.agent_id}:{p.action}"] = p
 
     def grant_permission(self, agent_id: str, action: str, granted: bool = True) -> None:
         """增量授权：在保留现有策略的前提下，为单个 agent:action 设权。

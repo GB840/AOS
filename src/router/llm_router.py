@@ -308,7 +308,7 @@ class LLMRouter:
         )
         return response.choices[0].message.content
 
-    def _call_baidu(self, messages: List[Dict], **kwargs) -> str:
+    def _call_baidu(self, messages: List[Dict], _retried: int = 0, **kwargs) -> str:
         if not REQUESTS_AVAILABLE:
             raise Exception("requests库未安装")
         if not self.baidu_access_token:
@@ -321,19 +321,19 @@ class LLMRouter:
             "messages": messages,
             "temperature": kwargs.get("temperature", 0.7),
         }
-        
+
         if config.BAIDU_API_KEY.startswith("bce-v3/"):
             headers = {"Authorization": f"Bearer {self.baidu_access_token}"}
             response = requests.post(url, headers=headers, json=data, timeout=30)
         else:
             params = {"access_token": self.baidu_access_token}
             response = requests.post(url, params=params, json=data, timeout=30)
-        
+
         result = response.json()
         if "error_code" in result:
-            if result["error_code"] == 110:
+            if result["error_code"] == 110 and _retried < 2:
                 self._refresh_baidu_token()
-                return self._call_baidu(messages, **kwargs)
+                return self._call_baidu(messages, _retried=_retried+1, **kwargs)
             raise Exception(f"百度API错误: {result}")
         return result["result"]
 
@@ -417,6 +417,14 @@ class LLMRouter:
             return result
         except queue.Empty:
             raise Exception("讯飞API超时")
+        finally:
+            # 显式关闭 WebSocket 并回收守护线程，避免超时/异常路径下连接与
+            # 线程泄漏（daemon 线程虽不阻塞进程退出，但会一直持有连接直至 GC）。
+            try:
+                ws.close()
+            except Exception:
+                pass
+            ws_thread.join(timeout=2)
 
     def _call_ollama(self, messages: List[Dict], **kwargs) -> str:
         if not OPENAI_AVAILABLE:

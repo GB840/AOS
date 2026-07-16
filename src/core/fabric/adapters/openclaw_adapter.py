@@ -23,6 +23,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from typing import Optional
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -63,8 +65,8 @@ def _resolve_openclaw_mjs() -> Optional[str]:
             mjs = Path(out.stdout.strip()) / "openclaw" / "openclaw.mjs"
             if mjs.exists():
                 return str(mjs)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("npm root -g 查找 openclaw.mjs 失败，尝试回退路径: %s", e)
     fb = Path(r"C:\Users\Administrator\AppData\Roaming\npm\node_modules\openclaw\openclaw.mjs")
     if fb.exists():
         return str(fb)
@@ -284,8 +286,8 @@ class OpenClawAdapter(BaseAgentAdapter):
                 try:
                     json.loads(proc.stdout)
                     return {"status": "ok"}
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.warning("openclaw agent ping 响应非合法 JSON: %s", e)
             err, action = self._parse_failure(proc)
             return {"status": "agent_stale", "reason": err, "action": action}
         except Exception as e:  # noqa: BLE001

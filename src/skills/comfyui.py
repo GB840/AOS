@@ -492,10 +492,10 @@ class ComfyUISkill(Skill):
             if resp.status_code == 200:
                 config = resp.json()
                 return config.get("output_dir", "./output")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("获取 ComfyUI 输出目录失败: %s", e)
         return "./output"
-    
+
     def _list_workflows(self, task_id: str) -> Dict[str, Any]:
         """列出所有可用工作流"""
         workflows = {}

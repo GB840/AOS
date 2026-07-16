@@ -23,6 +23,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Pattern, Tuple
 
+import logging
+
+_LOG = logging.getLogger(__name__)
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 审计日志 — 不可篡改的追加式记录
@@ -158,8 +162,8 @@ class AuditTrail:
                     "entry_hash": entry.entry_hash,
                     "prev_hash": entry.prev_hash,
                 }, ensure_ascii=False) + "\n")
-        except OSError:
-            pass
+        except OSError as e:
+            _LOG.warning("AuditTrail: failed to write audit entry to %s: %s", self._filepath, e)
 
     @property
     def total_entries(self) -> int:

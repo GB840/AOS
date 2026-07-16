@@ -10,6 +10,8 @@ import importlib.util
 import os
 import sys
 import time
+import threading
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -18,41 +20,44 @@ from core.fabric.capability import Capability
 
 
 class ScriptExecutor:
-    """Sandboxed script executor."""
+    """Sandboxed script executor with thread safety."""
     
     def __init__(self, script_path: str, script_name: str):
         self.script_path = script_path
         self.script_name = script_name
         self.module = None
         self.last_modified = 0
+        self._lock = threading.RLock()  # 重载互斥
         self.load()
     
     def load(self):
-        """Load or reload the script module."""
-        try:
-            spec = importlib.util.spec_from_file_location(
-                f"repls.{self.script_name}", self.script_path
-            )
-            module = importlib.util.module_from_spec(spec)
-            
-            # Inject basic AOS context
-            module.__dict__['print'] = print
-            module.__dict__['input'] = input
-            
-            spec.loader.exec_module(module)
-            self.module = module
-            self.last_modified = os.path.getmtime(self.script_path)
-            return True
-        except Exception as e:
-            print(f"❌ Failed to load script {self.script_name}: {e}")
-            return False
-    
+        """Load or reload the script module (thread-safe)."""
+        with self._lock:
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"repls.{self.script_name}", self.script_path
+                )
+                module = importlib.util.module_from_spec(spec)
+                
+                # Inject basic AOS context
+                module.__dict__['print'] = print
+                module.__dict__['input'] = input
+                
+                spec.loader.exec_module(module)
+                self.module = module
+                self.last_modified = os.path.getmtime(self.script_path)
+                return True
+            except Exception as e:
+                print(f"❌ Failed to load script {self.script_name}: {e}")
+                return False
+
     def needs_reload(self) -> bool:
-        """Check if script needs reloading."""
-        try:
-            return os.path.getmtime(self.script_path) > self.last_modified
-        except OSError:
-            return False
+        """Check if script needs reloading (thread-safe)."""
+        with self._lock:
+            try:
+                return os.path.getmtime(self.script_path) > self.last_modified
+            except OSError:
+                return False
     
     def invoke(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute script with given payload."""

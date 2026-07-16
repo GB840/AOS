@@ -25,6 +25,23 @@ from ..kernel import AOSKernel
 from ..types import AgentInstance, AgentSpec, AgentStatus, Response
 
 
+def _safe_async_run(coro):
+    """安全地在同步上下文中运行协程：如果已有事件循环在运行则创建新循环在线程中执行。"""
+    import concurrent.futures
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # 已在事件循环中（如 asyncio.to_thread），在新线程中创建独立循环
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+
 # ─── 记忆管理器接口 + 默认实现 ──────────────────────────────────
 
 class MemoryManager(ABC):
@@ -234,7 +251,8 @@ class AgentRuntimeLayer:
 
         调用方若已在 asyncio event loop 中，请用 run_workflow_async()。
         """
-        return asyncio.run(self.run_workflow_async(steps, timeout_seconds))
+        # 使用 _safe_async_run 避免在已有事件循环中调用 asyncio.run() 导致 RuntimeError
+        return _safe_async_run(self.run_workflow_async(steps, timeout_seconds))
 
     async def run_workflow_async(self, steps: List[WorkflowStep],
                                  timeout_seconds: float = 300.0) -> List[WorkflowResult]:

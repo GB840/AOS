@@ -79,7 +79,7 @@ class 短视频剪辑指导师Skill(Skill):
             if inputs_data:
                 prompt += "\n\n## 相关输入数据:\n" + inputs_data
 
-            if brain is not None and not os.getenv("AOS_CLI_STANDALONE"):
+            if rt is not None and not os.getenv("AOS_CLI_STANDALONE"):
                 result = rt.chat(prompt, model="default")
                 if isinstance(result, str):
                     return {"success": True, "skill": self.NAME, "data": {"response": result}}
