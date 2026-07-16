@@ -1466,6 +1466,41 @@ async def orchestrator_run(req: OrchestratorRunRequest):
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
+@app.post("/api/orchestrator/render")
+async def orchestrator_render(req: OrchestratorRunRequest):
+    """运行多芯粒编排流水线并渲染为 A2UI 可视化 HTML（可直接浏览器查看）。
+
+    复用 OrchestrationChiplet.render_orchestration_result 把 trace 转成 A2UI
+    surface 并安全渲染（声明式、不执行代码、不注入 HTML）；编排失败时诚实
+    降级为错误 surface，不伪造成功报告。流水线逻辑同 /api/orchestrator/run。
+    """
+    try:
+        from mcp.protocol import _get_hub
+        from core.fabric.capability import Capability
+        from kernel.plugins.orchestration_chiplet import render_orchestration_result
+        hub = _get_hub()
+        # 编排芯粒已在 build_fabric_hub 注册；此处幂等确保存在
+        try:
+            if hub.resolve_engine(Capability.WORKFLOW_EXECUTE.value) is None:
+                hub.add_orchestrator()
+        except Exception:
+            pass
+        spec: Dict[str, Any] = {
+            "steps": req.steps,
+            "initial": req.initial or {},
+            "auto_handoff": req.auto_handoff,
+        }
+        if req.task_id:
+            spec["task_id"] = req.task_id
+        if req.parallel_groups:
+            spec["parallel_groups"] = req.parallel_groups
+        res = await asyncio.to_thread(hub.route, Capability.WORKFLOW_EXECUTE.value, spec)
+        html = render_orchestration_result(res, standalone=True)
+        return Response(content=html, media_type="text/html")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
 # ---- RuFlo API ----
 
 class RuFloRequest(BaseModel):

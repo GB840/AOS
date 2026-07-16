@@ -268,6 +268,27 @@ def orchestration_result_to_a2ui(result: InvokeResult) -> Optional[Dict[str, Any
     )
 
 
+def render_orchestration_result(result: InvokeResult, standalone: bool = True) -> str:
+    """把编排执行结果渲染为 A2UI 安全 HTML（失败诚实降级，不伪造）。
+
+    成功且含 trace → build_a2ui_report 报告；失败或无 trace → 渲染错误
+    surface（不把失败包装成「成功报告」）。返回的 HTML 可直接浏览器查看。
+    """
+    surface = orchestration_result_to_a2ui(result)
+    if surface is None:
+        # 诚实降级：编排失败时不伪造成功报告，渲染错误 surface。
+        # root 必须是单个组件 id（契约），多组件用 Column 包裹后 root 其上。
+        err = getattr(result, "error", None) or "编排未产生可用 trace"
+        b = _a2ui.A2UIBuilder(surface_id="aos-orch-fail",
+                              theme={"primaryColor": "#b3402f"})
+        b.add("title", _a2ui.text("编排流水线执行失败", variant="h2"))
+        b.add("err", _a2ui.text(str(err), variant="body"))
+        b.add("root", _a2ui.column(["title", "err"]))
+        b.root("root")
+        surface = b.surface()
+    return _a2ui.render_html(surface, standalone=standalone)
+
+
 def _auto_store_handoff(state: "_RunState") -> None:
     """流水线收尾：把执行结果汇成结构化交接信封，自动存 IMA（opt-in）。
 
