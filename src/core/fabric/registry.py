@@ -9,6 +9,8 @@ is a thin seam, not a heavy OS substrate.
 """
 from __future__ import annotations
 
+import time
+
 from .adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from .capability import (
     Capability,
@@ -17,8 +19,9 @@ from .capability import (
     TIER_LOW,
     TIER_AUTO,
     TIER_RANK,
-    ENGINE_TIER,
 )
+from .route_outcome_store import RouteOutcomeStore
+from .route_predictor import RoutePredictor
 
 
 # 供给方偏好（同档内的二级排序键，越小越优先）。默认「云端优先、本地兜底」，
@@ -70,6 +73,8 @@ class FabricRegistry:
         provider_cost: dict[str, float] | None = None,
         provider_latency: dict[str, float] | None = None,
         provider_quality: dict[str, float] | None = None,
+        predictor: "RoutePredictor | None" = None,
+        outcome_store: "RouteOutcomeStore | None" = None,
     ) -> None:
         self._adapters: dict[str, BaseAgentAdapter] = {}
         # 实例级策略，避免改全局影响其它枢纽；默认读模块级 ROUTE_STRATEGY。
@@ -79,6 +84,10 @@ class FabricRegistry:
         self._cost = provider_cost if provider_cost is not None else dict(PROVIDER_COST)
         self._latency = provider_latency if provider_latency is not None else dict(PROVIDER_LATENCY)
         self._quality = provider_quality if provider_quality is not None else dict(PROVIDER_QUALITY)
+        # 路由预测器（白盒进化）：默认不注入 → 回落静态策略，现有行为完全不变。
+        # 仅当显式 strategy="learned" 且 predictor 已训练时，才用预测分排序。
+        self.predictor = predictor
+        self.outcome_store = outcome_store
 
     def register(self, adapter: BaseAgentAdapter) -> None:
         self._adapters[adapter.engine_id] = adapter
@@ -100,6 +109,30 @@ class FabricRegistry:
             # 质量优先：分数越大越靠前 → 取负。
             return -self._quality.get(eid, 50.0)
         return float(_pref(eid))
+
+    def _intra_tier_key(self, a: BaseAgentAdapter, cap_str: str) -> float:
+        """同档内的次级排序键。
+
+        learned 策略且 predictor 已训练时，用预测成功概率（高分优先→取负）；
+        否则回落原静态策略。档位维度由调用方（providers_for）保证优先。
+        """
+        if (self.strategy == "learned" and self.predictor is not None
+                and self.predictor.trained):
+            return -self.predictor.predict(cap_str, a.engine_id, self.tier)
+        return self._sort_key(a)
+
+    def _record_outcome(self, cap_str: str, engine: str, tier, ok: bool,
+                        latency_ms: float, error=None) -> None:
+        """把一次路由尝试的真实结果落盘（供 predictor 学习）。无 store 则跳过。"""
+        if self.outcome_store is not None:
+            self.outcome_store.record(cap_str, engine, tier or "", ok, latency_ms, error)
+
+    def _maybe_retrain(self) -> None:
+        """白盒进化闭环：learned 且数据够、未训练时，自动从落盘结果学一次。"""
+        if (self.strategy == "learned" and self.predictor is not None
+                and not self.predictor.trained and self.outcome_store is not None
+                and self.outcome_store.trainable()):
+            self.predictor.fit(self.outcome_store.load())
 
     def _tier_of(self, a: BaseAgentAdapter) -> str:
         """取引擎实际档位（高/中/低），非法值回落中档。"""
@@ -131,10 +164,11 @@ class FabricRegistry:
             a for a in live
             if TIER_RANK.get(self._tier_of(a), TIER_RANK[TIER_MEDIUM]) >= start
         ]
-        # 先按档位(高->低)，同档内按策略排序
+        # 先按档位(高->低)保证「端云合作」第一维度；同档内再排序。
+        # 同档内：learned 且 predictor 已训练 → 用预测成功概率；否则静态策略。
         cands.sort(key=lambda a: (
             TIER_RANK.get(self._tier_of(a), TIER_RANK[TIER_MEDIUM]),
-            self._sort_key(a),
+            self._intra_tier_key(a, cap_str),
         ))
         return cands
 
@@ -163,18 +197,28 @@ class FabricRegistry:
         缺省用本注册表默认档位（默认 auto=级联）。
         """
         req_tier = getattr(req, "tier", None) or (req.payload or {}).get("tier")
+        cap_str = self._cap_to_str(req.capability)
+        # 白盒进化闭环：learned 且数据够、未训练时，先自动学一次。
+        self._maybe_retrain()
         providers = self.providers_for(req.capability, req_tier)
         if not providers:
-            cap_str = self._cap_to_str(req.capability)
             return InvokeResult(ok=False, error=f"no live provider for {cap_str}")
         last_res: InvokeResult | None = None
         attempts: list[str] = []
         for p in providers:
+            t0 = time.perf_counter()
             try:
                 res = p.invoke(req)
             except Exception as e:  # noqa: BLE001 - 单个供给方崩溃不阻断协商
+                dt = (time.perf_counter() - t0) * 1000.0
+                self._record_outcome(cap_str, p.engine_id, req_tier, False, dt, error=repr(e))
                 attempts.append(f"{p.engine_id} raised: {e!r}")
                 continue
+            dt = (time.perf_counter() - t0) * 1000.0
+            self._record_outcome(
+                cap_str, p.engine_id, req_tier, res.ok, dt,
+                error=res.error if not res.ok else None,
+            )
             if res.ok:
                 return res
             attempts.append(f"{p.engine_id}: {res.error}")
