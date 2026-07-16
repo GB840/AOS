@@ -23,6 +23,8 @@ from datetime import datetime
 from utils.config import config
 from core import get_brain
 from core.fabric import a2ui as a2ui_mod
+from kernel.plugins.code_team import CodeTeamOrchestrator
+from kernel.compliance import QualityGate
 from mcp import MCPMessage
 from core.pool import initialize_pools, close_pools
 from api.security import (
@@ -2258,6 +2260,40 @@ async def a2ui_demo():
     try:
         html = a2ui_mod.render_html(a2ui_mod._demo_surface(), standalone=True)
         return Response(content=html, media_type="text/html")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+class CodeTeamRequest(BaseModel):
+    requirement: str
+    lang: str = "python"
+
+
+class ComplianceGateRequest(BaseModel):
+    files: dict[str, str]
+
+
+@app.post("/api/code_team/run")
+async def code_team_run(req: CodeTeamRequest):
+    """多智能体代码团队：自然语言需求 → 协作生成 + 质量门 + 真实测试验证。
+
+    借鉴华为云码道(CodeArts) Agent Team 的协作生成形态，落到 AOS 已有的
+    compliance 质量门 + 隔离执行之上。默认 heuristic 生成（无 GPU/key 可跑），
+    真实 LLM 由调用方在 CodeTeamOrchestrator 注入。
+    """
+    try:
+        result = CodeTeamOrchestrator().run(req.requirement, lang=req.lang)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.post("/api/compliance/gate")
+async def compliance_gate(req: ComplianceGateRequest):
+    """三分质量门：{文件名: 代码} → 安全/质量/合规 × ERROR/WARN/INFO 报告。"""
+    try:
+        report = QualityGate().run(req.files)
+        return report.to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 

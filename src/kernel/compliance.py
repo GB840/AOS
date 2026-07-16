@@ -15,6 +15,7 @@ AI 代理人不是法外之地。这一层保证：
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -485,6 +486,212 @@ class ComplianceLayer:
         }
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 质量门 — 三分规则（安全 / 质量 / 合规 × ERROR / WARN / INFO）
+# ═══════════════════════════════════════════════════════════════════
+#
+# 借鉴 CodeArts「质量门」(3000+ 规则) 的工程化思路，但落地为 AOS 自己的
+# 可扩展三分规则集：
+#   - 三类：SECURITY（安全） / QUALITY（质量） / COMPLIANCE（合规）
+#   - 三级严重度：ERROR（阻断，质量门不通过）/ WARN（告警）/ INFO（提示）
+# 检查以 AST 为主（语法/危险调用/裸 except），正则仅用于合规类文本检查。
+# 规则可注入；run() 接收 {文件名: 代码} 返回结构化报告。
+
+CAT_SECURITY = "SECURITY"
+CAT_QUALITY = "QUALITY"
+CAT_COMPLIANCE = "COMPLIANCE"
+SEV_ERROR = "ERROR"    # 阻断：质量门不通过
+SEV_WARN = "WARN"      # 告警：记录但需人工确认
+SEV_INFO = "INFO"      # 提示：可选改进
+
+
+@dataclass
+class QualityRule:
+    """一条质量门规则。
+
+    check(filename, code) -> 命中返回 (line, message)，否则返回 None。
+    """
+    rule_id: str
+    category: str
+    severity: str
+    description: str
+    check: Callable[[str, str], Optional[Tuple[int, str]]]
+
+
+@dataclass
+class Violation:
+    rule_id: str
+    category: str
+    severity: str
+    file: str
+    line: int
+    message: str
+
+
+@dataclass
+class QualityReport:
+    violations: List[Violation]
+    passed: bool
+    files_checked: int
+    summary: Dict[str, int]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "files_checked": self.files_checked,
+            "summary": self.summary,
+            "violations": [
+                {
+                    "rule_id": v.rule_id, "category": v.category,
+                    "severity": v.severity, "file": v.file,
+                    "line": v.line, "message": v.message,
+                }
+                for v in self.violations
+            ],
+        }
+
+
+# ── 内置检查函数（AST 为主，正则仅用于文本合规）──
+
+def _attr_chain(node: "Any") -> str:
+    """把 a.b.c 属性链拼成字符串。"""
+    parts = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+    return ".".join(reversed(parts))
+
+
+def _gt_syntax(name: str, code: str) -> Optional[Tuple[int, str]]:
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        return (e.lineno or 1, f"语法错误: {e.msg}")
+    return None
+
+
+_DANGEROUS_BUILTINS = {"eval", "exec", "compile", "input", "__import__"}
+_DANGEROUS_ATTRS = {
+    "os.system", "os.popen", "os.exec*", "subprocess.call",
+    "subprocess.run", "subprocess.Popen", "pickle.loads",
+    "marshal.loads", "yaml.load",
+}
+
+
+def _gt_dangerous_call(name: str, code: str) -> Optional[Tuple[int, str]]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None  # 语法错误由 _gt_syntax 负责
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Name) and f.id in _DANGEROUS_BUILTINS:
+                return (node.lineno, f"禁止调用危险内置函数 {f.id}()")
+            if isinstance(f, ast.Attribute):
+                chain = _attr_chain(f)
+                if chain in _DANGEROUS_ATTRS:
+                    return (node.lineno, f"禁止调用危险API {chain}")
+    return None
+
+
+def _gt_bare_except(name: str, code: str) -> Optional[Tuple[int, str]]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and node.type is None:
+            return (node.lineno, "裸 except 会吞掉所有异常，应指定异常类型")
+    return None
+
+
+def _gt_long_file(name: str, code: str) -> Optional[Tuple[int, str]]:
+    n = code.count("\n") + 1
+    if n > 500:
+        return (1, f"文件过长（{n} 行），建议拆分")
+    return None
+
+
+def _gt_license_header(name: str, code: str) -> Optional[Tuple[int, str]]:
+    if not re.search(r"(license|copyright|版权|许可|spdx|MIT|Apache)", code, re.I):
+        return (1, "缺少许可证/版权头注释")
+    return None
+
+
+def _gt_todo_marker(name: str, code: str) -> Optional[Tuple[int, str]]:
+    if re.search(r"\b(TODO|FIXME|XXX)\b", code):
+        return (1, "存在未完成标记 (TODO/FIXME/XXX)")
+    return None
+
+
+class QualityGate:
+    """可配置的三分质量门。
+
+    用法：
+        gate = QualityGate()
+        report = gate.run({"calc.py": "x=1\\n..."})
+        if not report.passed:
+            ... 阻断合并/部署
+    """
+
+    DEFAULT_RULES = [
+        QualityRule("q001", CAT_QUALITY, SEV_ERROR, "语法必须可解析", _gt_syntax),
+        QualityRule("s001", CAT_SECURITY, SEV_ERROR, "禁止危险调用（eval/exec/os.system/...）",
+                    _gt_dangerous_call),
+        QualityRule("q002", CAT_QUALITY, SEV_WARN, "避免裸 except", _gt_bare_except),
+        QualityRule("q003", CAT_QUALITY, SEV_WARN, "文件不宜过长", _gt_long_file),
+        QualityRule("c001", CAT_COMPLIANCE, SEV_INFO, "建议包含许可证头", _gt_license_header),
+        QualityRule("c002", CAT_COMPLIANCE, SEV_INFO, "避免遗留 TODO 标记", _gt_todo_marker),
+    ]
+
+    def __init__(self, custom_rules: List[QualityRule] | None = None):
+        self._rules: List[QualityRule] = list(self.DEFAULT_RULES)
+        if custom_rules:
+            self._rules.extend(custom_rules)
+
+    def add_rule(self, rule: QualityRule) -> None:
+        self._rules.append(rule)
+
+    def run(self, files: Dict[str, str]) -> QualityReport:
+        """对 {文件名: 代码} 跑全部规则。
+
+        passed 仅当不存在任何 ERROR 级违规时为 True（WARN/INFO 不阻断）。
+        """
+        violations: List[Violation] = []
+        for fname, code in files.items():
+            for rule in self._rules:
+                try:
+                    hit = rule.check(fname, code)
+                except Exception as e:  # noqa: BLE001 - 单条规则异常不影响整体
+                    _LOG.warning("QualityGate: 规则 %s 执行异常: %s", rule.rule_id, e)
+                    continue
+                if hit:
+                    line, msg = hit
+                    violations.append(Violation(
+                        rule_id=rule.rule_id, category=rule.category,
+                        severity=rule.severity, file=fname, line=line,
+                        message=msg,
+                    ))
+
+        summary = {
+            "ERROR": sum(1 for v in violations if v.severity == SEV_ERROR),
+            "WARN": sum(1 for v in violations if v.severity == SEV_WARN),
+            "INFO": sum(1 for v in violations if v.severity == SEV_INFO),
+            "SECURITY": sum(1 for v in violations if v.category == CAT_SECURITY),
+            "QUALITY": sum(1 for v in violations if v.category == CAT_QUALITY),
+            "COMPLIANCE": sum(1 for v in violations if v.category == CAT_COMPLIANCE),
+        }
+        passed = summary["ERROR"] == 0
+        return QualityReport(
+            violations=violations, passed=passed,
+            files_checked=len(files), summary=summary,
+        )
+
+
 __all__ = [
     "AuditEntry",
     "AuditTrail",
@@ -492,4 +699,14 @@ __all__ = [
     "ContentGuard",
     "PolicyEngine",
     "PolicyRule",
+    "QualityGate",
+    "QualityRule",
+    "QualityReport",
+    "Violation",
+    "CAT_SECURITY",
+    "CAT_QUALITY",
+    "CAT_COMPLIANCE",
+    "SEV_ERROR",
+    "SEV_WARN",
+    "SEV_INFO",
 ]

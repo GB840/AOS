@@ -70,3 +70,46 @@
 - 是否要顺手把 CodeArts 的"质量门三分规则"补进 `compliance.py`（P1，低成本）？
 
 > 注：本文档与 `agentarts_openjiuwen_review.md` 构成"华为云 Agentic 全家桶"双产品研判，均经全网交叉验证，非编撰。
+
+---
+
+## §F P1 已落地（2026-07-16，用户"一起做"）
+
+用户拍板：P1 多 Agent 代码团队 + P1 质量门三分规则 都落地。
+
+### F.1 多 Agent 代码团队（借鉴 CodeArts Agent Team）
+- `src/kernel/plugins/code_team.py`：`CodeTeamOrchestrator` 把"自然语言需求→可运行代码"拆成四角色协作——
+  - **architect**（plan）：需求拆成 `{base}.py` + `test_{base}.py`
+  - **coder**（code）：调 `llm_generate(prompt, role)` 生成；**未注入 LLM 时走 heuristic 生成器**（识别 calculator/sort/fib/greet 等模式生成可运行骨架，保证无 GPU/key 沙箱也能真跑）
+  - **reviewer**（gate）：跑三分质量门
+  - **executor**（execute）：隔离临时目录 + 真实 `pytest`/`py_compile` 验证（与 `code_execution_adapter` 沙箱隔离理念一致，但适配多文件测试）
+- `run_code_team(requirement)` 模块级便捷函数。
+- **不是把 CodeArts 搬进来**（违零付费/主权），而是借其"多角色协作写代码"形态，落到 AOS 已有的 compliance + 隔离执行之上。
+
+### F.2 质量门三分规则（compliance.py）
+- `src/kernel/compliance.py` 加 `QualityGate` + `QualityRule` + `QualityReport`：
+  - **三类**：SECURITY（安全）/ QUALITY（质量）/ COMPLIANCE（合规）
+  - **三级**：ERROR（阻断，质量门不通过）/ WARN（告警）/ INFO（提示）
+  - 默认 6 条规则，**以 AST 为主真实检查**（语法、危险调用 `eval/exec/os.system/subprocess/pickle.loads`、裸 except、长文件），正则仅用于合规文本（license 头、TODO）
+  - 规则可注入扩展；`run({文件名: 代码}) -> QualityReport`（passed 仅当无 ERROR）
+- 这就是 CodeArts「3000+ 规则质量门」在 AOS 的工程化落地雏形（架构到位，规则集可继续扩）。
+
+### F.3 API 端点
+- `POST /api/code_team/run`（requirement, lang）→ 多 Agent 代码团队结果
+- `POST /api/compliance/gate`（files）→ 三分质量门报告
+
+### F.4 验证（真跑，不编）
+- `tests/test_code_team.py`（7 项）：calculator/sort/fib 端到端跑通（pytest 真通过）、质量门拦截危险生成、LLM 注入被采用、executor 注入生效
+- `tests/test_compliance_gate.py`（6 项）：语法错误/危险调用被 ERROR 拦截、裸 except 仅 WARN 不阻断、自定义规则可扩展
+- `api/main.py` import 验证：两个新路由均注册成功
+- **共 13 项新测试全绿**
+
+### F.5 架构位置
+```
+需求 ──▶ CodeTeamOrchestrator
+        ├─ architect → plan
+        ├─ coder     → LLM / heuristic 生成
+        ├─ reviewer  → compliance.QualityGate（三分）
+        └─ executor  → 隔离目录 + 真实 pytest
+```
+对应 CodeArts：「代码智能体团队 + 质量门」，但 AOS 是更底层 OS，CodeArts 仅作外部能力端点被路由，不替换内核。
