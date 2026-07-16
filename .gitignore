@@ -209,6 +209,8 @@ htmlcov/
 coverage.xml
 .coverage
 .coverage.*
+coverage.json
+.arts/
 src/core/deerflow_subagents.json
 
 # Windows NUL device name artifact (not a real file)

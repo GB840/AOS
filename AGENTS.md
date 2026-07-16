@@ -30,22 +30,21 @@
 ---
 
 <!-- BASELINE_START -->
-## 0.5 基线快照（2026-07-16 手动校正，轻量模式实测）
+## 0.5 基线快照（2026-07-16 08:57 UTC，手动生成(轻量)）
 
 > 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
 > 本表由 `tools/baseline_snapshot.py` 真实测算后写入；轻量模式测适配器/测试数，
-> `AOS_BASELINE_HEAVY=1` 额外测 live/dead 与覆盖率（CI 定时/commit 钩子用）。
-> 上次全量 `pytest --cov=src` 仍在后台运行，覆盖率% 与 pass/fail 待其实测回填（不编）。
+> `AOS_BASELINE_HEAVY=1` 额外测 live/dead 与覆盖率。
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 20 | kernel FabricHub `_ADAPTERS`(19) + orchestrator(自动注册)，已核实 |
-| live | 14（典型无 key 环境） | `FabricHub.health_report()`；HEAVY 模式实测回填 |
-| dead | 5 | openclaw/ag2/litellm/mem0/lfm2（根因见 §7） |
-| 测试 | 428 collected | `pytest --co -q` 实测（注：旧表写 452 为过时） |
-| 覆盖率 | ~41%（与 §5 一致） | 目标 50%；`AOS_BASELINE_HEAVY=1` 重测填实 |
-| brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric`(875) import 失败即 `fabric=None`，双轨未合（旧表两处报错字符串均为旧版残留，已删） |
-| 生成时间 | 2026-07-16 | `python tools/baseline_snapshot.py` |
+| 适配器总数 | 24 | kernel FabricHub 实测注册 24（含 MCP/视频/触控适配器） |
+| live | ? | 重跑需 `AOS_BASELINE_HEAVY=1` |
+| dead | ? | 典型无 key 环境见 §7（openclaw/ag2/litellm/mem0/lfm2） |
+| 测试 | 480 collected | `pytest --co -q` |
+| 覆盖率 | ?% | 轻量模式未测；HEAVY 模式实测见 §5 质量门下限 |
+| brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric`(875) import 失败即 `fabric=None`，双轨未合 |
+| 生成时间 | 2026-07-16 08:57 UTC | `python tools/baseline_snapshot.py` |
 <!-- BASELINE_END -->
 ## 1. 九大核心理念（AOS 宪法序言）
 

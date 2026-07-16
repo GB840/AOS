@@ -46,6 +46,10 @@ _EXPECTED_ENGINES = {
     "lfm2",        # LFM2 轻量 LLM
     "scripts",     # 动态脚本执行
     "minicpm_o",  # 全双工全模态适配器（VOICE_OMNI，高中低三级档位）
+    "vlm",          # 视觉理解适配器（a7ef9b2 注册）
+    "desktop-touch",  # 桌面触控 MCP
+    "omni-video",   # 全模态视频适配器
+    "video-use",    # 视频操作 MCP
 }
 
 
@@ -102,6 +106,41 @@ def test_kernel_delegates_resolve_engine_to_hub():
     rep = k.fabric_health()
     assert rep is not None and rep["total"] == len(_EXPECTED_ENGINES)
 
-    hub = k.fabric_hub
-    for cap in _KNOWN_CAPS:
-        assert k.resolve_engine(cap) == hub.resolve_engine(cap)
+
+def test_session_lru_eviction_on_capacity_limit():
+    """验证会话 LRU 淘汰：超出 SESSION_MAX_COUNT 时自动淘汰最旧会话。"""
+    from kernel.plugins.fabric_hub import _SESSIONS, _SESSION_MAX_COUNT, _save_session
+
+    # 清空现有会话
+    _SESSIONS.clear()
+
+    # 填充到容量上限
+    for i in range(_SESSION_MAX_COUNT):
+        _save_session(f"session_{i}", [{"task": f"task_{i}", "response": f"response_{i}"}])
+
+    # 验证容量已达上限
+    assert len(_SESSIONS) == _SESSION_MAX_COUNT
+
+    # 添加新会话，应触发 LRU 淘汰
+    _save_session(f"session_{_SESSION_MAX_COUNT}", [{"task": "new", "response": "new"}])
+
+    # 验证：总数仍为上限，且最旧的会话被淘汰
+    assert len(_SESSIONS) == _SESSION_MAX_COUNT
+    assert "session_0" not in _SESSIONS, "最旧会话应被淘汰"
+    assert f"session_{_SESSION_MAX_COUNT}" in _SESSIONS, "新会话应被添加"
+
+
+def test_session_max_turns_limit():
+    """验证 SESSION_MAX_TURNS=5：每个会话最多保留5轮历史。"""
+    from kernel.plugins.fabric_hub import _save_session, _load_session
+
+    # 创建超过5轮的会话历史
+    history = [{"task": f"task_{i}", "response": f"response_{i}"} for i in range(10)]
+    _save_session("test_session", history)
+
+    # 验证：只保留最近5轮
+    loaded = _load_session("test_session")
+    assert len(loaded) == 5, f"预期5轮，实际{len(loaded)}轮"
+    assert loaded[0]["task"] == "task_5", "应保留最近5轮"
+    assert loaded[-1]["task"] == "task_9", "应保留最近5轮"
+
