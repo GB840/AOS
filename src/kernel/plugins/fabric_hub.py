@@ -23,6 +23,7 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
 from core.fabric import FabricRegistry
+from core.fabric.route_runtime import build_route_runtime
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from core.fabric.adapters import (
     AG2Adapter,
@@ -200,7 +201,10 @@ class FabricHub:
                     break
         except Exception:  # noqa: BLE001 - 无 python-dotenv / 无 .env 都不致命
             pass
-        self._registry = FabricRegistry()
+        # 路由预测器「接电」：注入 predictor + outcome_store，默认启用 learned 策略。
+        # 真实流量经 route() 落盘后自动训练并持久化模型（越用越准）。
+        # 可用 AOS_ROUTE_STRATEGY=preference 退化为静态偏好表（零影响）。
+        self._registry = FabricRegistry(**build_route_runtime())
         self._errors: Dict[str, str] = {}
         # 已隔离进子进程的引擎：engine_id -> IsolatedEngineHost。
         # 被隔离引擎同时以 IsolatedAdapterProxy 注册进 _registry（参与路由），
@@ -327,26 +331,38 @@ class FabricHub:
             _busy_wait(self.route_sim_us / 1_000_000.0)
         req = InvokeRequest(capability=capability, payload=payload, trace_id=trace_id,
                             tier=payload.get("tier"))
+        # 白盒进化：真实流量前，若已积累够新样本则自动重训（learned 策略下）。
+        self._registry.maybe_retrain()
+        cap_str = self._registry.capability_to_str(capability)
+        eff_tier = req.tier or self._registry.tier
         providers = self._registry.providers_for(req.capability, req.tier)
         if not providers:
             return InvokeResult(ok=False, error=f"no live provider for {capability}")
         last_res: InvokeResult | None = None
         attempts: list[str] = []
         for adapter in providers:
+            eid = adapter.engine_id
+            t0 = time.perf_counter()
             try:
                 res = adapter.invoke(req)
             except Exception as e:  # noqa: BLE001 - 芯粒崩溃隔离，不传染
-                eid = adapter.engine_id
+                dt = (time.perf_counter() - t0) * 1000.0
                 self._failures[eid] = time.perf_counter()
                 self._errors[eid] = f"invoke failed: {e!r}"
                 _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", eid, e)
+                self._registry.record_outcome(cap_str, eid, eff_tier, False, dt, error=repr(e))
                 attempts.append(f"{eid} raised: {e!r}")
                 continue
+            dt = (time.perf_counter() - t0) * 1000.0
             if res.ok:
+                self._registry.record_outcome(cap_str, eid, eff_tier, True, dt)
                 return res
-            eid = adapter.engine_id
             self._failures[eid] = time.perf_counter()
             self._errors[eid] = res.error or "ok=False"
+            self._registry.record_outcome(
+                cap_str, eid, eff_tier, False, dt,
+                error=res.error if not res.ok else None,
+            )
             attempts.append(f"{eid}: {res.error}")
             last_res = res
         # 全部失败：返回最后一个芯粒的真实结果（保留其 data，如编排 trace/

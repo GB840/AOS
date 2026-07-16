@@ -75,6 +75,8 @@ class FabricRegistry:
         provider_quality: dict[str, float] | None = None,
         predictor: "RoutePredictor | None" = None,
         outcome_store: "RouteOutcomeStore | None" = None,
+        predictor_path: str | None = None,
+        retrain_gap: int = 8,
     ) -> None:
         self._adapters: dict[str, BaseAgentAdapter] = {}
         # 实例级策略，避免改全局影响其它枢纽；默认读模块级 ROUTE_STRATEGY。
@@ -88,6 +90,15 @@ class FabricRegistry:
         # 仅当显式 strategy="learned" 且 predictor 已训练时，才用预测分排序。
         self.predictor = predictor
         self.outcome_store = outcome_store
+        # 预测模型持久化路径：训练后落盘，重启自动加载（越用越准且可复现）。
+        self.predictor_path = predictor_path
+        # 距上次训练再积累 retrain_gap 条新样本才重训，避免每条都重训的开销。
+        self._retrain_gap = retrain_gap
+        # 已用于训练的样本数；加载已训练模型时对齐到当前落盘数，避免启动即重训。
+        self._last_trained_count = (
+            outcome_store.count() if (predictor is not None and predictor.trained
+                                      and outcome_store is not None) else 0
+        )
 
     def register(self, adapter: BaseAgentAdapter) -> None:
         self._adapters[adapter.engine_id] = adapter
@@ -110,15 +121,16 @@ class FabricRegistry:
             return -self._quality.get(eid, 50.0)
         return float(_pref(eid))
 
-    def _intra_tier_key(self, a: BaseAgentAdapter, cap_str: str) -> float:
+    def _intra_tier_key(self, a: BaseAgentAdapter, cap_str: str, tier: str | None = None) -> float:
         """同档内的次级排序键。
 
         learned 策略且 predictor 已训练时，用预测成功概率（高分优先→取负）；
-        否则回落原静态策略。档位维度由调用方（providers_for）保证优先。
+        否则回落原静态策略。档位维度由调用方（providers_for）保证优先，
+        并与 record_outcome 落盘时使用的档位保持一致（同为 eff_tier）。
         """
         if (self.strategy == "learned" and self.predictor is not None
                 and self.predictor.trained):
-            return -self.predictor.predict(cap_str, a.engine_id, self.tier)
+            return -self.predictor.predict(cap_str, a.engine_id, tier or self.tier)
         return self._sort_key(a)
 
     def _record_outcome(self, cap_str: str, engine: str, tier, ok: bool,
@@ -127,12 +139,42 @@ class FabricRegistry:
         if self.outcome_store is not None:
             self.outcome_store.record(cap_str, engine, tier or "", ok, latency_ms, error)
 
-    def _maybe_retrain(self) -> None:
-        """白盒进化闭环：learned 且数据够、未训练时，自动从落盘结果学一次。"""
-        if (self.strategy == "learned" and self.predictor is not None
-                and not self.predictor.trained and self.outcome_store is not None
-                and self.outcome_store.trainable()):
-            self.predictor.fit(self.outcome_store.load())
+    def maybe_retrain(self) -> None:
+        """白盒进化闭环：learned 且数据够、且距上次训练又积累够 retrain_gap 条时，
+        从全部落盘结果重训（越用越准），并把模型持久化到 predictor_path。
+
+        闸门：
+        - 必须 strategy=learned 且注入了 predictor + outcome_store；
+        - 样本不足最小阈值（RouteOutcomeStore._MIN_SAMPLES）不训；
+        - 已训练后，仅当新增样本达到 retrain_gap 才重训，控制开销。
+        """
+        if (self.strategy != "learned" or self.predictor is None
+                or self.outcome_store is None):
+            return
+        cnt = self.outcome_store.count()
+        if not self.outcome_store.trainable():
+            return
+        if cnt < self._last_trained_count + self._retrain_gap:
+            return
+        records = self.outcome_store.load()
+        if not records:
+            return
+        self.predictor.fit(records)
+        self._last_trained_count = cnt
+        if self.predictor_path:
+            try:
+                self.predictor.save(self.predictor_path)
+            except Exception:  # noqa: BLE001 - 持久化失败不致命，内存模型仍可用
+                pass
+
+    def record_outcome(self, cap, engine, tier, ok, latency_ms, error=None) -> None:
+        """公开包装：供 FabricHub 路由循环在真实流量下落盘（与 registry.route 同逻辑）。"""
+        self._record_outcome(cap, engine, tier, ok, latency_ms, error)
+
+    @staticmethod
+    def capability_to_str(cap) -> str:
+        """公开包装：能力统一成字符串，供调用方（FabricHub）落盘时与预测端对齐。"""
+        return FabricRegistry._cap_to_str(cap)
 
     def _tier_of(self, a: BaseAgentAdapter) -> str:
         """取引擎实际档位（高/中/低），非法值回落中档。"""
@@ -164,11 +206,13 @@ class FabricRegistry:
             a for a in live
             if TIER_RANK.get(self._tier_of(a), TIER_RANK[TIER_MEDIUM]) >= start
         ]
+        eff_tier = tier or self.tier
         # 先按档位(高->低)保证「端云合作」第一维度；同档内再排序。
-        # 同档内：learned 且 predictor 已训练 → 用预测成功概率；否则静态策略。
+        # 同档内：learned 且 predictor 已训练 → 用预测成功概率（eff_tier 与落盘一致）；
+        # 否则静态策略。
         cands.sort(key=lambda a: (
             TIER_RANK.get(self._tier_of(a), TIER_RANK[TIER_MEDIUM]),
-            self._intra_tier_key(a, cap_str),
+            self._intra_tier_key(a, cap_str, eff_tier),
         ))
         return cands
 
@@ -198,11 +242,14 @@ class FabricRegistry:
         """
         req_tier = getattr(req, "tier", None) or (req.payload or {}).get("tier")
         cap_str = self._cap_to_str(req.capability)
-        # 白盒进化闭环：learned 且数据够、未训练时，先自动学一次。
-        self._maybe_retrain()
+        # 白盒进化闭环：learned 且数据够、且积累够新样本时，先自动重训一次。
+        self.maybe_retrain()
         providers = self.providers_for(req.capability, req_tier)
         if not providers:
             return InvokeResult(ok=False, error=f"no live provider for {cap_str}")
+        # 落盘用的有效档位：与 _intra_tier_key 预测时使用的档位一致，保证
+        # 训练/预测两端 vocab 对齐（否则预测时档位维度永远不在 vocab → 恒回落 0.5）。
+        eff_tier = req_tier or self.tier
         last_res: InvokeResult | None = None
         attempts: list[str] = []
         for p in providers:
@@ -211,12 +258,12 @@ class FabricRegistry:
                 res = p.invoke(req)
             except Exception as e:  # noqa: BLE001 - 单个供给方崩溃不阻断协商
                 dt = (time.perf_counter() - t0) * 1000.0
-                self._record_outcome(cap_str, p.engine_id, req_tier, False, dt, error=repr(e))
+                self._record_outcome(cap_str, p.engine_id, eff_tier, False, dt, error=repr(e))
                 attempts.append(f"{p.engine_id} raised: {e!r}")
                 continue
             dt = (time.perf_counter() - t0) * 1000.0
             self._record_outcome(
-                cap_str, p.engine_id, req_tier, res.ok, dt,
+                cap_str, p.engine_id, eff_tier, res.ok, dt,
                 error=res.error if not res.ok else None,
             )
             if res.ok:

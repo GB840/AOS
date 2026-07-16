@@ -136,3 +136,33 @@ def test_default_registry_unchanged_without_predictor():
     reg.register(FakeAdapter("x", [Capability("inference.llm")], ok=True))
     res = reg.route(InvokeRequest(capability=Capability("inference.llm"), payload={}))
     assert res.ok is True
+
+
+def test_route_pipeline_retrains_and_persists():
+    """真实流量累计 → 自动重训 → 模型持久化 → 落盘档位与预测端对齐。"""
+    with tempfile.TemporaryDirectory() as d:
+        store = RouteOutcomeStore(path=os.path.join(d, "out.jsonl"))
+        pred_path = os.path.join(d, "pred.json")
+        p = RoutePredictor(hidden=8, epochs=400, seed=1)
+        reg = FabricRegistry(
+            strategy="learned", predictor=p,
+            outcome_store=store, predictor_path=pred_path,
+        )
+        # 模拟真实流量：engA 对 capX 总成功，engB 总失败（各 10 条）
+        for _ in range(10):
+            store.record("inference.llm", "engA", "auto", True, 10.0)
+            store.record("inference.llm", "engB", "auto", False, 50.0)
+        reg.maybe_retrain()
+        assert p.trained is True
+        # 模型已落盘，且重载后仍为已训练、能复现学到的区分度
+        assert os.path.exists(pred_path)
+        loaded = RoutePredictor.load(pred_path)
+        assert loaded.trained is True
+        assert loaded.predict("inference.llm", "engA", "auto") > 0.8
+        # 真实 route() 落盘的档位 == 预测端使用的 eff_tier（对齐，否则恒回落 0.5）
+        reg.register(FakeAdapter("engB", [Capability("inference.llm")], ok=False))
+        reg.register(FakeAdapter("engA", [Capability("inference.llm")], ok=True))
+        res = reg.route(InvokeRequest(capability=Capability("inference.llm"), payload={}))
+        assert res.ok is True
+        last = store.load()[-1]
+        assert last["tier"] == "auto"
