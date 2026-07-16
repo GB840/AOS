@@ -2299,6 +2299,41 @@ async def a2ui_demo():
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
+@app.get("/api/a2ui/hub")
+async def a2ui_hub():
+    """AOS 可视化交付物目录：一页列出所有 A2UI 可视化端点（浏览器可看）。
+
+    用 A2UI 协议自身渲染（声明式、安全），把散落的可视化端点收敛成一个
+    可发现入口。目录内容为静态说明，仍经 lit() 转义。
+    """
+    try:
+        entries = [
+            {"title": "编排流水线可视化", "method": "POST",
+             "path": "/api/orchestrator/render",
+             "desc": "运行编排芯粒流水线，把端到端 trace（每步能力/成功失败/"
+                     "最终结果）渲染成 A2UI 报告；失败诚实降级为错误 surface。"},
+            {"title": "代码团队可视化", "method": "POST",
+             "path": "/api/code_team/render",
+             "desc": "多智能体代码团队：自然语言需求 → 生成代码 + 质量门 + "
+                     "真实测试验证，结果渲染成 A2UI 结构化交付物。"},
+            {"title": "A2UI 通用渲染", "method": "POST",
+             "path": "/api/a2ui/render",
+             "desc": "把任意 A2UI surface / v0.9 消息列表渲染为安全 HTML 片段。"},
+            {"title": "A2UI 演示", "method": "GET",
+             "path": "/api/a2ui/demo",
+             "desc": "自包含 A2UI 协议演示界面（声明式、安全渲染）。"},
+        ]
+        surface = a2ui_mod.build_index_surface(
+            "AOS 可视化交付物目录",
+            entries,
+            subtitle="所有面板由 A2UI 协议声明式渲染 · 不执行代码 · 跨信任边界安全",
+        )
+        html = a2ui_mod.render_html(surface, standalone=True)
+        return Response(content=html, media_type="text/html")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
 class CodeTeamRequest(BaseModel):
     requirement: str
     lang: str = "python"

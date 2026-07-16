@@ -29,6 +29,7 @@ __all__ = [
     "A2UIBuilder",
     "render_html", "render_a2ui",
     "build_a2ui_report",
+    "build_index_surface",
     "validate_surface",
 ]
 
@@ -594,6 +595,47 @@ def build_a2ui_report(trace: List[Dict[str, Any]], ok_steps: int, failed_steps: 
 
     b.add("root", column(["title", "summary", "rule", "steps"] +
                           (["final"] if final is not None else [])))
+    b.root("root")
+    return b.surface()
+
+
+def build_index_surface(
+    title: str,
+    entries: List[Dict[str, str]],
+    subtitle: str | None = None,
+    surface_id: str = "aos-a2ui-hub",
+) -> Dict[str, Any]:
+    """通用目录/索引 surface 工厂：把一组条目渲染成可发现的目录页。
+
+    每个 entry 形如 {"title","desc","method","path"}，全部文本经 lit() 转义
+    （不注入原始 HTML、不执行代码，跨信任边界安全）。复用 text/card/column/
+    list_cmp/divider，标准字符串 root，可直接经 render_html 渲染。
+    """
+    b = A2UIBuilder(surface_id=surface_id, theme={"primaryColor": "#2a6cad"})
+    b.add("title", text(lit(title), variant="h1"))
+    top: List[str] = ["title"]
+    if subtitle:
+        b.add("subtitle", text(lit(subtitle), variant="caption"))
+        top.append("subtitle")
+    b.add("rule", divider())
+    top.append("rule")
+
+    rows: List[str] = []
+    for i, e in enumerate(entries):
+        et = str(e.get("title", "?"))
+        ed = str(e.get("desc", ""))
+        head = f"{e.get('method', '')} {e.get('path', '')}".strip()
+        b.add(f"entry-{i}-t", text(lit(et), variant="h2"))
+        b.add(f"entry-{i}-p", text(lit(head), variant="caption"))
+        b.add(f"entry-{i}-d", text(lit(ed), variant="body"))
+        b.add(f"entry-{i}-col",
+              column([f"entry-{i}-t", f"entry-{i}-p", f"entry-{i}-d"]))
+        b.add(f"entry-{i}", card(f"entry-{i}-col"))
+        rows.append(f"entry-{i}")
+
+    b.add("entries", list_cmp(rows) if rows else text(lit("（无可用面板）")))
+    top.append("entries")
+    b.add("root", column(top))
     b.root("root")
     return b.surface()
 
