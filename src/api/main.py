@@ -22,6 +22,7 @@ from datetime import datetime
 
 from utils.config import config
 from core import get_brain
+from core.fabric import a2ui as a2ui_mod
 from mcp import MCPMessage
 from core.pool import initialize_pools, close_pools
 from api.security import (
@@ -2221,6 +2222,42 @@ async def comfyui_generate(req: ComfyUIRequest):
         return result
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+# ---- A2UI（Agent-to-UI，v0.9）----
+
+class A2UIRenderRequest(BaseModel):
+    surface: Optional[Dict[str, Any]] = None
+    messages: Optional[List[Dict[str, Any]]] = None
+
+
+@app.post("/api/a2ui/render")
+async def a2ui_render(request: A2UIRenderRequest):
+    """把 A2UI surface / 消息列表渲染为安全 HTML（声明式、不执行代码）。
+
+    输入：{"surface": <合并 surface>} 或 {"messages": [<v0.9 信封>]}。
+    输出：{"html": "<div class='a2ui-surface'>...</div>"}。
+    """
+    try:
+        if request.surface is not None:
+            html = a2ui_mod.render_html(request.surface, standalone=False)
+        elif request.messages is not None:
+            html = a2ui_mod.render_a2ui({"messages": request.messages}, standalone=False)
+        else:
+            raise ValueError("须提供 surface 或 messages")
+        return {"html": html}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=_safe_detail(e))
+
+
+@app.get("/api/a2ui/demo")
+async def a2ui_demo():
+    """返回自包含 A2UI 演示 HTML（AOS 用 A2UI 协议生成的界面）。"""
+    try:
+        html = a2ui_mod.render_html(a2ui_mod._demo_surface(), standalone=True)
+        return Response(content=html, media_type="text/html")
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 

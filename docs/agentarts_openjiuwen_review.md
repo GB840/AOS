@@ -87,3 +87,17 @@
 3. 二者都不动 AOS 内核定位，纯增量增强，符合"模型/协议是能力端点"原则。
 
 > 注：openJiuwen 协议（MIT 口径）与 A2UI（Apache 2.0）均为宽松许可，借鉴思路/对接协议无合规风险；若未来直接复用其代码段，须先核实 GitHub 仓库实际 LICENSE 文件。
+
+---
+
+## §G P0-1 A2UI 已落地（2026-07-16，用户拍板"开始"）
+
+A2UI 协议经全网核实为 Google 开源真实协议（a2ui.org，Apache 2.0，v0.9.1 现行；autogen/ag2 0.14.0 自带 `A2UIAgent` 印证"原生支持、摩擦最小"的 claim 成立）。
+
+**已建代码（均真跑测试，非纸面）**：
+- `src/core/fabric/a2ui.py`：v0.9 basic catalog 对齐（18 组件白名单）+ `A2UIBuilder`（发 createSurface/updateComponents/updateDataModel/deleteSurface + 合并 surface）+ **纯标准库 HTML 渲染器** `render_html`（只渲已知组件、html.escape、拦截 `javascript:`/`data:` 危险 URL、无 eval/无 script 注入）+ `build_a2ui_report(trace,...)`（编排 trace→UI 报告）+ `__main__` 演示生成 HTML。
+- 桥接：`orchestration_chiplet.py` 加 `orchestration_result_to_a2ui(result)`，把编排执行结果转 A2UI surface（agent 画界面闭环）。
+- API：`src/api/main.py` 加 `POST /api/a2ui/render`（surface/messages→HTML）+ `GET /api/a2ui/demo`（自包含演示 HTML）。
+- 测试：`tests/test_a2ui.py`（11 项全绿：XSS 转义、未知组件被拒、危险 URL 拦截、http(s) 放行、数据模型绑定、消息↔surface 往返、编排桥接）。
+
+**价值**：AOS 从"盲"（仅文本/代码）升级为"能看（VLMAdapter）+ 能画（A2UI）"的安全闭环；A2UI 声明式、不执行代码，正好补全跨信任边界的 UI 安全模型。格式与 ag2 `A2UIAgent` 对齐，未来 ag2 规划产物可直接被本渲染器消费。

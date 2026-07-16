@@ -46,6 +46,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult, extract_text
 from core.fabric.capability import Capability
+from core.fabric import a2ui as _a2ui
 
 
 def _as_str(cap) -> str:
@@ -245,6 +246,26 @@ def _brief(obj: Any, limit: int = 200) -> Any:
         return {k: _brief(v, limit) for k, v in list(obj.items())[:8]}
     s = str(obj)
     return s if len(s) <= limit else s[:limit] + "…"
+
+
+def orchestration_result_to_a2ui(result: InvokeResult) -> Optional[Dict[str, Any]]:
+    """把编排执行结果转为 A2UI surface（agent 画界面闭环）。
+
+    仅当 result.ok 且含 trace 时返回合并 surface；否则返回 None（不伪造）。
+    返回的 surface 可直接交给前端 /api/a2ui/render 渲染。
+    """
+    if not isinstance(result, InvokeResult) or not result.ok:
+        return None
+    data = result.data or {}
+    trace = data.get("trace")
+    if not isinstance(trace, list):
+        return None
+    return _a2ui.build_a2ui_report(
+        trace,
+        ok_steps=data.get("ok_steps", 0),
+        failed_steps=data.get("failed_steps", 0),
+        final=data.get("final"),
+    )
 
 
 def _auto_store_handoff(state: "_RunState") -> None:
