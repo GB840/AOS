@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -207,6 +208,62 @@ def _resolve(requirement: str) -> Optional[tuple]:
     if any(k in r for k in ("hello", "greet", "问候", "打招呼")):
         return "greeter", _mod_greet, _test_greet
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 真实 LLM 桥接器（复用 AOS 已有的 LiteLLMAdapter，即推理平面）
+# ═══════════════════════════════════════════════════════════════════
+
+def _strip_code_fence(text: str) -> str:
+    """清洗 LLM 常返回的 ```python ... ``` 围栏，只留纯代码。"""
+    s = (text or "").strip()
+    if s.startswith("```"):
+        lines = s.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines)
+    return s
+
+
+def make_llm_generate(model: Optional[str] = None) -> Optional[Callable[[str, str], str]]:
+    """构建真实 LLM 桥接器，复用 AOS 推理平面 LiteLLMAdapter（不造新组件）。
+
+    返回 None = 通道不可用 → 调用方（CodeTeamOrchestrator）自动回落 heuristic，
+    行为与未接电时完全一致（零破坏）。仅当显式开启 AOS_CODETEAM_LLM=1 且
+    LiteLLMAdapter 可导入时，才注入真实 LLM。
+
+    真实调用失败（无 key / 网络错 / 模型不可用）时，LiteLLMAdapter 优雅返回
+    ok=False；此处回落为空字符串，code_team 的 executor 会真实跑失败 →
+    result.ok=False（诚实暴露，不编「成功」）。
+    """
+    if os.getenv("AOS_CODETEAM_LLM") != "1":
+        return None
+    try:
+        from core.fabric.adapters.litellm_adapter import LiteLLMAdapter
+        from core.fabric.adapter import InvokeRequest
+        from core.fabric.capability import Capability
+    except Exception:  # 模块不可导入（极少见）→ 不接电
+        logger.warning("code_team: LiteLLMAdapter 不可导入，回落 heuristic")
+        return None
+    model_id = model or os.getenv("LITELLM_DEFAULT_MODEL", "zhipu/glm-4-flash")
+    adapter = LiteLLMAdapter()
+
+    def _gen(prompt: str, role: str) -> str:
+        try:
+            res = adapter.invoke(InvokeRequest(
+                capability=Capability.LLM_GATEWAY,
+                payload={"model": model_id,
+                         "messages": [{"role": "user", "content": prompt}]},
+            ))
+            content = (res.data or {}).get("content", "") if res.ok else ""
+            return _strip_code_fence(content or "")
+        except Exception as e:  # 真实调用崩 → 诚实回落空（executor 会真跑失败）
+            logger.warning("code_team: 真实 LLM 调用失败，回落空: %s", e)
+            return ""
+
+    return _gen
 
 
 # ═══════════════════════════════════════════════════════════════════

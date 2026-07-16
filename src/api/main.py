@@ -23,7 +23,7 @@ from datetime import datetime
 from utils.config import config
 from core import get_brain
 from core.fabric import a2ui as a2ui_mod
-from kernel.plugins.code_team import CodeTeamOrchestrator
+from kernel.plugins.code_team import CodeTeamOrchestrator, make_llm_generate
 from kernel.compliance import QualityGate
 from mcp import MCPMessage
 from core.pool import initialize_pools, close_pools
@@ -2282,7 +2282,9 @@ async def code_team_run(req: CodeTeamRequest):
     真实 LLM 由调用方在 CodeTeamOrchestrator 注入。
     """
     try:
-        result = CodeTeamOrchestrator().run(req.requirement, lang=req.lang)
+        llm = make_llm_generate()
+        result = CodeTeamOrchestrator(llm_generate=llm).run(req.requirement, lang=req.lang)
+        result["llm_used"] = llm is not None  # 诚实标注：是否走了真实 LLM
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
