@@ -81,7 +81,8 @@ def coverage_pct() -> str:
     return m.group(1) if m else "?"
 
 
-def build_table(total: int, collected: str, live: str, dead: str, cov: str) -> str:
+def build_table(total: int, collected: str, live: str, dead: str, cov: str,
+                 adapters_n: int) -> str:
     when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     mode = "CI 自动生成(HEAVY)" if HEAVY else "手动生成(轻量)"
     cov_note = (f"`pytest --cov=src` 实测" if HEAVY
@@ -96,7 +97,7 @@ def build_table(total: int, collected: str, live: str, dead: str, cov: str) -> s
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | {total} | kernel FabricHub `_ADAPTERS`(18) + orchestrator(自动注册) |
+| 适配器总数 | {total} | kernel FabricHub `_ADAPTERS`({adapters_n}) + orchestrator(自动注册) |
 | live | {live} | {live_note} |
 | dead | {dead} | 典型无 key 环境见 §7（openclaw/ag2/litellm/mem0/lfm2） |
 | 测试 | {collected} collected | `pytest --co -q` |
@@ -108,10 +109,11 @@ def build_table(total: int, collected: str, live: str, dead: str, cov: str) -> s
 
 def main() -> int:
     total = adapter_total()
+    adapters_n = len(fabric_hub._ADAPTERS)
     collected = test_collected()
     live, dead = live_dead()
     cov = coverage_pct()
-    table = build_table(total, collected, live, dead, cov)
+    table = build_table(total, collected, live, dead, cov, adapters_n)
 
     text = AGENTS.read_text(encoding="utf-8")
     block = f"{START}\n{table}{END}\n"

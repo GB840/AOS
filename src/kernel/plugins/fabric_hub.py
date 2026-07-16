@@ -43,6 +43,7 @@ from core.fabric.adapters import (
     LFMAdapter,
     ScriptsAdapter,
     MiniCPMOAdapter,
+    VLMAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -136,6 +137,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         LFMAdapter,           # LFM2 轻量 LLM 供给方（inference.llm 的「低功耗」一极，高低搭配）
         ScriptsAdapter,       # 动态脚本执行（scripts/repls/*.py 热加载）
         MiniCPMOAdapter,       # 全双工全模态（VOICE_OMNI）：MiniCPM-o 4.5 推理后端
+        VLMAdapter,            # 视觉理解（VISION_UNDERSTAND）：云端视觉 API / 本地 ollama MiniCPM-V-2
     )
     if a is not None
 )

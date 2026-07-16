@@ -74,6 +74,12 @@ class Capability(str, Enum):
     # 流，对应 fabric 的实时会话范式（open_realtime_session）。
     VOICE_OMNI = "voice.omni"  # 全双工全模态实时交互（音频/视频/文本持续流）
 
+    # Vision / multimodal understanding (VLM 作为 AOS 的「眼睛」平面)
+    # 让工作流能读截图 / 文档 / 界面元素，补全 AOS 原本「盲」的文本-only 能力。
+    # 引擎无关：云端视觉 API（OpenAI 兼容 /v1/chat/completions 带 image_url）或
+    # 本地 ollama MiniCPM-V-2 都可服务；无 GPU 时默认云端，本地留作未来/兜底。
+    VISION_UNDERSTAND = "vision.understand"  # 图像/截图理解：图 -> 文本描述/问答
+
     # Data layer (structured external datasets, e.g. ExploreYC YC/a16z portfolio)
     DATA_QUERY = "data.query"
 
@@ -135,6 +141,8 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
         Capability.MEDIA_IMAGE,
         Capability.MEDIA_VIDEO,
     ],
+    # VLM 视觉理解平面：云端视觉 API 或本地 ollama MiniCPM-V-2（无 GPU 时走云端）
+    "vlm": [Capability.VISION_UNDERSTAND],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -159,6 +167,8 @@ ENGINE_TIER: dict[str, str] = {
     "web-fetch": TIER_LOW,
     # minicpm_o 由适配器实例按配置返回自身档位（覆盖此默认）
     "minicpm_o": TIER_MEDIUM,
+    # vlm：视觉理解平面。无 GPU 时默认云端（中档），本地 ollama 为未来/兜底（高档零成本）
+    "vlm": TIER_MEDIUM,
 }
 
 

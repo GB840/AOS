@@ -39,7 +39,7 @@
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 19 | kernel FabricHub `_ADAPTERS`(18) + orchestrator(自动注册)，已核实 |
+| 适配器总数 | 20 | kernel FabricHub `_ADAPTERS`(19) + orchestrator(自动注册)，已核实 |
 | live | 14（典型无 key 环境） | `FabricHub.health_report()`；HEAVY 模式实测回填 |
 | dead | 5 | openclaw/ag2/litellm/mem0/lfm2（根因见 §7） |
 | 测试 | 428 collected | `pytest --co -q` 实测（注：旧表写 452 为过时） |
@@ -224,9 +224,9 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
   `steps[]` 逐跳经 hub 路由，上一步输出喂下一步；支持 `parallel_groups` 组内并发。
 - **think→do 闭环已收口**：`run_task(planner='ag2')` — ag2 规划文本 → 解析成带 `[AOS能力]` 标签的 steps → 逐跳执行。
 
-**实际注册引擎名（19个，按 health_report() 真跑数据）**：
+**实际注册引擎名（20个，按 health_report() 真跑数据）**：
 openclaw / ag2 / litellm / mem0 / browser-use / langfuse / web-search / web-fetch /
-agnes / code-exec / file-io / threejs / stt / tts / lnn / lfm2 / scripts /
+agnes / vlm / code-exec / file-io / threejs / stt / tts / lnn / lfm2 / scripts /
 codebase-memory-mcp / orchestrator。
 （CodeWhale / IMA / mistralrs / Page-Agent 是外部愿景，非当前注册名，不要在代码里当真实引擎引用。）
 
@@ -243,7 +243,7 @@ codebase-memory-mcp / orchestrator。
 - ❌ **喂 legacy 双轨** — brain.py / deerflow / swarm_flow / hermes / lemon_orchestrator 是待退役老栈，
   与 FabricHub 互不打通。**新功能一律进 FabricHub**，不要往 legacy 加料。
   当前 `brain.fabric`（`core/brain.py:_init_fabric`，line 875）为**优雅降级**：import 失败即 `self.fabric=None`、
-  不抛异常、不影响其余组件——即双轨未合的证据（kernel 层 FabricHub 19 适配器是干净单一运行时）。
+  不抛异常、不影响其余组件——即双轨未合的证据（kernel 层 FabricHub 20 适配器是干净单一运行时）。
 - ❌ **故障转移丢上游 data** — 全部失败时返回最后一个供给方的真实结果（保留 trace/ok_steps），不能合成 `data=None`。
   - 修复：`fabric_hub.py:350-356` `last_res is not None` 时保留 `data=last_res.data`；
     全 raise（`last_res is None`）分支 `357-367` 也已返回诊断字典 `{"capability","attempts","engine_errors"}` 而非 `None`。

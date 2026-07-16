@@ -108,6 +108,11 @@ try:
 except Exception:  # noqa: BLE001 - 缺依赖（websockets）则跳过，不拖垮内核
     MiniCPMOAdapter = None
 
+try:
+    from .vlm_adapter import VLMAdapter
+except Exception:  # noqa: BLE001 - 缺依赖则跳过，不拖垮内核
+    VLMAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -130,6 +135,7 @@ __all__ = [
         "LNNAdapter",
         "ScriptsAdapter",
         "MiniCPMOAdapter",
+        "VLMAdapter",
     )
     if globals().get(n) is not None
 ]
