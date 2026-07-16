@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 from core.fabric.adapter import InvokeResult, extract_text
 from core.fabric.adapters.ag2_adapter import _dedup_text
 from kernel.run_state_store import (
-    create_run, save_checkpoint, load_checkpoint, mark_done, mark_failed,
+    create_run, save_checkpoint, load_checkpoint, mark_done,
 )
 
 logger = logging.getLogger(__name__)
@@ -395,7 +395,6 @@ def _ensure_parent_dirs(code: str) -> None:
 def _route(capability: str, payload: Dict[str, Any]) -> Any:
     """把 OrchestrationChiplet 的能力调用派发给真实适配器。"""
     from core.fabric.adapter import InvokeRequest
-    from core.fabric.capability import Capability
 
     if capability == "web.search":
         ad = _get_search()
@@ -880,6 +879,8 @@ _REFLECTION_MEMORY_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "_traces", "reflection_memory.jsonl"
 )
 _REFLECTION_MEMORY_MAX = 200
+_REFLECTION_MEMORY_SHORT_TTL_DAYS = 7
+_REFLECTION_MEMORY_LONG_TTL_DAYS = 90
 
 
 def _tokenize(text: str) -> set:
@@ -889,12 +890,19 @@ def _tokenize(text: str) -> set:
 
 
 def _load_lessons(task: str, limit: int = 3) -> List[Dict[str, Any]]:
-    """载入与当前任务最相关的历史反思教训（按 token 重叠打分，取 top-limit）。"""
+    """载入与当前任务最相关的历史反思教训（按 token 重叠打分，取 top-limit）。
+    
+    TTL生命周期淘汰：
+    - 短期故障记忆（快速淘汰）：7天
+    - 长期环境偏好（长周期保留）：90天
+    - 热度权重：长期未被命中的自动降级淘汰
+    """
     try:
         if not os.path.exists(_REFLECTION_MEMORY_PATH):
             return []
         q = _tokenize(task)
         scored = []
+        now = datetime.datetime.now()
         with open(_REFLECTION_MEMORY_PATH, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -903,6 +911,28 @@ def _load_lessons(task: str, limit: int = 3) -> List[Dict[str, Any]]:
                 try:
                     rec = json.loads(line)
                 except Exception:
+                    continue
+                # TTL过滤：短期故障记忆7天，长期环境偏好90天
+                ts_str = rec.get("ts", "")
+                if not ts_str:
+                    continue
+                try:
+                    ts = datetime.datetime.fromisoformat(ts_str)
+                except Exception:
+                    continue
+                days_old = (now - ts).days
+                # 判断是短期故障记忆还是长期环境偏好
+                # 短期：包含"失败"、"错误"、"异常"等关键词
+                is_short_term = any(
+                    kw in rec.get("lesson", "").lower()
+                    for kw in ["失败", "错误", "异常", "error", "fail"]
+                )
+                ttl_days = (
+                    _REFLECTION_MEMORY_SHORT_TTL_DAYS
+                    if is_short_term
+                    else _REFLECTION_MEMORY_LONG_TTL_DAYS
+                )
+                if days_old > ttl_days:
                     continue
                 base = _tokenize(rec.get("task", "") + " " + rec.get("failed_cap", ""))
                 overlap = len(q & base)
@@ -1043,12 +1073,12 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
         f"原始目标：{task}\n\n"
         f"上一轮执行中，以下步失败或空转（附真实错误）：\n"
         + "\n".join(f"  - {f}" for f in failed) + "\n\n"
-        f"已成功的步：\n" + ("\n".join(f"  - {s}" for s in succeeded) or "  （无）") + "\n\n"
+        "已成功的步：\n" + ("\n".join(f"  - {s}" for s in succeeded) or "  （无）") + "\n\n"
         + prior_block + lesson_block +
-        f"请诊断根因，并只产出【从失败处继续、直到完成原始目标所需的『剩余步骤』】"
-        f"——已经成功的步不要重做。\n"
-        f"计划每行一个步骤，用 AOS 能力标签前缀（如 web.search= / inference.llm= / "
-        f"action.code_exec= / memory.semantic=）。不要解释，只输出剩余步骤计划。"
+        "请诊断根因，并只产出【从失败处继续、直到完成原始目标所需的『剩余步骤』】"
+        "——已经成功的步不要重做。\n"
+        "计划每行一个步骤，用 AOS 能力标签前缀（如 web.search= / inference.llm= / "
+        "action.code_exec= / memory.semantic=）。不要解释，只输出剩余步骤计划。"
     )
     # 反思推理三后端降级：ag2 → 本地 ollama → heuristic 重试（绝不伪造新计划）
     # 1) ag2（首选，质量最高）
@@ -1371,7 +1401,25 @@ def _build_structured_trace(task, planner, plan_text, steps, data, duration, tra
     """构建符合原则8规范的JSON Trace。"""
     import uuid as _uuid
     raw_trace = trace if trace is not None else data.get("trace", [])
-    return {
+    # 提取memory_recall信息（如果有）
+    memory_recall = None
+    initial = data.get("initial", {})
+    if initial and "memory" in initial:
+        recalled = initial.get("memory", [])
+        if recalled and isinstance(recalled, list):
+            # 计算最高相似度分数
+            max_score = 0.0
+            for item in recalled:
+                if isinstance(item, dict):
+                    score = item.get("score", 0.0)
+                    if isinstance(score, (int, float)) and score > max_score:
+                        max_score = float(score)
+            memory_recall = {
+                "query": task,
+                "similarity": round(max_score, 3),
+                "count": len(recalled)
+            }
+    result = {
         "task_id": str(_uuid.uuid4())[:8],
         "timestamp": datetime.datetime.now().isoformat(),
         "input": {"task": task, "planner": planner, "plan": plan_text},
@@ -1381,7 +1429,9 @@ def _build_structured_trace(task, planner, plan_text, steps, data, duration, tra
                 "ok": t.get("ok", False),
                 "is_real": (t.get("real_metrics") or {}).get("is_real"),
                 "real_metrics": t.get("real_metrics"),
-                "output": str(t.get("out", t.get("output", t.get("summary", ""))))[:500],
+                "output": str(
+                    t.get("out", t.get("output", t.get("summary", "")))
+                )[:500],
                 "error": str(t.get("error", ""))[:300] if not t.get("ok") else "",
             }
             for s, t in zip(steps, raw_trace)
@@ -1396,6 +1446,9 @@ def _build_structured_trace(task, planner, plan_text, steps, data, duration, tra
             "failed_steps": data.get("failed_steps", 0),
         },
     }
+    if memory_recall:
+        result["memory_recall"] = memory_recall
+    return result
 
 
 def _save_trace(trace: dict) -> None:
@@ -1528,12 +1581,12 @@ def _print_result(r: Dict[str, Any]) -> None:
     print(f"{'='*60}")
 
     if r.get("plan"):
-        print(f"\n--- AG2 规划 ---")
+        print("\n--- AG2 规划 ---")
         for line in r["plan"].split("\n"):
             if line.strip():
                 print(f"  {line.strip()}")
 
-    print(f"\n--- 执行步骤（✅真实 / ⚪空转/no-op / ❌失败）---")
+    print("\n--- 执行步骤（✅真实 / ⚪空转/no-op / ❌失败）---")
     for i, s in enumerate(r.get("steps", [])):
         cap = s["capability"]
         t = trace[i] if i < len(trace) else {}
@@ -1554,11 +1607,11 @@ def _print_result(r: Dict[str, Any]) -> None:
 
     final = exe.get("final")
     if final:
-        print(f"\n--- 最终输出 ---")
+        print("\n--- 最终输出 ---")
         print(f"  {final}")
 
     if r.get("error"):
-        print(f"\n--- 错误 ---")
+        print("\n--- 错误 ---")
         print(f"  {r['error']}")
 
 

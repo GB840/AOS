@@ -51,7 +51,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 logger = logging.getLogger(__name__)
 
 # Local imports (repo root is on sys.path when launched via scripts/aos.py).
-from kernel.wiring import build_fabric_hub
 # Reuse the exact same MCPProtocol + its FabricHub singleton (_get_hub) so the
 # HTTP MCP surface and the /api/chat route share ONE kernel. The underscore
 # import is intentional: we deliberately bind to the protocol layer's already
@@ -467,7 +466,6 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 {"ok": False, "error": "需要 JSON 人设字段"}, status=400)
         try:
             from core.fabric import companion as _companion
-            from core.fabric import persona as _persona
             # 同时更新 Companion 实例（热重载 identity），并写盘人设文件
             c = _companion.Companion.load(user_id)
             if body.get("__reset__"):
@@ -735,7 +733,7 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 handler, last = make_wake_turn_handler(pipeline=pipe, user_id="wake")
                 loop = VoiceWakeLoop(on_utterance=handler)
                 st.update(loop=loop, handler=handler, last=last, pipeline=pipe)
-            except Exception as e:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 logger.exception("init wake loop failed")
                 return None
         return st["loop"]

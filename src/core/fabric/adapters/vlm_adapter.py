@@ -22,7 +22,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any, Optional
+from typing import Optional
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability

@@ -255,10 +255,9 @@ def make_wake_turn_handler(pipeline=None, user_id: str = "default"):
     返回 (handler, 最近一次结果容器)，方便测试/前端轮询最近回应。
     """
     from .voice_chiplet import VoicePipeline
-    from .adapter import InvokeRequest
-    from .adapters.stt_adapter import STTAdapter
     import soundfile as sf
-    import tempfile, os
+    import tempfile
+    import os
 
     pipe = pipeline or VoicePipeline(user_id=user_id)
     last: dict = {}

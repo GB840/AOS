@@ -8,12 +8,9 @@ a sandboxed capability with hot-reload support.
 
 import importlib.util
 import os
-import sys
-import time
 import threading
-import hashlib
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from core.fabric.capability import Capability

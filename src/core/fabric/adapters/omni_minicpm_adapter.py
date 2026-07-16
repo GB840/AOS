@@ -29,13 +29,10 @@ OpenBMB 开源（github.com/OpenBMB/MiniCPM-o，MIT/Apache），原生全双工�
 """
 from __future__ import annotations
 
-import base64
-import json
 import logging
 import os
-import ssl
 import threading
-from typing import Any, Iterator, Optional
+from typing import Iterator, Optional
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
@@ -220,7 +217,7 @@ class MiniCPMOAdapter(BaseAgentAdapter):
         mode = self._mode_for(tier)
         ws_url = _cloud_ws_url() if mode == "cloud_api" else LOCAL_WS_URL
         try:
-            import websockets  # 惰性：缺失即降级（不拖垮 import）
+            pass  # 惰性：缺失即降级（不拖垮 import）
         except Exception as e:  # noqa: BLE001
             yield {OMNI_ERROR: f"websockets 库未安装，无法建立全双工 WS: {e}"}
             return

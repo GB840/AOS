@@ -87,6 +87,9 @@ def _load_session(session_id: str) -> List[Dict[str, str]]:
 
 def _save_session(session_id: str, history: List[Dict[str, str]]) -> None:
     """保存会话历史到内存和磁盘。"""
+    # 限制每个会话最多保留最近5轮历史
+    if len(history) > _SESSION_MAX_TURNS:
+        history = history[-_SESSION_MAX_TURNS:]
     _SESSIONS[session_id] = history
     _SESSIONS.move_to_end(session_id)
     # LRU 淘汰：超出会话数上限时丢弃最久未访问的会话(R-4)

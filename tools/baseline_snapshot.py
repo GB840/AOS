@@ -108,6 +108,8 @@ def build_table(total: int, collected: str, live: str, dead: str, cov: str,
 
 
 def main() -> int:
+    sys.path.insert(0, str(SRC))
+    from kernel.plugins import fabric_hub
     total = adapter_total()
     adapters_n = len(fabric_hub._ADAPTERS)
     collected = test_collected()

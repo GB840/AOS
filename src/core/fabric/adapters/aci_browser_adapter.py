@@ -62,7 +62,6 @@ class BrowserUseAdapter(BaseAgentAdapter):
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         try:
-            import asyncio
 
             Agent = _import_browser_use()
             task = req.payload.get("task", "")

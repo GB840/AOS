@@ -15,7 +15,6 @@ audio_url=None，由前端朗读。
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import logging
 import os
@@ -222,7 +221,6 @@ class TTSAdapter(BaseAgentAdapter):
         raise RuntimeError(f"未知 TTS 引擎 {self._engine}")
 
     def _run_edge_tts(self, text: str, payload: dict) -> bytes:
-        import asyncio
         import edge_tts
         voice = payload.get("voice") or os.environ.get(
             "AOS_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
