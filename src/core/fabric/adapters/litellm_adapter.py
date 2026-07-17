@@ -30,13 +30,17 @@ logger = logging.getLogger(__name__)
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
 
-# Pinned config: a change is a one-line edit. Library mode (default) calls
-# `litellm.completion()` directly; override per-call via payload["model"] /
-# payload["api_key"] / payload["api_base"]. The default model reuses the
-# Zhipu key already present in the process environment (see config.py).
+# LiteLLM 模型配置：支持多供应商，通过环境变量切换，不绑死智谱。
+# - LITELLM_MODEL: provider/model 格式（默认 zhipu/glm-4-flash）
+# - LITELLM_API_BASE: OpenAI-compatible 端点（覆盖供应商默认值）
+# - LITELLM_API_KEY_ENV: 指定读取哪个 API key 环境变量（默认 ZHIPU_API_KEY）
+#   如需走 SiliconFlow: LITELLM_MODEL=openai/Qwen/Qwen2.5-7B-Instruct
+#                        LITELLM_API_BASE=https://api.siliconflow.cn/v1
+#                        LITELLM_API_KEY_ENV=SILICONFLOW_API_KEY
 LITELLM_CONFIG: dict[str, Any] = {
-    "api_base": "https://open.bigmodel.cn/api/paas/v4",  # Zhipu OpenAI-compat
-    "default_model": "zhipu/glm-4-flash",                # provider/model form
+    "default_model": os.environ.get("LITELLM_MODEL", "zhipu/glm-4-flash"),
+    "api_base": os.environ.get("LITELLM_API_BASE", ""),
+    "api_key_env": os.environ.get("LITELLM_API_KEY_ENV", "ZHIPU_API_KEY"),
 }
 
 
@@ -54,10 +58,15 @@ def _import_litellm():
 
 
 def _resolve_key() -> str | None:
-    """Resolve the real API key from process env (set by start_all.sh / .env)."""
-    # 1) explicit per-call payload
-    # 2) env var named in config.LITELLM_API_KEY_ENV (e.g. ZHIPU_API_KEY)
-    # 3) generic fallbacks
+    """Resolve the real API key from process env（多供应商动态配置）。"""
+    # 1) explicit per-call payload（由调用方传入）
+    # 2) LITELLM_API_KEY_ENV 指定的环境变量（默认 ZHIPU_API_KEY）
+    key_env = LITELLM_CONFIG["api_key_env"]
+    if key_env:
+        v = os.environ.get(key_env)
+        if v:
+            return v
+    # 3) 通用兜底
     for name in ("ZHIPU_API_KEY", "AOS_ZHIPU_API_KEY", "OPENAI_API_KEY"):
         v = os.environ.get(name)
         if v:
