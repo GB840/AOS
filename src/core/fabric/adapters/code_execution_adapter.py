@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 
 from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from ..capability import Capability
@@ -69,6 +69,12 @@ class CodeExecutionAdapter(BaseAgentAdapter):
         code, language = self._extract_code(payload)
 
         if not code:
+            # 通电缝：纯自然语言代码需求（如"写一个计算器"）离线无 LLM 时，
+            # 若匹配 code_team 已知模板，则柔性回落到 code_team 生成+真实执行，
+            # 让离线也能闭环；不匹配模板则如实失败（不编）。
+            fb = self._try_nl_generate_fallback(payload)
+            if fb is not None:
+                return fb
             return InvokeResult(
                 ok=False,
                 error="未能从输入中提取可执行代码（需要 code 字段或 ```python 代码块）",
@@ -149,3 +155,62 @@ class CodeExecutionAdapter(BaseAgentAdapter):
 
         # 提取不到代码 → 如实返回空
         return "", "python"
+
+    @staticmethod
+    def _try_nl_generate_fallback(
+        payload: dict[str, Any],
+    ) -> Optional[InvokeResult]:
+        """NL 代码需求离线回落：匹配 code_team 模板则生成+执行，否则 None。
+
+        仅当输入是「写/生成 X 代码」类自然语言、且匹配 code_team 的已知模板
+        （calculator/sort/fibonacci/greet）时才回落——避免对「写个聊天机器人」
+        这类无法生成的任务假装能办（理念6/9 诚实）。生成复用 code_team 的
+        heuristic 脚手架（离线可跑），执行是真实 subprocess（不编）。
+
+        返回 InvokeResult（成功时 engine_id="code-team"，data 含 generated_by/
+        via_fallback/files 供调用方完全透明）；不应回落时返回 None（调用方继续
+        走原「未能提取代码」失败分支）。
+        """
+        text = (payload.get("requirement") or payload.get("task")
+                or payload.get("text") or payload.get("content") or "").strip()
+        if not text:
+            return None
+        try:
+            from kernel.plugins.code_team import CodeTeamOrchestrator, _resolve_kind
+        except Exception:  # 模块不可用（极少见）→ 不回落
+            return None
+        # 仅模板类需求回落，避免假装能办通用代码生成
+        if _resolve_kind(text) is None:
+            return None
+        lang = (payload.get("language") or payload.get("lang") or "python").lower()
+        try:
+            result = CodeTeamOrchestrator(llm_generate=None).run(text, lang=lang)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("code_exec NL 回落生成失败: %s", e)
+            return None
+        exec_res = result.get("execution") or {}
+        files = result.get("files") or {}
+        ok = bool(result.get("ok", False)) and bool(exec_res.get("ok", False))
+        content = exec_res.get("output") or ""
+        if ok:
+            return InvokeResult(ok=True, data={
+                "content": content,
+                "output": content,
+                "language": result.get("lang", lang),
+                "duration": 0,
+                "engine": "code-team",
+                "generated_by": "code_team",
+                "via_fallback": True,
+                "files": files,
+                "execution": exec_res,
+                "plan": result.get("plan"),
+            }, engine_id="code-team")
+        # 生成/执行未通过 → 诚实失败，附生成文件供诊断
+        return InvokeResult(
+            ok=False,
+            error=exec_res.get("error") or "代码团队生成+执行未通过",
+            data={"engine": "code-team", "generated_by": "code_team",
+                  "files": files, "execution": exec_res,
+                  "quality": result.get("quality")},
+            engine_id="code-team",
+        )

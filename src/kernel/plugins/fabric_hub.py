@@ -363,10 +363,14 @@ class FabricHub:
             dt = (time.perf_counter() - t0) * 1000.0
             if res.ok:
                 self._registry.record_outcome(cap_str, eid, eff_tier, True, dt)
-                # 回填真实执行引擎 id（理念6：诚实呈现「哪个引擎跑的」），
-                # 下游 trace / A2UI 报告 / 预测器观测据此拿到真相。
+                # 回填真实执行引擎 id（理念6：诚实呈现「哪个引擎跑的」）。
+                # 优先采纳适配器回报的 engine_id——当某适配器内部回落到别的
+                # 引擎（如 code-exec 离线回落 code-team）时，被回填的是真正
+                # 干活的引擎，而非 route 选中的派发壳；适配器未标注时才退回
+                # route 选中的 eid。下游 trace / A2UI / 预测器观测据此拿真相。
                 return InvokeResult(
-                    ok=True, data=res.data, error=res.error, engine_id=eid)
+                    ok=True, data=res.data, error=res.error,
+                    engine_id=res.engine_id or eid)
             self._failures[eid] = time.perf_counter()
             self._errors[eid] = res.error or "ok=False"
             self._registry.record_outcome(
