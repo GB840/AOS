@@ -16,6 +16,8 @@ import asyncio
 from typing import Dict, List, Any, Callable
 from datetime import datetime
 
+from core.fabric.tool_call_repair import execute_with_repair, ToolCallRepair
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,6 +75,24 @@ class ToolExecutor:
         
         except Exception as e:
             return {"success": False, "error": str(e)}
+    
+    def execute_with_repair(self, 
+                            tool_name: str,
+                            raw_args: Any,
+                            *, max_rounds: int = 3) -> Dict[str, Any]:
+        """带工具调用修复地执行工具（借鉴 Reasonix Tool-Call Repair）。
+
+        当 LLM 返回的原始参数「脏」（JSON 不合法/类型错位/缺必填/枚举越界/夹带
+        未知字段）导致执行失败时，自动诊断并就地修复后重试，避免直接判失败。
+        修复动作全部量化记录在返回的 repair 字段里（理念6 诚实+量化）。
+        schema 自动取该工具注册时的 parameters；无 schema 时仅做 JSON 容错。
+        """
+        tool = self._tool_registry.get(tool_name)
+        if not tool:
+            return {"success": False, "error": f"工具不存在: {tool_name}"}
+        schema = tool.get("parameters") or {}
+        return execute_with_repair(self, tool_name, raw_args,
+                                   schema=schema, max_rounds=max_rounds)
     
     async def execute_tool_async(self, 
                                   tool_name: str,
