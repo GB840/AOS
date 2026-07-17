@@ -23,7 +23,12 @@ from datetime import datetime
 from utils.config import config
 from core import get_brain
 from core.fabric import a2ui as a2ui_mod
-from kernel.plugins.code_team import CodeTeamOrchestrator, make_llm_generate, render_code_team
+from kernel.plugins.code_team import (
+    CodeTeamOrchestrator,
+    make_llm_generate,
+    render_code_team,
+    supported_languages,
+)
 from kernel.compliance import QualityGate
 from mcp import MCPMessage
 from core.pool import initialize_pools, close_pools
@@ -2359,6 +2364,16 @@ class CodeTeamRequest(BaseModel):
 
 class ComplianceGateRequest(BaseModel):
     files: dict[str, str]
+
+
+@app.get("/api/code_team/languages")
+async def code_team_languages():
+    """代码团队当前支持的编程语言（可发现性）。
+
+    多语言由 code_team._LANGS 单一事实源驱动；此端点只读暴露，
+    方便前端/调用方在提交需求前选择 lang（如 python / javascript）。
+    """
+    return {"languages": supported_languages(), "default": "python"}
 
 
 @app.post("/api/code_team/run")

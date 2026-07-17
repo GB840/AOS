@@ -26,6 +26,7 @@ from api.main import (  # noqa: E402
     app,
     a2ui_demo,
     a2ui_hub,
+    code_team_languages,
     code_team_render,
     code_team_run,
 )
@@ -48,7 +49,16 @@ def test_routes_registered():
     assert "GET" in rs.get("/api/a2ui/demo", set())
     assert "POST" in rs.get("/api/code_team/run", set())
     assert "POST" in rs.get("/api/code_team/render", set())
+    assert "GET" in rs.get("/api/code_team/languages", set())
     assert "POST" in rs.get("/api/orchestrator/render", set())
+
+
+def test_code_team_languages_handler():
+    """code_team_languages() → 列出支持语言，含 python 与 javascript。"""
+    data = asyncio.run(code_team_languages())
+    assert data["default"] == "python"
+    assert "python" in data["languages"]
+    assert "javascript" in data["languages"]
 
 
 def test_a2ui_hub_handler():

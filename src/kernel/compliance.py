@@ -565,7 +565,16 @@ def _attr_chain(node: "Any") -> str:
     return ".".join(reversed(parts))
 
 
+def _is_python_file(name: str) -> bool:
+    """是否 Python 源文件。基于 Python AST 的规则只对 .py 生效，
+    其它语言（如 .js/.ts）的语法由对应语言的执行器（node --check 等）负责，
+    避免用 Python 解析器误判非 Python 文件（多语言代码团队的正确性前提）。"""
+    return name.endswith((".py", ".pyi"))
+
+
 def _gt_syntax(name: str, code: str) -> Optional[Tuple[int, str]]:
+    if not _is_python_file(name):
+        return None  # 非 Python 文件的语法由对应语言执行器（如 node --check）校验
     try:
         ast.parse(code)
     except SyntaxError as e:
@@ -580,8 +589,24 @@ _DANGEROUS_ATTRS = {
     "marshal.loads", "yaml.load",
 }
 
+# 非 Python 文件（JS/TS 等）的危险调用正则扫描：AST 走不通时的安全兜底。
+# 只挑真实高危、且不会与常见合法用法冲突的模式（如 regex.exec 是合法的，不列）。
+_DANGEROUS_NONPY_PATTERNS = [
+    (r"\beval\s*\(", "eval()"),
+    (r"\bnew\s+Function\s*\(", "new Function()"),
+    (r"child_process", "child_process"),
+    (r"\bexecSync\s*\(", "execSync()"),
+]
+
 
 def _gt_dangerous_call(name: str, code: str) -> Optional[Tuple[int, str]]:
+    if not _is_python_file(name):
+        for pat, label in _DANGEROUS_NONPY_PATTERNS:
+            m = re.search(pat, code)
+            if m:
+                line = code[: m.start()].count("\n") + 1
+                return (line, f"禁止调用危险API {label}")
+        return None
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -599,6 +624,8 @@ def _gt_dangerous_call(name: str, code: str) -> Optional[Tuple[int, str]]:
 
 
 def _gt_bare_except(name: str, code: str) -> Optional[Tuple[int, str]]:
+    if not _is_python_file(name):
+        return None  # 裸 except 是 Python 专属概念
     try:
         tree = ast.parse(code)
     except SyntaxError:
