@@ -84,11 +84,16 @@ class ContentDirector(BaseAgentAdapter):
     engine_id = "content-director"
 
     def __init__(self, route_fn: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
-                 work_root: str = ".", llm=None) -> None:
+                 work_root: str = "", llm=None) -> None:
         super().__init__()
         # route_fn: (capability:str, payload:dict) -> InvokeResult|dict，由 FabricHub 注入。
         self._route_fn = route_fn
-        self._work_root = work_root
+        # 运行时产物默认落仓库根下的 _content_work/（已被 .gitignore 忽略），
+        # 不再污染仓库根目录；可用 env AOS_CONTENT_WORK_ROOT 覆盖。
+        self._work_root = work_root or os.environ.get(
+            "AOS_CONTENT_WORK_ROOT",
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))), "_content_work"))
         self._llm = llm  # 主机有 LLM 时注入，升级分析与剧本质量
         self._director = ComfyUIDirector(llm_planner=None)  # 节点编排（沙箱规则版）
 
@@ -321,6 +326,17 @@ class ContentDirector(BaseAgentAdapter):
             logger.warning("渲染镜头 %d 失败（降级占位）: %s", index, e)
             return ""
 
+    def _confidence(self, res: ProductionResult) -> str:
+        """量化置信（原则6 三级）：检索素材数 + 真实产物数驱动，诚实反映降级。"""
+        n_mat = len(res.materials)
+        n_shots = len(res.shots)
+        n_out = sum(1 for s in res.shots if s.get("output_path"))
+        if n_mat >= 5 and n_shots and n_out == n_shots:
+            return "high"
+        if n_mat >= 1 or n_out > 0:
+            return "medium"
+        return "low"
+
     def _build_review(self, res: ProductionResult) -> str:
         """组装审核包（HandoffEnvelope）→ 落 reviews/ + 调 IMA store_handoff。"""
         facts = [f"剧本：{res.script_path}"]
@@ -329,6 +345,7 @@ class ContentDirector(BaseAgentAdapter):
                 f"镜头{s['index']}｜{s['action']}｜LoRA={s['loras']}｜"
                 f"ControlNet={s['controlnets']}｜节点数={s['workflow_node_count']}｜"
                 f"产物={s['output_path'] or '（降级占位）'}")
+        conf = self._confidence(res)
         env = HandoffEnvelope(
             task_id=res.task_id,
             title=f"内容生产审核：{res.goal}",
@@ -341,6 +358,7 @@ class ContentDirector(BaseAgentAdapter):
             ],
             handoff_to="人工审核（人）",
             source="ContentDirector",
+            confidence=conf,
             tags=["content_production", "review"],
         )
         review_dir = self._dir("reviews")

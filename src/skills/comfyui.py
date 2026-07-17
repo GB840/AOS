@@ -117,6 +117,24 @@ class ComfyIntent:
         return asdict(self)
 
 
+# ── 节点图归一化公共函数（ComfyUIDirector 与 ComfyUISkill 共用，避免重复实现）──
+def _normalize_seed(wf: Dict[str, Any]) -> Dict[str, Any]:
+    """把所有 KSampler 的负数 seed 替换为随机非负整数（ComfyUI 不接受 -1）。"""
+    for node in wf.values():
+        inp = (node or {}).get("inputs") or {}
+        if isinstance(inp.get("seed"), int) and inp["seed"] < 0:
+            inp["seed"] = random.randint(0, 2**32 - 1)
+    return wf
+
+
+def _normalize_ckpt(wf: Dict[str, Any], ckpt: str) -> Dict[str, Any]:
+    """CheckpointLoaderSimple 的 ckpt_name 统一改为可配置模型（env 优先）。"""
+    for node in wf.values():
+        if (node or {}).get("class_type") == "CheckpointLoaderSimple":
+            (node.setdefault("inputs", {}))["ckpt_name"] = ckpt
+    return wf
+
+
 class ComfyUIDirector:
     """按意图动态拼 ComfyUI 节点图（含 LoRA / ControlNet，并重连连接）。
 
@@ -263,18 +281,11 @@ class ComfyUIDirector:
 
     @staticmethod
     def _fix_seed(wf: Dict[str, Any]) -> Dict[str, Any]:
-        for node in wf.values():
-            inp = (node or {}).get("inputs") or {}
-            if isinstance(inp.get("seed"), int) and inp["seed"] < 0:
-                inp["seed"] = random.randint(0, 2**32 - 1)
-        return wf
+        return _normalize_seed(wf)
 
     @staticmethod
     def _fix_ckpt(wf: Dict[str, Any], ckpt: str) -> Dict[str, Any]:
-        for node in wf.values():
-            if node.get("class_type") == "CheckpointLoaderSimple":
-                node["inputs"]["ckpt_name"] = ckpt
-        return wf
+        return _normalize_ckpt(wf, ckpt)
 
 
 DEFAULT_WORKFLOWS_DIR = os.path.join(os.path.dirname(__file__), "workflows")
@@ -358,6 +369,7 @@ class ComfyUISkill(Skill):
             Dict: 执行结果
         """
         action = context.get("action", "txt2img")
+        task_id = str(uuid.uuid4())[:8]
 
         # 动态编排：导演层传 intent（结构化意图）或带高级字段（loras/controlnets/
         # motion）→ 走节点图动态生成，而非写死模板。普通 prompt 不带这些字段时
@@ -374,8 +386,6 @@ class ComfyUISkill(Skill):
                 "error": f"未知操作: {action}，可用操作: {list(COMFYUI_FEATURES.keys())}",
                 "available_actions": COMFYUI_FEATURES,
             }
-        
-        task_id = str(uuid.uuid4())[:8]
         
         if action == "list_workflows":
             return self._list_workflows(task_id)
@@ -405,13 +415,17 @@ class ComfyUISkill(Skill):
         raw = context.get("intent")
         # 仅真正的「编排触发字段」才激活动态编排；image_path 等普通输入走原模板路径
         # （向后兼容旧测试与显式出图调用）。导演层(content_director)经 intent dict
-        # 传入完整意图，走上面的 raw-dict 分支，不受此限制。
+        # 传入完整意图，走下面的 raw-dict 分支，不受此限制。
         hints = {k: context[k] for k in (
             "loras", "controlnets", "motion", "style", "model",
         ) if k in context}
         if isinstance(raw, dict):
-            return ComfyUIDirector().plan_intent(
-                context.get("prompt", "") or raw.get("prompt", ""), **raw)
+            # 上游（ContentDirector / adapter 一句话编排）已完整构造意图，
+            # 直接按字段重建 ComfyIntent，保留精确的 action/尺寸/seed，不再二次推断
+            # （二次 plan_intent 会把 prompt 重复传参导致 TypeError，且覆盖原始意图）。
+            fields = {k: v for k, v in raw.items()
+                      if k in ComfyIntent.__dataclass_fields__}
+            return ComfyIntent(**fields)
         if hints:
             return self._director.plan_intent(context.get("prompt", ""), **hints)
         return None
@@ -685,18 +699,11 @@ class ComfyUISkill(Skill):
 
     def _fix_seed(self, workflow: Dict) -> Dict:
         """把所有 KSampler 的负数 seed 替换为随机非负整数（ComfyUI 不接受 -1）。"""
-        for node in workflow.values():
-            inp = (node or {}).get("inputs") or {}
-            if isinstance(inp.get("seed"), int) and inp["seed"] < 0:
-                inp["seed"] = random.randint(0, 2**32 - 1)
-        return workflow
+        return _normalize_seed(workflow)
 
     def _fix_ckpt(self, workflow: Dict) -> Dict:
         """CheckpointLoaderSimple 的 ckpt_name 统一改为可配置模型（env 优先）。"""
-        for node in workflow.values():
-            if (node or {}).get("class_type") == "CheckpointLoaderSimple":
-                (node.setdefault("inputs", {}))["ckpt_name"] = self._ckpt_name
-        return workflow
+        return _normalize_ckpt(workflow, self._ckpt_name)
     
     def _submit_prompt(self, workflow: Dict) -> Optional[str]:
         """提交任务到 ComfyUI"""

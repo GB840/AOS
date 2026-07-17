@@ -12,7 +12,7 @@ import json
 import uuid
 import pytest
 
-from skills.comfyui import ComfyUIDirector, ComfyIntent
+from skills.comfyui import ComfyUIDirector, ComfyIntent, ComfyUISkill
 from kernel.plugins.comfyui_adapter import ComfyUIAdapter
 from kernel.plugins.content_director import ContentDirector, ProductionResult, PublishResult
 
@@ -137,3 +137,47 @@ def test_via_fabric_hub_route():
     data = out.data if hasattr(out, "data") else out
     # 降级（沙箱无网/无 ComfyUI）也应跑完并返回 task_id 或诚实错误
     assert data.get("task_id") or data.get("error")
+
+
+# ─── 6) 回归：intent dict 重建不得崩溃，且精确字段不丢（修 TypeError 死路径）──
+def test_resolve_intent_reconstructs_intent():
+    """上游（ContentDirector / adapter 一句话编排）传 intent dict 时，
+    _resolve_intent 必须按字段重建 ComfyIntent，保留精确 action/尺寸，
+    不得 plan_intent(prompt, **raw) 重复传参崩溃、也不二次推断覆盖。"""
+    skill = ComfyUISkill()
+    raw = ComfyIntent(prompt="让猫动起来", action="img2vid",
+                      width=512, height=512, motion=True).to_dict()
+    intent = skill._resolve_intent({"intent": raw, "prompt": "让猫动起来"})
+    assert isinstance(intent, ComfyIntent)
+    assert intent.action == "img2vid", "action 被二次推断覆盖"
+    assert intent.width == 512 and intent.height == 512, "尺寸丢失/被默认覆盖"
+    assert intent.motion is True
+
+
+def test_execute_intent_dict_no_crash():
+    """经 ComfyUISkill.execute 走 intent 分支（ContentDirector→adapter 真链路）
+    不得抛 TypeError；无 ComfyUI 服务时诚实降级返回 dict（success=False），不崩。"""
+    out = ComfyUISkill().execute({
+        "intent": ComfyIntent(prompt="赛博朋克猫", action="txt2img",
+                              loras=["cyberpunk.safetensors"]).to_dict(),
+        "action": "txt2img",
+    })
+    assert isinstance(out, dict), "execute 必须返回 dict"
+    assert "success" in out, "返回缺少 success 字段"
+
+
+# ─── 7) 审核包携带量化置信（原则6）──
+def test_review_carries_confidence(tmp_path):
+    def _fake_route(cap, payload):
+        if cap == "web.search":
+            return {"ok": True, "data": {"results": [
+                {"title": f"素材{i}", "url": f"http://x/{i}"} for i in range(6)]}}
+        if cap in ("media.image", "media.video"):
+            return {"ok": True, "data": {"output_path": f"/fake/{cap}.png"}}
+        return {"ok": False, "data": {}}
+
+    d = ContentDirector(route_fn=_fake_route, work_root=str(tmp_path))
+    res = d.produce("一只赛博朋克猫的短片")
+    md = open(res.review_path, encoding="utf-8").read()
+    assert "置信度" in md, "审核包未携带量化置信（原则6）"
+    assert "high" in md, "满链成功应判 high 置信"

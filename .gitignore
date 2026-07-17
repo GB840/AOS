@@ -237,6 +237,8 @@ _output/
 _video_output/
 # 工作流引擎运行时状态。
 _workflow_state/
+# 内容生产流水线运行时产物（ContentDirector：drafts/reviews/published）。
+_content_work/
 # 深度研究 / 草稿产物（非源码）。
 .agnes/
 # 一次性验证脚本（非交付物）。

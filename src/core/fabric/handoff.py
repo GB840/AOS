@@ -28,6 +28,7 @@ class HandoffEnvelope:
     handoff_to: str = ""                               # 交接给谁（agent / 人 / 会话）
     source: str = ""                                   # 来源（上一手）
     created_at: str = ""
+    confidence: str = ""                               # 量化置信（原则6）：low/medium/high，空=未评估
     tags: List[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -43,6 +44,8 @@ class HandoffEnvelope:
         lines.append(f"- 创建: {self.created_at}")
         if self.tags:
             lines.append(f"- 标签: {', '.join(self.tags)}")
+        if self.confidence:
+            lines.append(f"- 置信度: {self.confidence}")
         lines.append("")
         lines.append(f"## 结论\n{self.summary}")
         lines.append("")
@@ -74,7 +77,7 @@ class HandoffEnvelope:
         # 这里反转移，恢复信封原始语义（task_id / video_url 等字段名与值都含下划线）。
         md = (md or "").replace("\\_", "_")
         title = ""
-        task_id = source = handoff_to = created_at = ""
+        task_id = source = handoff_to = created_at = confidence = ""
         tags: List[str] = []
         summary = ""
         sections: Dict[str, List[str]] = {}
@@ -102,6 +105,8 @@ class HandoffEnvelope:
                     created_at = val
                 elif key == "标签" and val and val != "—":
                     tags = [x.strip() for x in val.split(",") if x.strip()]
+                elif key == "置信度":
+                    confidence = val
                 continue
             # 章节标题
             if s.startswith("## "):
@@ -122,7 +127,8 @@ class HandoffEnvelope:
             assumptions=sections.get("假设（未验证前提）", []),
             risk_boundary=sections.get("风险边界 / 禁忌", []),
             open_questions=sections.get("未决问题", []),
-            handoff_to=handoff_to, source=source, created_at=created_at, tags=tags,
+            handoff_to=handoff_to, source=source, created_at=created_at,
+            confidence=confidence, tags=tags,
         )
 
 
@@ -140,6 +146,7 @@ def review_handoff(envelope: "HandoffEnvelope") -> Dict[str, Any]:
     return {
         "task_id": envelope.task_id,
         "title": envelope.title,
+        "confidence": envelope.confidence,
         "gap_count": len(gaps),
         "gaps": gaps,
         "ready": len(gaps) == 0,
