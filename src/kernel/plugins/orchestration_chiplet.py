@@ -227,6 +227,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
     @staticmethod
     def _finalize(state: _RunState, parallel: bool = False) -> InvokeResult:
         if state.ok_steps == 0:
+            _flush_trace(state)  # 白盒 trace 落盘（即便全失败也保留失败上下文）
             return InvokeResult(
                 ok=False,
                 error="orchestrator: 所有步骤均失败（见 trace）",
@@ -234,6 +235,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
             )
         if state.auto_handoff:
             _auto_store_handoff(state)
+        _flush_trace(state)  # 白盒 trace 落盘（供 MemoryDistiller 提炼，理念8 闭环一环）
         return InvokeResult(
             ok=True,
             data={"ok_steps": state.ok_steps, "failed_steps": state.failed_steps,
@@ -248,6 +250,31 @@ def _brief(obj: Any, limit: int = 200) -> Any:
         return {k: _brief(v, limit) for k, v in list(obj.items())[:8]}
     s = str(obj)
     return s if len(s) <= limit else s[:limit] + "…"
+
+
+def _flush_trace(state: "_RunState") -> None:
+    """把一个 task 的执行 trace 落盘成 _traces/trace_<id>.json（白盒进化闭环一环）。
+
+    schema 严格对齐 MemoryDistiller._distill_trace_file 期望：
+      {input:{task}, steps:[{capability, engine, ok, error}], metrics:{latency_ms}}。
+    best-effort、绝不抛——落盘失败只跳过，不拖垮编排主流程。
+    """
+    try:
+        from core.fabric.trace_store import TaskTraceStore
+        store = TaskTraceStore()
+        goal = (state.initial or {}).get("task") or ""
+        store.begin(state.task_id, goal)
+        for t in state.trace:
+            store.add_step(
+                state.task_id,
+                t.get("capability") or "?",
+                t.get("engine"),
+                bool(t.get("ok")),
+                t.get("error"),
+            )
+        store.finish(state.task_id, state.ok_steps > 0)
+    except Exception:  # noqa: BLE001 - trace 落盘失败不影响主流程
+        pass
 
 
 def orchestration_result_to_a2ui(result: InvokeResult) -> Optional[Dict[str, Any]]:

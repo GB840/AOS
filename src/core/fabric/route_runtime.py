@@ -19,14 +19,17 @@ _TRACES_DIR = os.path.join(
 )
 _OUTCOME_PATH = os.path.join(_TRACES_DIR, "route_outcomes.jsonl")
 _PREDICTOR_PATH = os.path.join(_TRACES_DIR, "route_predictor.json")
+_DISTILLED_PATH = os.path.join(_TRACES_DIR, "distilled_memory.jsonl")
 
 
 def build_route_runtime() -> dict:
     """构造传给 FabricRegistry 的运行时 kwargs。
 
-    返回含 strategy / predictor / outcome_store / predictor_path。
+    返回含 strategy / predictor / outcome_store / predictor_path /
+    distilled_memory_path（白盒进化闭环·消费端：把蒸馏记忆读回路由软偏好）。
     仅当 strategy=="learned" 才构建 predictor；若磁盘已有训练好的模型则加载，
     否则新建未训练实例（由真实流量触发 maybe_retrain 后训练并持久化）。
+    distilled_memory.jsonl 缺失/为空时注册表零影响、不编造。
     """
     strategy = os.environ.get("AOS_ROUTE_STRATEGY", "learned")
     predictor = None
@@ -43,4 +46,5 @@ def build_route_runtime() -> dict:
         "predictor": predictor,
         "outcome_store": RouteOutcomeStore(path=_OUTCOME_PATH),
         "predictor_path": _PREDICTOR_PATH,
+        "distilled_memory_path": _DISTILLED_PATH,
     }

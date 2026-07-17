@@ -9,7 +9,12 @@ is a thin seam, not a heavy OS substrate.
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
 import time
+
+logger = logging.getLogger(__name__)
 
 from .adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from .capability import (
@@ -77,6 +82,9 @@ class FabricRegistry:
         outcome_store: "RouteOutcomeStore | None" = None,
         predictor_path: str | None = None,
         retrain_gap: int = 8,
+        distilled_memory_path: str | None = None,
+        distilled_min_samples: int = 5,
+        distilled_reliability_threshold: float = 0.5,
     ) -> None:
         self._adapters: dict[str, BaseAgentAdapter] = {}
         # 实例级策略，避免改全局影响其它枢纽；默认读模块级 ROUTE_STRATEGY。
@@ -99,6 +107,18 @@ class FabricRegistry:
             outcome_store.count() if (predictor is not None and predictor.trained
                                       and outcome_store is not None) else 0
         )
+        # ── 白盒进化闭环·消费端（理念8）：把 MemoryDistiller 提炼出的
+        # distilled_memory.jsonl 读回流式路由软偏好 ──
+        # 仅当某 (能力,引擎) 的提炼成功率样本数 >= distilled_min_samples 且成功率
+        # < distilled_reliability_threshold，才对该 (能力,引擎) 施加沉底惩罚（软偏好，
+        # 仍作为兜底尝试，不硬阻断）。文件缺失/为空/样本不足/解析异常均零影响、不编造。
+        self._distilled_path = distilled_memory_path
+        self._distilled_min_samples = distilled_min_samples
+        self._distilled_reliability_threshold = distilled_reliability_threshold
+        self._distilled_penalties: dict[str, float] = {}
+        self._distilled_mtime: float | None = None
+        self._distilled_loaded = False
+        self.reload_distilled()  # 启动即加载（无文件则空，零影响）
 
     def register(self, adapter: BaseAgentAdapter) -> None:
         self._adapters[adapter.engine_id] = adapter
@@ -127,11 +147,18 @@ class FabricRegistry:
         learned 策略且 predictor 已训练时，用预测成功概率（高分优先→取负）；
         否则回落原静态策略。档位维度由调用方（providers_for）保证优先，
         并与 record_outcome 落盘时使用的档位保持一致（同为 eff_tier）。
+
+        末尾叠加白盒蒸馏惩罚：某 (能力,引擎) 被蒸馏记忆判定为「不可靠」
+        （样本足、成功率低）时沉底，但仍是兜底候选（软偏好，不硬阻断）。
         """
         if (self.strategy == "learned" and self.predictor is not None
                 and self.predictor.trained):
-            return -self.predictor.predict(cap_str, a.engine_id, tier or self.tier)
-        return self._sort_key(a)
+            base = -self.predictor.predict(cap_str, a.engine_id, tier or self.tier)
+        else:
+            base = self._sort_key(a)
+        pen = (self._distilled_penalties.get(f"{cap_str}|{a.engine_id}", 0.0)
+               + self._distilled_penalties.get(f"{cap_str}|*", 0.0))
+        return base + pen
 
     def _record_outcome(self, cap_str: str, engine: str, tier, ok: bool,
                         latency_ms: float, error=None) -> None:
@@ -148,6 +175,9 @@ class FabricRegistry:
         - 样本不足最小阈值（RouteOutcomeStore._MIN_SAMPLES）不训；
         - 已训练后，仅当新增样本达到 retrain_gap 才重训，控制开销。
         """
+        # 白盒闭环·消费端：每次路由先按文件 mtime 增量重加载蒸馏记忆
+        # （蒸馏器常驻持续写，这里让路由软偏好「越跑越新」，闭环真正活起来）。
+        self._maybe_reload_distilled()
         if (self.strategy != "learned" or self.predictor is None
                 or self.outcome_store is None):
             return
@@ -166,6 +196,88 @@ class FabricRegistry:
                 self.predictor.save(self.predictor_path)
             except Exception:  # noqa: BLE001 - 持久化失败不致命，内存模型仍可用
                 pass
+
+    # ---- 白盒进化闭环·消费端：蒸馏记忆 → 路由软偏好 ----------------
+    def reload_distilled(self) -> None:
+        """全量重加载 distilled_memory.jsonl，重建「不可靠 (能力,引擎) → 惩罚」表。
+
+        best-effort、零副作用：文件缺失/为空/解析异常都清空惩罚并静默返回，
+        绝不抛、绝不编造（理念6）。仅对样本数 >= distilled_min_samples 且成功率
+        < distilled_reliability_threshold 的 (能力,引擎) 施加沉底惩罚（软偏好）。
+        """
+        if not self._distilled_path:
+            return
+        try:
+            st = os.stat(self._distilled_path)
+            self._distilled_mtime = st.st_mtime
+        except OSError:
+            self._distilled_penalties = {}
+            self._distilled_loaded = False
+            return
+        penalties: dict[str, float] = {}
+        try:
+            with open(self._distilled_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("category") != "capability_reliability":
+                        continue
+                    md = rec.get("metadata") or {}
+                    total = md.get("total") or 0
+                    ok = md.get("ok") or 0
+                    if not isinstance(total, int) or total < self._distilled_min_samples:
+                        continue  # 样本不足 → 不惩罚（置信门控）
+                    rate = (ok / total) if total else 1.0
+                    if rate >= self._distilled_reliability_threshold:
+                        continue  # 可靠 → 不惩罚（偏好交给 predictor）
+                    cap = md.get("capability")
+                    engine = None
+                    key = md.get("key")
+                    if isinstance(key, str) and "/" in key:
+                        cap, engine = key.split("/", 1)
+                    if not cap:
+                        continue
+                    pk = f"{cap}|{engine}" if engine else f"{cap}|*"
+                    # 失败率越高，惩罚越重（让不可靠引擎沉底，仍作兜底）
+                    pen = (1.0 - rate) * 10000.0
+                    penalties[pk] = max(penalties.get(pk, 0.0), pen)
+        except Exception as e:  # noqa: BLE001 - 读取/解析异常不致命
+            logger.warning("distilled reload failed (ignored): %s", e)
+            return
+        self._distilled_penalties = penalties
+        self._distilled_loaded = True
+
+    def _maybe_reload_distilled(self) -> None:
+        """mtime 门控的增量重加载：文件未变则跳过，变了才 reload。"""
+        if not self._distilled_path:
+            return
+        try:
+            st = os.stat(self._distilled_path)
+        except OSError:
+            return
+        if st.st_mtime != self._distilled_mtime:
+            self.reload_distilled()
+
+    def distilled_diagnostics(self) -> Dict[str, Any]:
+        """只读快照：蒸馏记忆消费端状态（可观测，对应理念9 可验证即真理）。
+
+        - path / loaded / 惩罚条目数 / 各 (能力,引擎) 惩罚分；
+        - 诚实回落：未配置 path → enabled=False；无惩罚 → penalties={}。
+        """
+        return {
+            "enabled": self._distilled_path is not None,
+            "path": self._distilled_path,
+            "loaded": self._distilled_loaded,
+            "min_samples": self._distilled_min_samples,
+            "reliability_threshold": self._distilled_reliability_threshold,
+            "penalty_count": len(self._distilled_penalties),
+            "penalties": dict(self._distilled_penalties),
+        }
 
     def record_outcome(self, cap, engine, tier, ok, latency_ms, error=None) -> None:
         """公开包装：供 FabricHub 路由循环在真实流量下落盘（与 registry.route 同逻辑）。"""

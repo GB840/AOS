@@ -164,6 +164,14 @@ class ContentDirector(BaseAgentAdapter):
         task_id = uuid.uuid4().hex[:8]
         res = ProductionResult(task_id=task_id, goal=goal)
 
+        # 白盒 trace：把本次生产埋点进 TaskTraceStore，产出的 trace_<id>.json 供
+        # MemoryDistiller 提炼（理念8 白盒才可进化 的落地一环；零侵入、失败不拖垮）。
+        from core.fabric.trace_store import TaskTraceStore, TracedRoute
+        _store = TaskTraceStore()
+        _store.begin(task_id, goal)
+        _orig_route = self._route_fn
+        if self._route_fn is not None:
+            self._route_fn = TracedRoute(self._route_fn, _store, task_id)
         # 1) 找内容：web.search + 项目已有的 memory.knowledge（RAG 知识库补全）
         materials = self._gather(goal)
         materials += self._gather_knowledge(goal)
@@ -233,6 +241,12 @@ class ContentDirector(BaseAgentAdapter):
             res.published = pub.ok
             res.published_path = pub.published_path
 
+        # 还原 route_fn（不污染实例，保持可重入），flush 本次 task 的 trace
+        self._route_fn = _orig_route
+        try:
+            _store.finish(task_id, True)
+        except Exception:  # noqa: BLE001
+            pass
         return res
 
     # ── 阶段实现 ──────────────────────────────────────────
