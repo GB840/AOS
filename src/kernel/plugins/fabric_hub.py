@@ -292,6 +292,12 @@ class FabricHub:
             self.register_code_team()
         except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
             _LOG.warning("默认注册 code_team 引擎失败: %s", e)
+        # ComfyUI 本地视觉生产引擎：接成可路由芯粒（media.image / media.video），
+        # 让一句话 prompt 经 hub 自动落到本地 ComfyUI 出图（本地优先于云端 agnes）。
+        try:
+            self.register_comfyui()
+        except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
+            _LOG.warning("默认注册 comfyui 引擎失败: %s", e)
         # 后台预热重型依赖（autogen 80s / litellm 22s import），避免 health/
         # 初始化被卡死。预热期间 guarded_import 命中 _WARMING 直接返回 None，
         # health 如实标 dead，预热线程完成后再标 live，全程不阻塞调用方。
@@ -839,6 +845,24 @@ class FabricHub:
             return None
 
     # ---- code_team 多智能体代码团队（本地芯粒）-------------------
+    def register_comfyui(self) -> None:
+        """把本地 ComfyUI 视觉生产引擎接成可路由芯粒（media.image / media.video）。
+
+        此前 ComfyUI 只在 legacy brain 栈里是个 Skill，FabricHub 新栈的
+        media.image/media.video 只路由给云端 agnes，本地那台 ComfyUI 没被新栈
+        看见。接进来后：
+        - ``hub.route("media.image", {prompt})`` 一句话可达、自动出图；
+        - health_report 列出 comfyui 为 live（探 /system_info，没起如实 False）；
+        - 真实流量喂路由预测器；享引擎透明化（engine_id="comfyui"）；
+        - 本地 high 档优先于云端 agnes，route 级联「云端用不了就本地」。
+        适配器构造轻量（仅 import + 探活）；构造失败静默跳过，绝不谎报 live。
+        """
+        try:
+            from kernel.plugins.comfyui_adapter import ComfyUIAdapter
+            self._registry.register(ComfyUIAdapter())
+        except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
+            _LOG.warning("comfyui 引擎注册失败(将跳过): %s", e)
+
     def register_code_team(self) -> None:
         """把 code_team 多智能体代码团队接成可路由引擎（code.generate 能力）。
 

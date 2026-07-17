@@ -28,6 +28,7 @@ import json
 import logging
 import uuid
 import time
+import random
 import requests
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -105,7 +106,18 @@ class ComfyUISkill(Skill):
     
     def __init__(self):
         super().__init__()
-        self._base_url = getattr(config, "COMFYUI_BASE_URL", "http://localhost:8188")
+        # env 优先于配置文件（更灵活：起服务时 export 一下即可，不必改 .env）。
+        self._base_url = (
+            os.environ.get("COMFYUI_BASE_URL")
+            or getattr(config, "COMFYUI_BASE_URL", "http://localhost:8188")
+        )
+        # 模型名可配：ComfyUI 装什么 ckpt 各不相同，硬编码必踩。优先 env，
+        # 否则常见默认；缺省留空串时 ComfyUI 会明确报「缺模型」而非静默失败。
+        self._ckpt_name = (
+            os.environ.get("COMFYUI_CKPT_NAME")
+            or getattr(config, "COMFYUI_CKPT_NAME", "")
+            or "v1-5-pruned-emaonly.ckpt"
+        )
         self._client_id = str(uuid.uuid4())
         self._workflows_dir = getattr(config, "COMFYUI_WORKFLOWS_DIR", DEFAULT_WORKFLOWS_DIR)
         self._output_dir = getattr(config, "COMFYUI_OUTPUT_DIR", "./outputs/comfyui")
@@ -389,8 +401,8 @@ class ComfyUISkill(Skill):
     def _generate_txt2img_workflow(self) -> Dict:
         """生成文生图工作流"""
         return {
-            "3": {"class_type": "KSampler", "inputs": {"cfg": 7, "denoise": 1, "latent_image": ["5", 0], "model": ["4", 0], "negative": ["7", 0], "positive": ["6", 0], "sampler_name": "euler", "scheduler": "normal", "seed": -1, "steps": 20}},
-            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd-v1-5-inpainting.ckpt"}},
+            "3": {"class_type": "KSampler", "inputs": {"cfg": 7, "denoise": 1, "latent_image": ["5", 0], "model": ["4", 0], "negative": ["7", 0], "positive": ["6", 0], "sampler_name": "euler", "scheduler": "normal", "seed": random.randint(0, 2**32 - 1), "steps": 20}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": self._ckpt_name}},
             "5": {"class_type": "EmptyLatentImage", "inputs": {"batch_size": 1, "height": 768, "width": 1024}},
             "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["4", 1]}},
             "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["4", 1]}},
@@ -403,7 +415,7 @@ class ComfyUISkill(Skill):
         return {
             "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
             "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["3", 1]}},
-            "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd-v1-5-inpainting.ckpt"}},
+            "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": self._ckpt_name}},
             "4": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "aos_img2vid", "frames": ["5", 0]}},
         }
     
@@ -413,7 +425,7 @@ class ComfyUISkill(Skill):
             "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
             "2": {"class_type": "LoadImage", "inputs": {"image": "{{reference_image}}"}},
             "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{style_prompt}}", "clip": ["4", 1]}},
-            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd-v1-5-inpainting.ckpt"}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": self._ckpt_name}},
             "5": {"class_type": "SaveImage", "inputs": {"filename_prefix": "aos_style_transfer", "images": ["6", 0]}},
         }
     
@@ -422,19 +434,34 @@ class ComfyUISkill(Skill):
         return {
             "1": {"class_type": "LoadVideo", "inputs": {"video": "{{video_path}}"}},
             "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["3", 1]}},
-            "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd-v1-5-inpainting.ckpt"}},
+            "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": self._ckpt_name}},
             "4": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "aos_vid2vid", "frames": ["5", 0]}},
         }
     
     def _inject_params(self, workflow: Dict, params: Dict) -> Dict:
         """注入参数到工作流模板"""
-        
         workflow_str = json.dumps(workflow)
-        
         for key, value in params.items():
             workflow_str = workflow_str.replace(f"{{{{{key}}}}}", str(value))
-        
-        return json.loads(workflow_str)
+        wf = json.loads(workflow_str)
+        # 兜底：无论走文件模板还是内置生成，都强制合法 seed + 可配 ckpt。
+        # （模板文件里写死 seed:-1 / 硬编码 ckpt 都会在此被修正，避免真发请求踩坑）
+        return self._fix_seed(self._fix_ckpt(wf))
+
+    def _fix_seed(self, workflow: Dict) -> Dict:
+        """把所有 KSampler 的负数 seed 替换为随机非负整数（ComfyUI 不接受 -1）。"""
+        for node in workflow.values():
+            inp = (node or {}).get("inputs") or {}
+            if isinstance(inp.get("seed"), int) and inp["seed"] < 0:
+                inp["seed"] = random.randint(0, 2**32 - 1)
+        return workflow
+
+    def _fix_ckpt(self, workflow: Dict) -> Dict:
+        """CheckpointLoaderSimple 的 ckpt_name 统一改为可配置模型（env 优先）。"""
+        for node in workflow.values():
+            if (node or {}).get("class_type") == "CheckpointLoaderSimple":
+                (node.setdefault("inputs", {}))["ckpt_name"] = self._ckpt_name
+        return workflow
     
     def _submit_prompt(self, workflow: Dict) -> Optional[str]:
         """提交任务到 ComfyUI"""

@@ -150,6 +150,10 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     ],
     # VLM 视觉理解平面：云端视觉 API 或本地 ollama MiniCPM-V-2（无 GPU 时走云端）
     "vlm": [Capability.VISION_UNDERSTAND],
+    # ComfyUI：本地节点式视觉生产引擎（文生图/图生视频/风格迁移/视频生视频）。
+    # 本地服务、零成本、最强隐私 → 比云端 agnes 更贴「本地优先」；route 级联时
+    # 云端用不了就回本地 ComfyUI（万物为我所用）。
+    "comfyui": [Capability.MEDIA_IMAGE, Capability.MEDIA_VIDEO],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -177,6 +181,8 @@ ENGINE_TIER: dict[str, str] = {
     "minicpm_o": TIER_MEDIUM,
     # vlm：视觉理解平面。无 GPU 时默认云端（中档），本地 ollama 为未来/兜底（高档零成本）
     "vlm": TIER_MEDIUM,
+    # comfyui：本地视觉生产服务，零成本/最强隐私 → 高档（比云端 agnes 优先）
+    "comfyui": TIER_HIGH,
 }
 
 
