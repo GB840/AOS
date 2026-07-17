@@ -38,14 +38,33 @@
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 24 | kernel FabricHub 实测注册 24（含 MCP/视频/触控适配器） |
+| 适配器总数 | 22 | `core.fabric.adapters.__all__`（缺依赖自动跳过） |
 | live | ? | 重跑需 `AOS_BASELINE_HEAVY=1` |
 | dead | ? | 典型无 key 环境见 §7（openclaw/ag2/litellm/mem0/lfm2） |
-| 测试 | 480 collected | `pytest --co -q` |
+| 测试 | 655 collected | `pytest --co -q`（含新增 test_skill_registry/test_whitebox_loop） |
 | 覆盖率 | ?% | 轻量模式未测；HEAVY 模式实测见 §5 质量门下限 |
-| brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric`(875) import 失败即 `fabric=None`，双轨未合 |
-| 生成时间 | 2026-07-16 08:57 UTC | `python tools/baseline_snapshot.py` |
+| brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric` 空适配器跳过 + 注册壳保护（2026-07-18 修） |
+| 技能 | 31 | `skills/manifest.json`（单一真相） |
+| 死代码清理 | ~300 文件/2100行 | 删 persistence/cache/db_pool/core.platform/_migrate_backup（2026-07-18） |
+| 生成时间 | 2026-07-18 05:25 UTC | 手动验证（轻量） |
 <!-- BASELINE_END -->
+
+### 0.6 双轨融合进度（2026-07-18 更新）
+
+> 方向：FabricHub（新栈）收口 legacy（brain.py/deerflow/swarm/lemon）。不是替代，是桥接——让所有组件经统一路由调度。
+
+| 桥接 | 状态 | 说明 |
+|------|------|------|
+| FabricHub.chat() | ✅ 已通 | 复用 inference.llm 芯粒做 LLM 对话，`AOS_FABRIC_CHAT=1` 启用 |
+| /api/chat → FabricHub | ✅ 可切 | `AOS_FABRIC_CHAT=1` 时优先走 FabricHub，失败回退 kernel/brain |
+| Hermes LLM → FabricHub | ✅ 可切 | `AOS_FABRIC_LLM=1` 时 brain.py LLM 对话走 FabricHub 统一路由 |
+| 搜索 → FabricHub | ✅ 已统一 | DuckDuckGoSearchSkill → FabricHub SearchAdapter（多源 fallback） |
+| Skill 生态 → FabricHub | ✅ 已接 | `skills/manifest.json` + `skill_registry` + `skill_discover()` |
+| 白盒进化闭环 | ✅ 已闭环 | trace 生产者 → 蒸馏器 → Registry 回读沉底不可靠引擎 |
+| 记忆 → FabricHub | ❌ 未桥接 | brain.py 仍直连 `memory/memory.py`，FabricHub 有独立的 `memory_recall/store` |
+| DeerFlow → FabricHub | ❌ 未桥接 | DeerFlow 仍独立运行，与 FabricHub run_task 互不感知 |
+| 双轨全收口 | ❌ 6月工程 | brain.py 含 30+ 组件，FabricHub 缺意图分类/技能/合规等 20+ 能力 |
+
 ## 1. 九大核心理念（AOS 宪法序言）
 
 以下九条是 AOS 存在的理由。任何改动若违背，无论技术多漂亮，都是错的。
