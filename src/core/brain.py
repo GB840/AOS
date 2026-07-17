@@ -890,13 +890,21 @@ class UnifiedBrain:
             self.fabric = None
             return
 
-        reg = FabricRegistry()
-        for ad_cls in (OpenClawAdapter, AG2Adapter, LiteLLMAdapter,
-                       Mem0Adapter, BrowserUseAdapter, LangfuseAdapter):
-            try:
-                reg.register(ad_cls())
-            except Exception as e:
-                logger.warning("fabric adapter 注册失败 %s: %s", ad_cls.__name__, e)
+        try:
+            reg = FabricRegistry()
+            for ad_cls in (OpenClawAdapter, AG2Adapter, LiteLLMAdapter,
+                           Mem0Adapter, BrowserUseAdapter, LangfuseAdapter):
+                if ad_cls is None:
+                    continue    # 适配器导入失败 → 优雅跳过，不拖垮整个注册
+                try:
+                    reg.register(ad_cls())
+                except Exception as e:
+                    logger.warning("fabric adapter 注册失败 %s: %s",
+                                   getattr(ad_cls, "__name__", "?"), e)
+        except Exception as e:
+            logger.warning("fabric 注册表构造失败(跳过): %s", e)
+            self.fabric = None
+            return
         self.fabric = reg
         live = [eid for eid, a in reg._adapters.items() if a.health()]
         logger.info("Fabric 薄缝就绪: 注册 %d 适配器, 当前 live %d (%s)",
