@@ -30,7 +30,7 @@
 ---
 
 <!-- BASELINE_START -->
-## 0.5 基线快照（2026-07-16 08:57 UTC，手动生成(轻量)）
+## 0.5 基线快照（2026-07-18 更新，手动生成(轻量)）
 
 > 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
 > 本表由 `tools/baseline_snapshot.py` 真实测算后写入；轻量模式测适配器/测试数，
@@ -38,15 +38,15 @@
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 22 | `core.fabric.adapters.__all__`（缺依赖自动跳过） |
+| 适配器总数 | 24 类 / 27 文件 | `core.fabric.adapters.__all__`（缺依赖自动跳过） |
 | live | ? | 重跑需 `AOS_BASELINE_HEAVY=1` |
 | dead | ? | 典型无 key 环境见 §7（openclaw/ag2/litellm/mem0/lfm2） |
-| 测试 | 655 collected | `pytest --co -q`（含新增 test_skill_registry/test_whitebox_loop） |
+| 测试 | 702 函数 / 109 文件 | `pytest --co -q`（含 flywheel/sandbox/security/compliance 等新增测试） |
 | 覆盖率 | ?% | 轻量模式未测；HEAVY 模式实测见 §5 质量门下限 |
 | brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric` 空适配器跳过 + 注册壳保护（2026-07-18 修） |
-| 技能 | 31 | `skills/manifest.json`（单一真相） |
+| 技能 | 33 | `skills/manifest.json`（单一真相） |
 | 死代码清理 | ~300 文件/2100行 | 删 persistence/cache/db_pool/core.platform/_migrate_backup（2026-07-18） |
-| 生成时间 | 2026-07-18 05:25 UTC | 手动验证（轻量） |
+| 生成时间 | 2026-07-18 18:25 UTC | 手动验证（轻量） |
 <!-- BASELINE_END -->
 
 ### 0.6 双轨融合进度（2026-07-18 更新）
@@ -261,7 +261,7 @@ codebase-memory-mcp / orchestrator。
 - ❌ **喂 legacy 双轨** — brain.py / deerflow / swarm_flow / hermes / lemon_orchestrator 是待退役老栈，
   与 FabricHub 互不打通。**新功能一律进 FabricHub**，不要往 legacy 加料。
   当前 `brain.fabric`（`core/brain.py:_init_fabric`，line 875）为**优雅降级**：import 失败即 `self.fabric=None`、
-  不抛异常、不影响其余组件——即双轨未合的证据（kernel 层 FabricHub 20 适配器是干净单一运行时）。
+  不抛异常、不影响其余组件——即双轨未合的证据（kernel 层 FabricHub 24 适配器是干净单一运行时）。
 - ❌ **故障转移丢上游 data** — 全部失败时返回最后一个供给方的真实结果（保留 trace/ok_steps），不能合成 `data=None`。
   - 修复：`fabric_hub.py:350-356` `last_res is not None` 时保留 `data=last_res.data`；
     全 raise（`last_res is None`）分支 `357-367` 也已返回诊断字典 `{"capability","attempts","engine_errors"}` 而非 `None`。
