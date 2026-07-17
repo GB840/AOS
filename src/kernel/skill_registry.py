@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -71,14 +72,52 @@ class SkillRegistry:
         logger.info("技能注册表加载：%d 个技能，%d 个能力",
                     len(self._skills), len(self._by_capability))
 
-    def discover(self, capability: str) -> List[dict]:
-        """按能力取值返回声明该能力的所有技能（按 name 排序）。"""
+    def discover(self, capability: str, *, external: bool = False) -> List[dict]:
+        """按能力取值返回声明该能力的所有技能（按 name 排序）。
+
+        external=True 时：先查本地 manifest，无结果则 fallback 到 SkillHub CLI
+        （7.9 万外部技能，需 skillhub 已安装且 AOS_SKILLHUB=1）。
+        """
         if not self._loaded:
             self.reload()
-        return sorted(
-            self._by_capability.get(capability, []),
-            key=lambda s: s.get("name", ""),
-        )
+        local = self._by_capability.get(capability, [])
+        if local or not external:
+            return sorted(local, key=lambda s: s.get("name", ""))
+        return self._discover_external(capability)
+
+    def _discover_external(self, query: str) -> List[dict]:
+        """Fallback 到 SkillHub CLI 搜索外部技能（7.9 万）。"""
+        if os.environ.get("AOS_SKILLHUB") != "1":
+            return []
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["skillhub", "search", query],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0:
+                return []
+            skills: List[dict] = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line or line.startswith("You can"):
+                    continue
+                # SkillHub 输出格式："  name  Description"
+                if line.startswith("  ") and not line.startswith("    "):
+                    name = line.strip().split("  ")[0].strip()
+                    skills.append({
+                        "id": f"skillhub:{name}",
+                        "name": name,
+                        "category": "external",
+                        "capabilities": ["external"],
+                        "runtime": "skillhub",
+                        "source": "SkillHub",
+                        "status": "external",
+                    })
+            return skills
+        except Exception as e:
+            logger.debug("SkillHub 外部查询跳过: %s", e)
+            return []
 
     def list_all(self) -> List[dict]:
         if not self._loaded:
@@ -93,13 +132,21 @@ class SkillRegistry:
     def summary(self) -> Dict[str, Any]:
         if not self._loaded:
             self.reload()
-        return {
+        info: Dict[str, Any] = {
             "manifest": self._manifest_path,
             "loaded": self._loaded,
             "total_skills": len(self._skills),
             "total_capabilities": len(self._by_capability),
             "categories": list({s.get("category", "") for s in self._skills.values()}),
         }
+        # SkillHub 外部源状态
+        if os.environ.get("AOS_SKILLHUB") == "1":
+            info["external"] = {
+                "source": "SkillHub",
+                "enabled": True,
+                "skills_available": 79000,
+            }
+        return info
 
 
 # 模块级单例（惰性初始化，与 mcp/protocol._get_hub 同构）
