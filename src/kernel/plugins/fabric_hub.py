@@ -205,6 +205,7 @@ class FabricHub:
         # 真实流量经 route() 落盘后自动训练并持久化模型（越用越准）。
         # 可用 AOS_ROUTE_STRATEGY=preference 退化为静态偏好表（零影响）。
         self._registry = FabricRegistry(**build_route_runtime())
+        self._failure_monitor: Optional[Any] = None  # MAST 失败监控器，下方 try 链 best-effort 接入
         self._errors: Dict[str, str] = {}
         # 已隔离进子进程的引擎：engine_id -> IsolatedEngineHost。
         # 被隔离引擎同时以 IsolatedAdapterProxy 注册进 _registry（参与路由），
@@ -299,6 +300,14 @@ class FabricHub:
             prewarm(["autogen", "litellm", "mem0ai", "mem0"])
         except Exception:  # noqa: BLE001
             pass
+        # MAST 式失败监控：接全局单例（best-effort，失败不拖垮枢纽）。
+        # 让 route() 的真实失败流量被埋点采集，监控器从死模块变可观测。
+        try:
+            from kernel.plugins.failure_monitor import get_failure_monitor
+            self._failure_monitor = get_failure_monitor()
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("接入失败监控器失败（非致命）: %s", e)
+            self._failure_monitor = None
 
     # ---- 模拟路由层（仅探测用，生产默认关闭） --------------------
     def set_route_sim_us(self, micros: float) -> None:
@@ -339,6 +348,13 @@ class FabricHub:
                             tier=payload.get("tier"))
         # 白盒进化：真实流量前，若已积累够新样本则自动重训（learned 策略下）。
         self._registry.maybe_retrain()
+        # MAST 失败监控：记录任务开始（best-effort，异常不影响路由）。
+        fm = self._failure_monitor
+        if fm is not None:
+            try:
+                fm.record_task_start()
+            except Exception:  # noqa: BLE001
+                pass
         cap_str = self._registry.capability_to_str(capability)
         eff_tier = req.tier or self._registry.tier
         providers = self._registry.providers_for(req.capability, req.tier)
@@ -363,6 +379,11 @@ class FabricHub:
             dt = (time.perf_counter() - t0) * 1000.0
             if res.ok:
                 self._registry.record_outcome(cap_str, eid, eff_tier, True, dt)
+                if fm is not None:
+                    try:
+                        fm.record_success()
+                    except Exception:  # noqa: BLE001
+                        pass
                 # 回填真实执行引擎 id（理念6：诚实呈现「哪个引擎跑的」）。
                 # 优先采纳适配器回报的 engine_id——当某适配器内部回落到别的
                 # 引擎（如 code-exec 离线回落 code-team）时，被回填的是真正
@@ -380,6 +401,12 @@ class FabricHub:
             attempts.append(f"{eid}: {res.error}")
             last_res = res
             last_eid = eid
+        # 全部失败：埋点进 MAST 失败监控（best-effort，绝不影响返回结果）。
+        if fm is not None and last_res is not None:
+            try:
+                self._record_failure(capability, last_res.error, last_eid, attempts)
+            except Exception:  # noqa: BLE001
+                pass
         # 全部失败：返回最后一个芯粒的真实结果（保留其 data，如编排 trace/
         # ok_steps），错误附注「已协商 N 个芯粒」以体现端云合作耗尽，而非合成
         # data=None 把下游有用的失败上下文吞掉。
@@ -403,6 +430,41 @@ class FabricHub:
             },
             error=f"all providers raised [{capability}]: " + " | ".join(attempts),
         )
+
+    # ---- MAST 失败监控埋点（best-effort，绝不影响主路由） ----
+    def _record_failure(self, capability: str, error: Optional[str],
+                        engine_id: Optional[str], attempts: list) -> None:
+        """把一次路由失败埋点进 MAST 失败监控器（理念6 可观测）。"""
+        fm = self._failure_monitor
+        if fm is None:
+            return
+        try:
+            mode = self._classify_failure(error)
+            fm.record(
+                mode,
+                agent_id=engine_id or "router",
+                task_id=capability,
+                message=error or "all candidates failed: " + " | ".join(attempts[:3]),
+            )
+        except Exception:  # noqa: BLE001 - 监控埋点失败不影响主流程
+            pass
+
+    @staticmethod
+    def _classify_failure(error: Optional[str]):
+        """把路由失败错误粗略映射到 MAST 失败模式（失败分类观测量化）。"""
+        from kernel.plugins.failure_monitor import FailureMode  # 函数内 import 避免循环
+        e = (error or "").lower()
+        if "timeout" in e or "timed out" in e:
+            return FailureMode.TIMEOUT
+        if "permission" in e or "denied" in e or " 403" in e or "403 " in e:
+            return FailureMode.PERMISSION_DENIED
+        if "unavailable" in e or "not reachable" in e or "connection" in e or "refused" in e:
+            return FailureMode.MODEL_UNAVAILABLE
+        if "protocol" in e or "mcp" in e or "a2a" in e:
+            return FailureMode.PROTOCOL_ERROR
+        if "silent" in e or "empty" in e or "none" in e:
+            return FailureMode.SILENT_FAILURE
+        return FailureMode.VERIFY_FAILURE
 
     def invoke_engine(self, engine_id: str, capability: str,
                       payload: Dict[str, Any]) -> InvokeResult:

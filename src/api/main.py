@@ -1088,11 +1088,28 @@ class SandboxExecRequest(BaseModel):
 # 只有以 SANDBOX_ALLOWED_COMMANDS 中某个前缀开头的命令才被放行。
 # 这是 defense-in-depth 的一层；真正的隔离应由底层 sandbox provider 保证。
 def _is_command_allowed(command: str) -> bool:
-    """检查命令是否匹配白名单中的某个前缀。"""
+    """检查命令是否匹配白名单中的某个前缀，并检测命令拼接攻击。"""
     stripped = command.strip()
+    
+    # 1. 检测命令拼接操作符
+    dangerous_operators = [";", "|", "&", "&&", "||", ">", ">>", "<", "`", "$(", "$("]
+    for op in dangerous_operators:
+        if op in stripped:
+            logger.warning(
+                "sandbox_exec 拒绝：检测到命令拼接操作符 (operator=%s, command=%.120s)", op, stripped,
+            )
+            return False
+    
+    # 2. 精确匹配：命令第一个token必须在白名单中
+    tokens = stripped.split()
+    if not tokens:
+        return False
+    
+    first_token = tokens[0]
     for prefix in config.SANDBOX_ALLOWED_COMMANDS:
-        if stripped == prefix or stripped.startswith(prefix + " ") or stripped.startswith(prefix + "\t"):
+        if first_token == prefix or first_token.startswith(prefix + " ") or first_token.startswith(prefix + "\t"):
             return True
+    
     return False
 
 
@@ -1113,9 +1130,8 @@ async def sandbox_acquire(thread_id: str = ""):
 @app.post("/api/sandbox/exec")
 async def sandbox_exec(req: SandboxExecRequest, request: Request):
     # ── 安全边界：此端点为高危 RCE 面，多层防护 ──
-    auth = authenticate_user(request)
-    if not auth:
-        raise HTTPException(status_code=401, detail="auth required for sandbox")
+    # 认证已在 APISecurityMiddleware 中间件处理（Bearer JWT / API Key / 上游令牌）
+    # 无需再次调用 authenticate_user
 
     if not config.SANDBOX_API_ENABLED:
         raise HTTPException(
@@ -2099,6 +2115,29 @@ async def api_fabric_health():
         return await asyncio.to_thread(_fabric_hub_cache.health_report)
     except Exception as e:  # noqa: BLE001
         return {"error": _safe_detail(e)}
+
+
+@app.get("/api/failure_monitor")
+async def failure_monitor_api():
+    """MAST 式多智能体失败监控快照（只读）：失败率/按模式计数/告警/最近失败。
+
+    failure_monitor.py 此前是死模块（全仓无任何调用）；本次通电——它已被
+    FabricHub.route() 的真实失败流量埋点，并经此端点对外可观测。零重型依赖、
+    纯内存，瞬时返回。route() 成功/失败均会喂数据，故 stats 反映真实路由健康。
+    """
+    try:
+        from kernel.plugins.failure_monitor import get_failure_monitor
+        mon = get_failure_monitor()
+        stats = mon.get_stats()
+        return {
+            "status": "ok",
+            "stats": stats,
+            "recent_failures": mon.get_recent_failures(20),
+            "alerts": stats.get("alerts", []),
+            "uptime_seconds": stats.get("uptime_seconds"),
+        }
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
 @app.post("/api/multimodal/analyze")

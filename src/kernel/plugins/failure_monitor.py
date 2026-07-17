@@ -145,13 +145,14 @@ class FailureMonitor:
 
     def get_stats(self) -> Dict[str, Any]:
         """返回当前失败统计摘要。"""
-        total = self._total_tasks or 1
+        total = self._total_tasks
         failure_count = total - self._total_success
         return {
             "total_tasks": self._total_tasks,
             "success_count": self._total_success,
             "failure_count": failure_count,
-            "failure_rate": round(failure_count / total, 4),
+            # 真实任务数；空 monitor（total=0）失败率定义为零，不除零得 1.0
+            "failure_rate": round(failure_count / total, 4) if total > 0 else 0.0,
             "uptime_seconds": round(time.time() - self._start_time),
             "counts_by_mode": {m.value: c for m, c in self._counts.items()},
             "top_failures": self._top_failures(5),
