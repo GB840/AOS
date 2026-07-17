@@ -366,6 +366,17 @@ async def startup_event():
     except Exception as e:  # noqa: BLE001
         logger.warning("memory distiller start skipped: %s", e)
 
+    # 海马卷轴可信长期记忆（Hippo-Scroll）：纯内存、零外部依赖，启动即构造并
+    # 挂 app.state.hippo_scroll，供 /api/memory/hippo/* 真实触达其检索/仲裁/巡检。
+    # best-effort，失败不阻断启动（铁律：内核/增强挂载失败绝不阻断启动）。
+    try:
+        from kernel.hippo_scroll import get_hippo_scroll
+        app.state.hippo_scroll = get_hippo_scroll()
+        logger.info("hippo-scroll memory engine mounted")
+    except Exception as e:  # noqa: BLE001
+        app.state.hippo_scroll = None
+        logger.warning("hippo-scroll memory engine skipped: %s", e)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -2144,6 +2155,31 @@ async def failure_monitor_api():
             "recent_failures": mon.get_recent_failures(20),
             "alerts": stats.get("alerts", []),
             "uptime_seconds": stats.get("uptime_seconds"),
+        }
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/memory/hippo/status")
+async def hippo_scroll_status():
+    """Hippo-Scroll 可信记忆引擎状态（只读）：真实调用其检索，非假数据。
+
+    返回：总物证锚点数、总认知节点数、认知轨冲突发现数、一次真实 retrieve 示例。
+    引擎未挂载（startup 失败）时返回 503，不伪造成功。
+    """
+    engine = getattr(app.state, "hippo_scroll", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="hippo-scroll engine not mounted")
+    try:
+        conflicts = engine.cognition.find_conflicts()
+        sample_retrieve = engine.retrieve("猫", top_k=3)
+        return {
+            "status": "ok",
+            "total_anchors": engine.evidence.total_anchors,
+            "total_nodes": engine.cognition.total_nodes,
+            "conflicts_found": len(conflicts),
+            "sample_query": "猫",
+            "sample_retrieve": sample_retrieve,
         }
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=_safe_detail(e))

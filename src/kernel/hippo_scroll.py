@@ -632,3 +632,22 @@ __all__ = [
     "PatrolFinding",
     "PyramidRetriever",
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 单例工厂：让引擎在进程内常驻，被 main.py 启动时挂到 app.state，
+# 外部经 /api/memory/hippo/* 端点真实触达。纯内存、零外部依赖。
+# ─────────────────────────────────────────────────────────────────────────
+_global_engine: "HippoScrollEngine | None" = None
+
+
+def get_hippo_scroll() -> "HippoScrollEngine":
+    """返回 Hippo-Scroll 可信记忆引擎单例。
+
+    纯内存、零外部依赖（不依赖 GPU / LLM / 外网），故启动时即可构造，
+    常驻于 app.state，供 /api/memory/hippo/* 端点真实调用其检索/仲裁/巡检。
+    """
+    global _global_engine
+    if _global_engine is None:
+        _global_engine = HippoScrollEngine()
+    return _global_engine
