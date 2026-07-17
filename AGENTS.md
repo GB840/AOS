@@ -38,7 +38,7 @@
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 24 类 / 27 文件 | `core.fabric.adapters.__all__`（缺依赖自动跳过） |
+| 适配器总数 | 26 类 / 27 文件 | `core.fabric.adapters.__all__`（缺依赖自动跳过；含数字类名 AG2Adapter/Mem0Adapter） |
 | live | ? | 重跑需 `AOS_BASELINE_HEAVY=1` |
 | dead | ? | 典型无 key 环境见 §7（openclaw/ag2/litellm/mem0/lfm2） |
 | 测试 | 702 函数 / 109 文件 | `pytest --co -q`（含 flywheel/sandbox/security/compliance 等新增测试） |
@@ -261,7 +261,7 @@ codebase-memory-mcp / orchestrator。
 - ❌ **喂 legacy 双轨** — brain.py / deerflow / swarm_flow / hermes / lemon_orchestrator 是待退役老栈，
   与 FabricHub 互不打通。**新功能一律进 FabricHub**，不要往 legacy 加料。
   当前 `brain.fabric`（`core/brain.py:_init_fabric`，line 875）为**优雅降级**：import 失败即 `self.fabric=None`、
-  不抛异常、不影响其余组件——即双轨未合的证据（kernel 层 FabricHub 24 适配器是干净单一运行时）。
+  不抛异常、不影响其余组件——即双轨未合的证据（kernel 层 FabricHub 26 适配器是干净单一运行时）。
 - ❌ **故障转移丢上游 data** — 全部失败时返回最后一个供给方的真实结果（保留 trace/ok_steps），不能合成 `data=None`。
   - 修复：`fabric_hub.py:350-356` `last_res is not None` 时保留 `data=last_res.data`；
     全 raise（`last_res is None`）分支 `357-367` 也已返回诊断字典 `{"capability","attempts","engine_errors"}` 而非 `None`。
