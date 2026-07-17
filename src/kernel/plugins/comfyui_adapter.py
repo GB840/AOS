@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import requests
@@ -76,12 +77,30 @@ class ComfyUIAdapter(BaseAgentAdapter):
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         payload = req.payload or {}
         try:
-            from skills.comfyui import ComfyUISkill
+            from skills.comfyui import ComfyUISkill, ComfyUIDirector
 
             # 自觉指挥：用户没给 action 就按 payload 推断（一句话出图）。
             action = payload.get("action") or _infer_action(payload)
             context = dict(payload)
             context["action"] = action
+
+            # 一句话自觉编排：prompt 含 lora:/controlnet: 语法，或显式传了
+            # loras/controlnets/motion/style/model → 先抽结构化意图，交给
+            # ComfyUI 动态改节点图（插入 LoRA/ControlNet 并重连），而非模板填参。
+            if "intent" not in context:
+                has_adv = any(k in payload for k in
+                              ("loras", "controlnets", "motion", "style", "model"))
+                has_inline = re.search(r"lora:|controlnet:", payload.get("prompt", ""))
+                if has_adv or has_inline:
+                    director = ComfyUIDirector()
+                    intent = director.plan_intent(
+                        payload.get("prompt", ""),
+                        **{k: payload[k] for k in (
+                            "loras", "controlnets", "motion", "style", "model",
+                            "image_path", "has_image", "video_path",
+                            "reference_image", "style_prompt",
+                        ) if k in payload})
+                    context["intent"] = intent.to_dict()
 
             skill = ComfyUISkill()
             out = skill.execute(context)

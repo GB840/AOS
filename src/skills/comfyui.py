@@ -29,8 +29,10 @@ import logging
 import uuid
 import time
 import random
+import re
 import requests
 from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -84,6 +86,197 @@ COMFYUI_FEATURES = {
     },
 }
 
+
+# ─── 动态节点编排层（「自觉指挥」核心）──────────────────────────────
+# 旧版只支持模板填参（往固定 workflow.json 填 prompt/宽高）。本层让 AOS
+# 能按「意图」自己改节点图结构：自动插入 LoraLoader / ControlNet 节点并正确
+# 重连 model / conditioning，不再依赖写死的模板。沙箱用确定性规则抽取意图，
+# 主机配 LLM 时把 llm_planner 注入即可升级为真正的语义理解编排。
+
+@dataclass
+class ComfyIntent:
+    """结构化视觉意图 —— 导演层（ContentDirector）构造后交给 ComfyUI 编排。"""
+    prompt: str = ""
+    negative_prompt: str = "low quality, blurry, distorted"
+    has_image: bool = False
+    image_path: str = ""
+    video_path: str = ""
+    motion: bool = False
+    style: str = ""
+    loras: List[str] = field(default_factory=list)
+    controlnets: List[str] = field(default_factory=list)
+    model: str = ""
+    width: int = 1024
+    height: int = 768
+    steps: int = 20
+    cfg: float = 7.0
+    seed: int = -1
+    action: str = "txt2img"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+class ComfyUIDirector:
+    """按意图动态拼 ComfyUI 节点图（含 LoRA / ControlNet，并重连连接）。
+
+    不弄虚：build_workflow 产出的是真实合法的 ComfyUI API 格式节点图
+    （dict[node_id] = {class_type, inputs}），可直接 POST /prompt；
+    LoraLoader / ControlNetApply 的连线被显式重连到 KSampler 的
+    model / positive，而非停留在模板里。
+    """
+
+    # 关键词→风格 / 动作 的确定性规则映射（沙箱用；主机可注入 LLM 版）
+    _STYLE_KW = [
+        ("赛博朋克", "cyberpunk"), ("cyberpunk", "cyberpunk"),
+        ("动漫", "anime"), ("anime", "anime"),
+        ("写实", "photoreal"), ("油画", "oil_painting"),
+        ("水彩", "watercolor"), ("肖像", "portrait"), ("人像", "portrait"),
+        ("portrait", "portrait"), ("电影感", "cinematic"), ("cinematic", "cinematic"),
+    ]
+    _MOTION_KW = ["动", "视频", "motion", "video", "动起来", "短片", "动画", "dynamic"]
+
+    def __init__(self, default_ckpt: str = "model.safetensors", llm_planner=None):
+        self.default_ckpt = default_ckpt
+        # 主机有真 LLM 时注入：llm_planner(prompt, **hints) -> ComfyIntent
+        self.llm_planner = llm_planner
+
+    # —— 意图抽取（一句话 / 高级字段 → ComfyIntent）——
+    def plan_intent(self, prompt: str, **hints) -> "ComfyIntent":
+        # 注入点：配了真 LLM 就优先用 LLM 抽取结构化意图（更准）。
+        if self.llm_planner is not None:
+            try:
+                planned = self.llm_planner(prompt, **hints)
+                if isinstance(planned, ComfyIntent):
+                    return planned
+            except Exception as e:  # noqa: BLE001
+                logger.warning("LLM planner 失败，回退规则版: %s", e)
+        p = (prompt or "").lower()
+        motion = bool(hints.get("motion")) or any(k in p for k in self._MOTION_KW)
+        has_image = bool(hints.get("has_image")) or bool(hints.get("image_path"))
+        style = ""
+        for kw, st in self._STYLE_KW:
+            if kw in p:
+                style = st
+                break
+        loras = list(hints.get("loras") or [])
+        for m in re.findall(r"lora:\s*([\w\.\-]+)", prompt):
+            loras.append(m)
+        controlnets = list(hints.get("controlnets") or [])
+        for m in re.findall(r"controlnet:\s*([\w\.\-]+)", prompt):
+            controlnets.append(m)
+        # 动作推断（同一套自觉逻辑）
+        if hints.get("video_path"):
+            action = "vid2vid"
+        elif has_image and (hints.get("reference_image") or hints.get("style_prompt") or style):
+            action = "style_transfer"
+        elif has_image or motion:
+            action = "img2vid"
+        else:
+            action = "txt2img"
+        return ComfyIntent(
+            prompt=prompt,
+            has_image=has_image,
+            image_path=hints.get("image_path", ""),
+            video_path=hints.get("video_path", ""),
+            motion=motion,
+            style=style,
+            loras=loras,
+            controlnets=controlnets,
+            model=hints.get("model", "") or "",
+            width=int(hints.get("width", 1024)),
+            height=int(hints.get("height", 768)),
+            steps=int(hints.get("steps", 20)),
+            cfg=float(hints.get("cfg", 7.0)),
+            action=action,
+        )
+
+    # —— 节点图生成（动态编排核心）——
+    def build_workflow(self, intent: "ComfyIntent") -> Dict[str, Any]:
+        wf = self._base(intent)
+        if intent.loras:
+            wf = self._inject_loras(wf, intent)
+        if intent.controlnets:
+            wf = self._inject_controlnets(wf, intent)
+        wf = self._fill_text(wf, intent)
+        return self._fix_seed(self._fix_ckpt(wf, intent.model or self.default_ckpt))
+
+    def _base(self, intent: "ComfyIntent") -> Dict[str, Any]:
+        seed = intent.seed if intent.seed >= 0 else random.randint(0, 2**32 - 1)
+        wf = {
+            "3": {"class_type": "KSampler", "inputs": {
+                "cfg": intent.cfg, "denoise": 1, "latent_image": ["5", 0],
+                "model": ["4", 0], "negative": ["7", 0], "positive": ["6", 0],
+                "sampler_name": "euler", "scheduler": "normal", "seed": seed,
+                "steps": intent.steps}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": intent.model or self.default_ckpt}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["4", 1]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["4", 1]}},
+            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        }
+        # 输入节点：图生类用 LoadImage（真机视频用 LoadVideo，此处统一占位图源）
+        if intent.action in ("img2vid", "style_transfer", "vid2vid"):
+            img = intent.image_path or intent.video_path or "input.png"
+            wf["5"] = {"class_type": "LoadImage", "inputs": {"image": img}}
+        else:
+            wf["5"] = {"class_type": "EmptyLatentImage", "inputs": {"batch_size": 1, "height": intent.height, "width": intent.width}}
+        # 输出节点
+        if intent.action in ("img2vid", "vid2vid"):
+            wf["9"] = {"class_type": "SaveVideo", "inputs": {"filename_prefix": f"aos_{intent.action}", "frames": ["8", 0]}}
+        else:
+            wf["9"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aos_{intent.action}", "images": ["8", 0]}}
+        return wf
+
+    def _inject_loras(self, wf: Dict[str, Any], intent: "ComfyIntent") -> Dict[str, Any]:
+        prev_model, prev_clip = ["4", 0], ["4", 1]
+        for i, lora in enumerate(intent.loras):
+            nid = f"10{i}"
+            wf[nid] = {"class_type": "LoraLoader", "inputs": {
+                "lora_name": lora, "model": prev_model, "clip": prev_clip,
+                "strength_model": 1.0, "strength_clip": 1.0}}
+            prev_model, prev_clip = [nid, 0], [nid, 1]
+        wf["3"]["inputs"]["model"] = prev_model
+        wf["6"]["inputs"]["clip"] = prev_clip
+        wf["7"]["inputs"]["clip"] = prev_clip
+        return wf
+
+    def _inject_controlnets(self, wf: Dict[str, Any], intent: "ComfyIntent") -> Dict[str, Any]:
+        # 图像源：已有 LoadImage("5") 则复用，否则补一个 LoadImage。
+        if wf.get("5", {}).get("class_type") != "LoadImage":
+            wf["5"] = {"class_type": "LoadImage", "inputs": {"image": intent.image_path or "input.png"}}
+        img_src = "5"
+        prev_cond = ["6", 0]
+        for i, cn in enumerate(intent.controlnets):
+            lid, aid = f"20{i}", f"21{i}"
+            wf[lid] = {"class_type": "ControlNetLoader", "inputs": {"control_net_name": cn}}
+            wf[aid] = {"class_type": "ControlNetApply", "inputs": {
+                "conditioning": prev_cond, "control_net": [lid, 0], "image": [img_src, 0]}}
+            prev_cond = [aid, 0]
+        wf["3"]["inputs"]["positive"] = prev_cond
+        return wf
+
+    def _fill_text(self, wf: Dict[str, Any], intent: "ComfyIntent") -> Dict[str, Any]:
+        s = json.dumps(wf)
+        s = s.replace("{{prompt}}", intent.prompt or "")
+        s = s.replace("{{negative_prompt}}", intent.negative_prompt or "")
+        return json.loads(s)
+
+    @staticmethod
+    def _fix_seed(wf: Dict[str, Any]) -> Dict[str, Any]:
+        for node in wf.values():
+            inp = (node or {}).get("inputs") or {}
+            if isinstance(inp.get("seed"), int) and inp["seed"] < 0:
+                inp["seed"] = random.randint(0, 2**32 - 1)
+        return wf
+
+    @staticmethod
+    def _fix_ckpt(wf: Dict[str, Any], ckpt: str) -> Dict[str, Any]:
+        for node in wf.values():
+            if node.get("class_type") == "CheckpointLoaderSimple":
+                node["inputs"]["ckpt_name"] = ckpt
+        return wf
+
+
 DEFAULT_WORKFLOWS_DIR = os.path.join(os.path.dirname(__file__), "workflows")
 
 
@@ -128,6 +321,8 @@ class ComfyUISkill(Skill):
         Path(self._workflows_dir).mkdir(parents=True, exist_ok=True)
         
         self._check_comfyui()
+        # 动态节点编排导演（感知意图→改节点图）。llm_planner 留作主机升级位。
+        self._director = ComfyUIDirector(default_ckpt=self._ckpt_name)
     
     def _check_comfyui(self):
         """检查 ComfyUI 是否可用"""
@@ -163,7 +358,16 @@ class ComfyUISkill(Skill):
             Dict: 执行结果
         """
         action = context.get("action", "txt2img")
-        
+
+        # 动态编排：导演层传 intent（结构化意图）或带高级字段（loras/controlnets/
+        # motion）→ 走节点图动态生成，而非写死模板。普通 prompt 不带这些字段时
+        # 保持原行为（向后兼容，不破坏既有测试）。
+        intent = self._resolve_intent(context)
+        if intent is not None:
+            if not self._available:
+                return self._execute_fallback(action, task_id, context)
+            return self._execute_intent(intent, task_id, context)
+
         if action not in COMFYUI_FEATURES:
             return {
                 "success": False,
@@ -196,6 +400,37 @@ class ComfyUISkill(Skill):
             "timestamp": datetime.now().isoformat(),
         }
     
+    def _resolve_intent(self, context: Dict[str, Any]):
+        """从 context 抽取结构化意图（导演层传 intent，或一句话含 lora:/controlnet:）。"""
+        raw = context.get("intent")
+        # 仅真正的「编排触发字段」才激活动态编排；image_path 等普通输入走原模板路径
+        # （向后兼容旧测试与显式出图调用）。导演层(content_director)经 intent dict
+        # 传入完整意图，走上面的 raw-dict 分支，不受此限制。
+        hints = {k: context[k] for k in (
+            "loras", "controlnets", "motion", "style", "model",
+        ) if k in context}
+        if isinstance(raw, dict):
+            return ComfyUIDirector().plan_intent(
+                context.get("prompt", "") or raw.get("prompt", ""), **raw)
+        if hints:
+            return self._director.plan_intent(context.get("prompt", ""), **hints)
+        return None
+
+    def _execute_intent(self, intent: "ComfyIntent", task_id: str, context: Dict) -> Dict[str, Any]:
+        """按意图动态生成节点图并提交执行（真正的「自觉指挥」路径）。"""
+        try:
+            wf = self._director.build_workflow(intent)
+            prompt_id = self._submit_prompt(wf)
+            if not prompt_id:
+                return {"success": False, "error": "提交任务失败"}
+            output_path = self._wait_for_result(prompt_id)
+            if output_path:
+                return {"success": True, "result": {"output_path": output_path}}
+            return {"success": False, "error": "生成超时"}
+        except Exception as e:
+            logger.error("ComfyUI 动态编排执行失败: %s", e, exc_info=True)
+            return {"success": False, "error": str(e)}
+
     def _execute_enhanced(self, action: str, task_id: str, context: Dict) -> Dict[str, Any]:
         """增强模式执行 — 使用 ComfyUI API"""
         try:

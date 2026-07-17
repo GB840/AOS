@@ -296,6 +296,7 @@ class FabricHub:
         # 让一句话 prompt 经 hub 自动落到本地 ComfyUI 出图（本地优先于云端 agnes）。
         try:
             self.register_comfyui()
+            self.register_content_director()
         except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
             _LOG.warning("默认注册 comfyui 引擎失败: %s", e)
         # 后台预热重型依赖（autogen 80s / litellm 22s import），避免 health/
@@ -878,6 +879,23 @@ class FabricHub:
             self._registry.register(CodeTeamAdapter())
         except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
             _LOG.warning("code_team 引擎注册失败(将跳过): %s", e)
+
+    def register_content_director(self) -> None:
+        """把内容生产导演接成可路由芯粒（content.produce）。
+
+        此前内容生产是概念性缺口——各能力（web.search / media.image / code.generate）
+        都已通电，但没有「一句话目标 → 自主跑完整条链路」的编排层。接进来后：
+        - ``hub.route("content.produce", {goal})`` 一句话可达，导演自主检索/分析/
+          写剧本/导演(动态编排节点图)/调工具/出审核包；
+        - 复用 hub 单一可信路由（与 OrchestrationChiplet 同构），本地优先/零成本；
+        - 审核为 human-in-the-loop 停点，approve 才发布（不自动越过）。
+        适配器构造轻量（仅 import）；构造失败静默跳过，绝不谎报 live。
+        """
+        try:
+            from kernel.plugins.content_director import ContentDirector
+            self._registry.register(ContentDirector(route_fn=self.route))
+        except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
+            _LOG.warning("content_director 引擎注册失败(将跳过): %s", e)
 
     def _register_env_codebase_mcp(self) -> None:
         """环境驱动自动注册：让真实工具「装好即通电」，无需改代码。

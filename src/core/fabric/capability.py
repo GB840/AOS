@@ -99,6 +99,7 @@ class Capability(str, Enum):
     BENCH_PING = "bench.ping"
     BENCH_ISOLATE = "bench.isolate"    # 崩溃隔离专用合成能力（tests + gate_check）
     WORKFLOW_EXECUTE = "system.workflow"  # 编排芯粒：把多芯粒串成流水线（Day15-21）
+    CONTENT_PRODUCE = "content.produce"   # 自主内容生产流水线（检索→分析→剧本→导演→工具→审核→发布）
 
 
 # ============================================================================
@@ -154,6 +155,9 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     # 本地服务、零成本、最强隐私 → 比云端 agnes 更贴「本地优先」；route 级联时
     # 云端用不了就回本地 ComfyUI（万物为我所用）。
     "comfyui": [Capability.MEDIA_IMAGE, Capability.MEDIA_VIDEO],
+    # 内容生产导演：一句话目标 → 自主跑完整条内容生产链路（复用 hub 路由，
+    # 本地优先/零成本；审核为 human-in-the-loop 停点，approve 才发布）。
+    "content-director": [Capability.CONTENT_PRODUCE],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -183,6 +187,8 @@ ENGINE_TIER: dict[str, str] = {
     "vlm": TIER_MEDIUM,
     # comfyui：本地视觉生产服务，零成本/最强隐私 → 高档（比云端 agnes 优先）
     "comfyui": TIER_HIGH,
+    # content-director：本地编排（复用 hub 路由，零成本）→ 高档
+    "content-director": TIER_HIGH,
 }
 
 

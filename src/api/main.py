@@ -377,6 +377,19 @@ async def startup_event():
         app.state.hippo_scroll = None
         logger.warning("hippo-scroll memory engine skipped: %s", e)
 
+    # 内容生产导演（ContentDirector）：一句话目标 → 自主跑完整条内容生产链路。
+    # route_fn 用 lambda 延迟到首次 produce 才构造 hub（避免 startup 阻塞）；
+    # best-effort，失败不阻断启动。
+    try:
+        from kernel.plugins.content_director import get_content_director
+        from mcp.protocol import _get_hub
+        app.state.content_director = get_content_director(
+            route_fn=lambda cap, payload: _get_hub().route(cap, payload))
+        logger.info("content director mounted")
+    except Exception as e:  # noqa: BLE001
+        app.state.content_director = None
+        logger.warning("content director skipped: %s", e)
+
     # 活体进化闭环（LiveEvolutionEngine）：默认构造会 build_default_system() 接真实内核
     # （生产：真 LLM 进化）。该构造较重（可能联网），故放后台任务，不阻塞 /health；
     # 沙箱无内核/网络时 best-effort 跳过，绝不阻断启动，也不伪造成功。
@@ -2198,6 +2211,89 @@ async def hippo_scroll_status():
             "sample_query": "猫",
         "sample_retrieve": sample_retrieve,
     }
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.post("/api/content/produce")
+async def content_produce(request: Request):
+    """一句话目标 → 自主内容生产（检索→分析→剧本→导演→工具→审核包）。
+
+    默认停在审核（human-in-the-loop），不自动发布；auto_publish=true 仅用于
+    无人值守流水线。导演未挂载返回 503，缺 goal 返回 400。
+    """
+    director = getattr(app.state, "content_director", None)
+    if director is None:
+        raise HTTPException(status_code=503, detail="content director not mounted")
+    try:
+        body = await request.json()
+        goal = (body.get("goal") or "").strip()
+        if not goal:
+            raise HTTPException(status_code=400, detail="缺少 goal")
+        auto_publish = bool(body.get("auto_publish", False))
+        # 重活丢线程池，避免阻塞事件循环
+        result = await asyncio.to_thread(director.produce, goal, auto_publish=auto_publish)
+        return {
+            "status": "ok",
+            "task_id": result.task_id,
+            "goal": result.goal,
+            "stages": result.stages,
+            "materials": result.materials,
+            "analysis": result.analysis,
+            "script_path": result.script_path,
+            "shots": result.shots,
+            "review_id": result.review_id,
+            "review_path": result.review_path,
+            "published": result.published,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/content/review/{review_id}")
+async def content_review(review_id: str):
+    """读取审核包（reviews/{id}.md），真实返回内容，非假数据。不存在返回 404。"""
+    director = getattr(app.state, "content_director", None)
+    if director is None:
+        raise HTTPException(status_code=503, detail="content director not mounted")
+    try:
+        import os
+        review_path = os.path.join(director._work_root, "reviews", f"{review_id}.md")
+        if not os.path.isfile(review_path):
+            raise HTTPException(status_code=404, detail="审核包不存在")
+        with open(review_path, "r", encoding="utf-8") as f:
+            return {"status": "ok", "review_id": review_id, "content": f.read()}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.post("/api/content/approve/{review_id}")
+async def content_approve(review_id: str, request: Request = None):
+    """审核通过 → 自动发布（落 published/ + 记 IMA 发布）。human-in-the-loop 解锁。"""
+    director = getattr(app.state, "content_director", None)
+    if director is None:
+        raise HTTPException(status_code=503, detail="content director not mounted")
+    try:
+        notes = ""
+        if request is not None:
+            try:
+                body = await request.json()
+                notes = body.get("notes", "") or ""
+            except Exception:  # noqa: BLE001
+                notes = ""
+        pub = director.approve(review_id, notes=notes)
+        return {
+            "status": "ok" if pub.ok else "error",
+            "task_id": pub.task_id,
+            "review_id": pub.review_id,
+            "published_path": pub.published_path,
+            "ima_stored": pub.ima_stored,
+            "error": pub.error,
+        }
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
