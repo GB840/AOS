@@ -2,8 +2,8 @@
 
 用户只给一句话目标（goal），导演自主跑完整条链路：
   1. 找内容  → 经 hub 路由 web.search 检索素材（沙箱无网则降级空素材，不谎报）
-  2. 分析    → 从目标+素材抽主题/受众/调性（规则版；llm 注入点升级语义分析）
-  3. 写剧本  → 生成 script.md（分场/分镜/视觉描述）
+  2. 分析    → 经 hub 路由 inference.llm 真思考抽主题/受众/调性（无 LLM 时诚实降级规则版）
+  3. 写剧本  → 经 hub 路由 inference.llm 真编剧生成 script.md（无 LLM 时降级模板）
   4. 导演    → 拆镜头，为每个镜头构造 ComfyIntent，**自己改节点图**
               （动态插入 LoRA/ControlNet 并重连，复用 ComfyUIDirector）
   5. 调工具  → 经 hub 路由 media.image/media.video 出图出视频、code.generate 出配套脚本
@@ -218,13 +218,76 @@ class ContentDirector(BaseAgentAdapter):
             logger.warning("检索素材失败（降级空素材，不谎报）: %s", e)
             return []
 
-    def _analyze(self, goal: str, materials: List[str]) -> Dict[str, Any]:
-        """分析目标与素材，抽主题/受众/调性。规则版；llm 注入点升级。"""
-        if self._llm is not None:
+    # ── LLM 思考（复用 hub 单一可信路由 inference.llm，不自造 LLM）──────────
+    def _llm_think(self, system: str, user: str) -> Optional[str]:
+        """经 hub 路由 inference.llm 真正思考；无 route_fn / 失败则返 None（诚实降级）。"""
+        if self._llm is not None and callable(self._llm):
             try:
-                return self._llm("analyze", goal=goal, materials=materials)
+                return self._llm(system=system, user=user)
             except Exception as e:  # noqa: BLE001
-                logger.warning("LLM 分析失败，回退规则版: %s", e)
+                logger.warning("注入式 llm 失败，尝试 inference.llm 路由: %s", e)
+        if self._route_fn is None:
+            return None
+        try:
+            out = self._route_fn("inference.llm", {
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            })
+            data = self._unwrap(out)
+            text = (
+                data.get("text")
+                or data.get("content")
+                or data.get("output")
+                or (data.get("choices", [{}])[0]
+                    .get("message", {}).get("content", ""))
+            )
+            return text.strip() or None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("LLM 思考失败（降级规则版）: %s", e)
+            return None
+
+    @staticmethod
+    def _extract_json(text: str) -> Any:
+        """从 LLM 文本里抠出第一个 JSON 对象/数组（兼容 ```json 围栏）。"""
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+            text = re.sub(r"\n?```$", "", text)
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        m = re.search(r"\{.*\}|\[.*\]", text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return None
+        return None
+
+    def _analyze(self, goal: str, materials: List[str]) -> Dict[str, Any]:
+        """分析目标与素材，抽主题/受众/调性。优先走 inference.llm 真思考，失败回退规则。"""
+        mats = "\n".join(f"- {m}" for m in materials) or "（无外部素材）"
+        prompt = (
+            f"你是内容策略分析师。请分析以下创作目标并输出结构化结论。\n"
+            f"目标：{goal}\n参考素材：\n{mats}\n\n"
+            f"只输出 JSON，字段：theme(主题) / audience(受众) / tone(调性:cinematic|"
+            f"natural|playful|serious) / key_message(核心信息) / visual_style(视觉风格建议)。"
+        )
+        llm_out = self._llm_think(
+            "你是严谨的内容策略分析师，只输出 JSON，不要任何解释。", prompt)
+        if llm_out:
+            parsed = self._extract_json(llm_out)
+            if isinstance(parsed, dict) and parsed:
+                parsed["material_count"] = len(materials)
+                parsed.setdefault("theme", goal)
+                return parsed
+            # LLM 有返回但解析不出 JSON：保留原始文本，不丢信息
+            return {"theme": goal, "tone": "natural", "audience": "general",
+                    "material_count": len(materials), "llm_raw": llm_out}
+        # 降级规则版（无 LLM / 调用失败，诚实回落）
         p = goal.lower()
         tone = "cinematic" if any(k in p for k in ["电影", "cinematic", "大片"]) else "natural"
         audience = "general"
@@ -240,20 +303,27 @@ class ContentDirector(BaseAgentAdapter):
         }
 
     def _write_script(self, goal: str, analysis: Dict[str, Any], materials: List[str]) -> str:
-        """写剧本：分场/分镜/视觉描述。规则模板；llm 注入点升级文风。"""
-        if self._llm is not None:
-            try:
-                return self._llm("script", goal=goal, analysis=analysis, materials=materials)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("LLM 写剧本失败，回退模板: %s", e)
+        """写剧本：分场/分镜/视觉描述。优先走 inference.llm 真编剧，失败回退模板。"""
+        analysis_json = json.dumps(analysis, ensure_ascii=False)
         mats = "\n".join(f"- {m}" for m in materials) or "- （无外部素材，纯原创）"
+        prompt = (
+            f"你是专业短视频/广告剧本编剧。基于以下分析与素材，写一页分场剧本。\n"
+            f"创作目标：{goal}\n分析结果：{analysis_json}\n参考素材：\n{mats}\n\n"
+            f"输出 Markdown：含『分析』『参考素材』『分场（每场：画面描述+旁白/台词）』。"
+        )
+        llm_out = self._llm_think(
+            "你是专业内容编剧，输出结构清晰的中文 Markdown 剧本。", prompt)
+        if llm_out and len(llm_out.strip()) > 20:
+            return f"# 内容剧本：{goal}\n\n{llm_out.strip()}\n"
+        # 降级模板（无 LLM / 返回过短）
+        mats_block = "\n".join(f"- {m}" for m in materials) or "- （无外部素材，纯原创）"
         return (
             f"# 内容剧本：{goal}\n\n"
             f"## 分析\n"
             f"- 主题：{analysis.get('theme','')}\n"
             f"- 调性：{analysis.get('tone','')}\n"
             f"- 受众：{analysis.get('audience','')}\n\n"
-            f"## 参考素材\n{mats}\n\n"
+            f"## 参考素材\n{mats_block}\n\n"
             f"## 分场\n"
             f"**场1｜主视觉**\n"
             f"- 画面：{goal}，电影感构图，主体突出。\n"

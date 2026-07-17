@@ -125,6 +125,43 @@ def test_approve_publishes(tmp_path):
     assert os.path.isdir(os.path.join(pub_dir, "shots")), "产物未复制"
 
 
+# ─── 3b) 分析/编剧 经 inference.llm 真思考（此前是空壳占位）─────
+def _fake_route_with_llm(cap, payload):
+    """在 _fake_route 基础上，inference.llm 返真实 JSON/剧本文本。"""
+    if cap == "inference.llm":
+        msgs = payload.get("messages", [])
+        sys_msg = (msgs[0].get("content", "") if msgs else "")
+        if "内容策略分析师" in sys_msg:
+            # 分析场景：返结构化 JSON
+            return {"ok": True, "data": {"text": json.dumps({
+                "theme": "赛博朋克猫", "audience": "青年", "tone": "cinematic",
+                "key_message": "自由", "visual_style": "霓虹"}, ensure_ascii=False)}}
+        # 编剧场景：返 Markdown 剧本
+        return {"ok": True, "data": {"text": "## 分场\n**场1**\n画面：猫在霓虹下行走。"}}
+    return _fake_route(cap, payload)
+
+
+def test_analyze_and_script_use_llm(tmp_path):
+    d = ContentDirector(route_fn=_fake_route_with_llm, work_root=str(tmp_path))
+    res = d.produce("一只赛博朋克猫的短片")
+    # 分析走了 LLM：拿到结构化字段（非规则占位）
+    assert res.analysis.get("theme") == "赛博朋克猫"
+    assert res.analysis.get("audience") == "青年"
+    assert res.analysis.get("tone") == "cinematic"
+    # 剧本走了 LLM：含返回内容（非纯模板占位）
+    script = open(res.script_path, encoding="utf-8").read()
+    assert "霓虹" in script, "编剧未使用 LLM 返回内容"
+    assert "待录制" not in script, "仍走了占位模板而非 LLM 编剧"
+
+
+def test_analyze_falls_back_without_llm(tmp_path):
+    """无 LLM（纯规则降级）时仍产出合法分析，不崩、不伪造。"""
+    d = ContentDirector(route_fn=_fake_route, work_root=str(tmp_path))
+    res = d.produce("一只赛博朋克猫的短片")
+    assert res.analysis.get("theme")
+    assert res.analysis.get("tone") in ("cinematic", "natural")
+
+
 # ─── 5) 经 FabricHub.route 真路由（后台，约2.5min）──────────
 def test_via_fabric_hub_route():
     try:
