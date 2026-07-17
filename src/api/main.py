@@ -550,14 +550,36 @@ import random as _random
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    # 动态读取切流比例：改 env 无需重启即生效，便于真实测量分流比例
+    # 动态读取切流比例与 fabirc 开关：改 env 无需重启即生效
     kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "100"))
+    use_fabric_chat = os.environ.get("AOS_FABRIC_CHAT") == "1"
     bridge = getattr(app.state, "bridge", None)
     try:
         routed_to_kernel = False
-        # ---- 每次请求都计数（无论最终路由到哪）----
         if bridge is not None:
             bridge.record_chat_request()
+
+        # ---- FabricHub 对话路径（AOS_FABRIC_CHAT=1）----
+        # 当 brain.py 不可用或主动选择「不走 legacy track」时，经 FabricHub.chat()
+        # 做纯 LLM 对话。复用 inference.llm 芯粒（LiteLLM 云端优先→本地兜底），
+        # 含会话历史上下文。失败诚实返回 [FabricHub chat failed: ...]，不伪造。
+        if use_fabric_chat:
+            if bridge is not None:
+                bridge.record_chat_route("fabric")
+            try:
+                hub = await _get_fabric_hub()
+                result = await asyncio.to_thread(
+                    hub.chat,
+                    message=request.message,
+                    session_id=request.session_id or "",
+                )
+                logger.info("chat routed to FabricHub (AOS_FABRIC_CHAT=1)")
+                engine = result.get("engine") or "fabric"
+                return {"response": result["response"],
+                        "route": f"fabric/{engine}", "ok": result.get("ok")}
+            except Exception as exc:
+                logger.warning("FabricHub chat failed, falling back: %s", exc)
+                # FabricHub 失败 → 继续往下走 kernel/brain 降级路径
 
         # ---- 灰度切流：按比例路由到 kernel ----
         # record_chat_route("kernel") 记录「路由决策」（本请求发往内核），
@@ -2149,6 +2171,15 @@ async def api_resolve_engine(capability: str):
 _fabric_hub_cache = None
 
 
+async def _get_fabric_hub():
+    """懒加载并缓存 FabricHub 单例（与 mcp/protocol._get_hub 同构，独立实例）。"""
+    global _fabric_hub_cache
+    if _fabric_hub_cache is None:
+        from kernel.plugins.fabric_hub import FabricHub
+        _fabric_hub_cache = await asyncio.to_thread(FabricHub)
+    return _fabric_hub_cache
+
+
 @app.get("/api/fabric/health")
 async def api_fabric_health():
     """fabric 薄适配层通电自检：诚实报告每个真实 OSS 引擎 live/dead。
@@ -2158,10 +2189,7 @@ async def api_fabric_health():
     """
     global _fabric_hub_cache
     try:
-        if _fabric_hub_cache is None:
-            from kernel.plugins.fabric_hub import FabricHub
-            # FabricHub() 构造 + 各引擎 health 探测较重，移入线程池避免阻塞事件循环。
-            _fabric_hub_cache = await asyncio.to_thread(FabricHub)
+        hub = await _get_fabric_hub()
         return await asyncio.to_thread(_fabric_hub_cache.health_report)
     except Exception as e:  # noqa: BLE001
         return {"error": _safe_detail(e)}

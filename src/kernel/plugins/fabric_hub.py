@@ -1208,6 +1208,93 @@ class FabricHub:
             _LOG.warning("回退写入语义记忆失败", exc_info=True)
             return False
 
+    def chat(self, message: str, session_id: str = "default",
+             system_prompt: str = "", max_tokens: int = 2048) -> Dict[str, Any]:
+        """FabricHub 对话入口：把用户消息路由到 inference.llm 做 LLM 对话。
+
+        FabricHub 从「能力路由器」迈出一步成为「对话中枢」——复用现有 LiteLLM
+        芯粒，加载会话历史构造 chat messages，返回 LLM 文本回复。供 /api/chat
+        新开 FabricHub 路径（AOS_FABRIC_CHAT=1 时，brain.py 缺位下的轻量替代）。
+
+        - 会话历史：经 _load_session 取最近最多 5 轮，注入 messages
+        - 引擎：默认走 inference.llm 能力路由（云端优先→本地兜底，级联不写死）
+        - 失败诚实返回 [FabricHub chat failed: ...]，不伪造（理念6）
+
+        返回 {response, session_id, engine, ok}，与 brain.chat() 返回形状兼容。
+        """
+        try:
+            # 加载最近会话历史（最多 _SESSION_MAX_TURNS 轮）
+            history = _load_session(session_id)
+            recent = history[-_SESSION_MAX_TURNS:] if history else []
+
+            # 构造完整 messages 数组
+            messages: List[Dict[str, str]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for h in recent:
+                if h.get("task"):
+                    messages.append({"role": "user", "content": h["task"]})
+                if h.get("response"):
+                    messages.append({"role": "assistant", "content": h["response"][:2000]})
+            messages.append({"role": "user", "content": message})
+
+            # 路由到推理引擎（复用现有 inference.llm 芯粒，级联兜底）
+            res = self.route("inference.llm", {
+                "messages": messages,
+                "max_tokens": max_tokens,
+            })
+
+            if isinstance(res, InvokeResult):
+                if not res.ok:
+                    engine = res.engine_id or "?"
+                    return {"response": f"[FabricHub chat failed: {res.error}]",
+                            "session_id": session_id, "engine": engine, "ok": False}
+                data = res.data or {}
+                # 兼容多种 LLM 返回形状：openai/agns/litellm/本地模型
+                content = (data.get("text") or data.get("content")
+                           or data.get("output") or "")
+                if not content and "choices" in data:
+                    choices = data["choices"]
+                    if choices and isinstance(choices, list):
+                        content = choices[0].get("message", {}).get("content", "")
+                resp = str(content) if content else "[no response]"
+                engine = res.engine_id or "?"
+            else:
+                resp = str(res)
+                engine = "?"
+
+            # 保存本轮到会话历史
+            history.append({"task": message, "response": resp})
+            _save_session(session_id, history)
+
+            return {"response": resp, "session_id": session_id,
+                    "engine": engine, "ok": True}
+        except Exception as e:
+            _LOG.warning("FabricHub.chat 失败: %s", e)
+            return {"response": f"[FabricHub chat error: {e}]",
+                    "session_id": session_id, "engine": None, "ok": False}
+
+    def skill_discover(self, capability: str = "") -> Dict[str, Any]:
+        """查询 AOS 技能生态：按能力发现对应技能（Skill 生态化入口）。
+
+        当 capability 为空时返回所有技能的摘要；传具体能力（如 "web.search"）
+        则返回声明该能力的技能列表。数据源为 skills/manifest.json（单一真相）。
+
+        返回 {skills: [...], capability: ..., total: N}，与 route() 互补——
+        查引擎用 resolve_engine，查技能用 skill_discover。
+        """
+        try:
+            from kernel.skill_registry import get_skill_registry
+            reg = get_skill_registry()
+            if capability:
+                skills = reg.discover(capability)
+                return {"capability": capability, "skills": skills, "total": len(skills)}
+            return {"skills": reg.list_all(), "total": len(reg.list_all()),
+                    "summary": reg.summary()}
+        except Exception as e:
+            _LOG.warning("skill_discover 失败: %s", e)
+            return {"skills": [], "error": str(e), "total": 0}
+
     def run_task(self, task: str, planner: str = "ag2", session_id: str = None) -> Dict[str, Any]:
         """「think→do」自主执行闭环：规划 → 解析成 steps → 编排芯粒逐跳执行。
 
