@@ -32,6 +32,11 @@ class InvokeResult:
     ok: bool
     data: dict[str, Any] = None
     error: str | None = None
+    # 实际执行该请求的引擎 id（如 "openclaw"/"litellm"）。由路由层在委派成功/
+    # 失败后回填，使调用方（编排芯粒 trace、A2UI 报告、路由预测器观测）能诚实
+    # 呈现「到底哪个引擎跑的」——对应理念6「诚实+量化置信」「可验证即真理」。
+    # 缺省 None 表示路由层未回填（如直接构造的 InvokeResult）。
+    engine_id: str | None = None
 
 
 class BaseAgentAdapter(ABC):

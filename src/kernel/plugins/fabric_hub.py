@@ -339,6 +339,7 @@ class FabricHub:
         if not providers:
             return InvokeResult(ok=False, error=f"no live provider for {capability}")
         last_res: InvokeResult | None = None
+        last_eid: str | None = None
         attempts: list[str] = []
         for adapter in providers:
             eid = adapter.engine_id
@@ -356,7 +357,10 @@ class FabricHub:
             dt = (time.perf_counter() - t0) * 1000.0
             if res.ok:
                 self._registry.record_outcome(cap_str, eid, eff_tier, True, dt)
-                return res
+                # 回填真实执行引擎 id（理念6：诚实呈现「哪个引擎跑的」），
+                # 下游 trace / A2UI 报告 / 预测器观测据此拿到真相。
+                return InvokeResult(
+                    ok=True, data=res.data, error=res.error, engine_id=eid)
             self._failures[eid] = time.perf_counter()
             self._errors[eid] = res.error or "ok=False"
             self._registry.record_outcome(
@@ -365,6 +369,7 @@ class FabricHub:
             )
             attempts.append(f"{eid}: {res.error}")
             last_res = res
+            last_eid = eid
         # 全部失败：返回最后一个芯粒的真实结果（保留其 data，如编排 trace/
         # ok_steps），错误附注「已协商 N 个芯粒」以体现端云合作耗尽，而非合成
         # data=None 把下游有用的失败上下文吞掉。
@@ -374,6 +379,7 @@ class FabricHub:
                 data=last_res.data,
                 error=f"all providers failed [{capability}] "
                       f"after {len(attempts)} attempt(s): " + " | ".join(attempts),
+                engine_id=last_eid,
             )
         return InvokeResult(
             ok=False,

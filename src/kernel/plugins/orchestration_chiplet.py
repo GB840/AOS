@@ -154,7 +154,8 @@ class OrchestrationChiplet(BaseAgentAdapter):
             with state.lock:
                 state.failed_steps += 1
                 state.trace.append({"step": idx, "capability": None,
-                                    "ok": False, "error": "缺 capability"})
+                                    "engine": None, "ok": False,
+                                    "error": "缺 capability"})
             return
         # 解析本步入参
         if "in" in step:
@@ -165,7 +166,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
                     # 上游从未成功产出 → 依赖断裂，本步无法获取真实输入，判为依赖失败
                     state.failed_steps += 1
                     state.trace.append({"step": idx, "capability": _as_str(cap),
-                                        "ok": False,
+                                        "engine": None, "ok": False,
                                         "error": "依赖的上游步骤尚未成功产出，本步无法获取输入（语义空转已阻止）"})
                     return
                 payload = state.last_success_out
@@ -204,12 +205,13 @@ class OrchestrationChiplet(BaseAgentAdapter):
             payload = {}
         # 委派给下游芯粒（经同一路由层，故障隔离同样生效）
         res = self._route_fn(_as_str(cap), payload)
+        _eng = res.engine_id if isinstance(res, InvokeResult) else None
         if isinstance(res, InvokeResult) and not res.ok:
             # 单步容错：记录失败、保留上一次成功输出作为后续入参、继续跑
             with state.lock:
                 state.failed_steps += 1
                 state.trace.append({"step": idx, "capability": _as_str(cap),
-                                    "ok": False, "error": res.error})
+                                    "engine": _eng, "ok": False, "error": res.error})
             return
         step_out = res.data if isinstance(res, InvokeResult) else res
         out_ctx = step_out if isinstance(step_out, dict) else {"result": step_out}
@@ -219,7 +221,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
             state.ok_steps += 1
             _rm = step_out.get("real_metrics") if isinstance(step_out, dict) else None
             state.trace.append({"step": idx, "capability": _as_str(cap),
-                                "ok": True, "out": _brief(step_out),
+                                "engine": _eng, "ok": True, "out": _brief(step_out),
                                 **({"real_metrics": _rm} if _rm is not None else {})})
 
     @staticmethod

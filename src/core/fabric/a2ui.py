@@ -578,13 +578,15 @@ def build_a2ui_report(trace: List[Dict[str, Any]], ok_steps: int, failed_steps: 
         cap = t.get("capability") or "?"
         ok = t.get("ok", False)
         status = "✓" if ok else "✗"
+        eng = t.get("engine")
+        eng_tag = f"@{eng}" if eng else "@?"
         detail = ""
         if ok and isinstance(t.get("out"), (str, int, float)):
             detail = str(t.get("out"))[:80]
         elif not ok:
             detail = str(t.get("error", ""))[:80]
         cid = f"step-{idx}"
-        b.add(cid, text(lit(f"{status} 步骤{idx} [{cap}] {detail}"), variant="body"))
+        b.add(cid, text(lit(f"{status} 步骤{idx} [{cap}] {eng_tag} {detail}"), variant="body"))
         rows.append(cid)
 
     b.add("steps", list_cmp(rows) if rows else text(lit("（无步骤）")))

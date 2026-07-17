@@ -2345,6 +2345,10 @@ async def a2ui_hub():
             {"title": "A2UI 演示", "method": "GET",
              "path": "/api/a2ui/demo",
              "desc": "自包含 A2UI 协议演示界面（声明式、安全渲染）。"},
+            {"title": "路由预测器可观测", "method": "GET",
+             "path": "/api/route/predictor",
+             "desc": "learned 策略下路由预测器的只读快照：是否已训练、样本数、"
+                     "各能力×引擎的预测成功概率；无 predictor（preference 策略）时诚实返回未启用。"},
         ]
         surface = a2ui_mod.build_index_surface(
             "AOS 可视化交付物目录",
