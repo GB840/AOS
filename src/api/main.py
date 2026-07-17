@@ -357,6 +357,15 @@ async def startup_event():
     # brain 重型初始化移到后台任务（见 _deferred_brain_init），不阻塞 /health。
     asyncio.create_task(_deferred_brain_init(app))
 
+    # 常驻记忆提炼 Agent（借鉴 Jcode）：周期扫描 trace → 提炼事实 → 写记忆。
+    # best-effort，失败不阻断启动；增强通道 mem0 不可用时自动降级为仅 jsonl 落盘。
+    try:
+        from kernel.memory_distiller import get_distiller
+        _distiller = get_distiller()
+        asyncio.create_task(_distiller.run_loop())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory distiller start skipped: %s", e)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
