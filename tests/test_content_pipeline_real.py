@@ -162,6 +162,49 @@ def test_analyze_falls_back_without_llm(tmp_path):
     assert res.analysis.get("tone") in ("cinematic", "natural")
 
 
+# ─── 3c) 有效组建：复用项目已有的 memory.knowledge / agency_roles / vision.understand ──
+def _fake_route_full(cap, payload):
+    """在 _fake_route 基础上，模拟知识库/视觉/LLM 全链路可达。"""
+    if cap == "memory.knowledge":
+        return {"ok": True, "data": {"result": "知识库提到：赛博朋克视觉特征是霓虹+高反差"}}
+    if cap == "vision.understand":
+        return {"ok": True, "data": {"text": "参考图：霓虹街道，湿润路面倒影，主角黑猫"}}
+    if cap == "inference.llm":
+        msgs = payload.get("messages", [])
+        sys_msg = (msgs[0].get("content", "") if msgs else "")
+        if "内容策略分析师" in sys_msg:
+            return {"ok": True, "data": {"text": json.dumps({
+                "theme": "赛博朋克猫", "audience": "青年", "tone": "cinematic",
+                "key_message": "自由", "visual_style": "霓虹"}, ensure_ascii=False)}}
+        return {"ok": True, "data": {"text": "## 分场\n**场1**\n画面：猫在霓虹下行走。"}}
+    return _fake_route(cap, payload)
+
+
+def test_produce_uses_knowledge_vision_persona(tmp_path):
+    """验证 content_director 真正复用项目已有能力：知识库检索 + 角色库人设 + 参考图视觉。"""
+    d = ContentDirector(route_fn=_fake_route_full, work_root=str(tmp_path))
+    res = d.produce("一只赛博朋克猫的短片", reference_image="__nonexistent__.png")
+
+    # 1) memory.knowledge 被调用并并入素材（知识库不闲置）
+    assert any(m.startswith("[知识库]") for m in res.materials), "知识库检索未并入素材"
+
+    # 2) agency_roles 角色库被挑中作人设（270 角色不再纯摆设）
+    assert res.analysis.get("persona"), "未从角色库挑选人设"
+    assert "参考人设" in res.analysis["persona"]
+
+    # 3) 参考图路径非空时经 vision.understand 真看图（此例文件不存在→诚实降级不崩）
+    assert res.analysis.get("reference_desc") is None  # 文件不存在→降级 None，不伪造
+
+
+def test_persona_selected_from_role_library(tmp_path):
+    """目标含内容意图词时，从 270 角色库挑出对应人设（纯文件匹配，不依赖路由）。"""
+    d = ContentDirector(route_fn=_fake_route, work_root=str(tmp_path))
+    # 不含内容词也无参考图，仍走兜底『内容』类角色
+    res = d.produce("一支品牌宣传短片")
+    assert res.analysis.get("persona"), "品牌意图未触发角色库人设挑选"
+    assert "参考人设" in res.analysis["persona"]
+
+
 # ─── 5) 经 FabricHub.route 真路由（后台，约2.5min）──────────
 def test_via_fabric_hub_route():
     try:

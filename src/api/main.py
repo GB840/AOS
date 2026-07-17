@@ -2231,8 +2231,11 @@ async def content_produce(request: Request):
         if not goal:
             raise HTTPException(status_code=400, detail="缺少 goal")
         auto_publish = bool(body.get("auto_publish", False))
+        reference_image = (body.get("reference_image") or None)
         # 重活丢线程池，避免阻塞事件循环
-        result = await asyncio.to_thread(director.produce, goal, auto_publish=auto_publish)
+        result = await asyncio.to_thread(
+            director.produce, goal, auto_publish=auto_publish,
+            reference_image=reference_image)
         return {
             "status": "ok",
             "task_id": result.task_id,

@@ -1,9 +1,12 @@
 """内容生产流水线导演（ContentDirector）—— AOS 自主内容生产闭环。
 
 用户只给一句话目标（goal），导演自主跑完整条链路：
-  1. 找内容  → 经 hub 路由 web.search 检索素材（沙箱无网则降级空素材，不谎报）
-  2. 分析    → 经 hub 路由 inference.llm 真思考抽主题/受众/调性（无 LLM 时诚实降级规则版）
-  3. 写剧本  → 经 hub 路由 inference.llm 真编剧生成 script.md（无 LLM 时降级模板）
+  1. 找内容  → 经 hub 路由 web.search 检索素材；并用项目已有的 memory.knowledge（RAG
+              知识库）补全——检索/知识库任一不可用都诚实降级，不谎报。
+  2. 分析    → 经 hub 路由 inference.llm 真思考抽主题/受众/调性；有参考图时经
+              vision.understand 真看图，把视觉描述并入分析（无 LLM/无图则诚实降级）。
+  3. 写剧本  → 经 hub 路由 inference.llm 真编剧；并按目标从 270 个 agency_roles 角色库
+              挑最相关人设定调性（让角色库不再闲置）。
   4. 导演    → 拆镜头，为每个镜头构造 ComfyIntent，**自己改节点图**
               （动态插入 LoRA/ControlNet 并重连，复用 ComfyUIDirector）
   5. 调工具  → 经 hub 路由 media.image/media.video 出图出视频、code.generate 出配套脚本
@@ -13,14 +16,16 @@
 
 设计原则（对齐 AGENTS.md / 九大理念）：
 - 复用而非重写：route_fn 直接复用 FabricHub 单一可信路由（与 OrchestrationChiplet 同构）；
-  ComfyUI 动态编排复用 ComfyUIDirector；审核/发布复用 handoff + IMA。
-- 诚实降级：检索/出图无网络或 ComfyUI 不可达时如实返回降级产物，不伪造成功。
+  ComfyUI 动态编排复用 ComfyUIDirector；审核/发布复用 handoff + IMA；知识/视觉/人设
+  复用项目已有的 memory.knowledge / vision.understand / agency_roles——**不另造轮子**。
+- 诚实降级：检索/出图/知识库/视觉/LLM 任一不可用，如实返回降级产物，不伪造成功。
 - 不自动越过审核：生产完停在审核包，发布必须显式 approve（理念6 可验证即真理）。
 """
 from __future__ import annotations
 
 import os
 import re
+import ast
 import json
 import uuid
 import logging
@@ -75,6 +80,19 @@ _STYLE_RULES = [
     ("电影感", "cinematic", ["cinematic.safetensors"], []),
     ("风景", "landscape", [], ["depth"]),
     ("产品", "product", [], ["canny"]),
+]
+
+# 270 个 agency_roles 角色库路径（项目已有，但此前未被任何编排复用 → 纯摆设）。
+# 这里按目标关键词挑最相关人设，让角色库真正参与内容定调。
+_ROLE_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "skills", "agency_roles"))
+
+# 内容意图关键词 → 角色文件名片段（命中即从角色库取人设）。
+_CONTENT_ROLE_HINTS = [
+    ("b站", "b站"), ("bilibili", "b站"), ("抖音", "内容"), ("短视频", "内容"),
+    ("小红书", "小红书"), ("公众号", "公众号"), ("linkedin", "linkedin"),
+    ("品牌", "品牌"), ("营销", "营销"), ("电商", "电商"), ("seo", "seo"),
+    ("视频", "视频"), ("社媒", "社媒"), ("直播", "直播"),
 ]
 
 
@@ -137,33 +155,47 @@ class ContentDirector(BaseAgentAdapter):
                                 engine_id=self.engine_id)
 
     # ── 主入口 ─────────────────────────────────────────────
-    def produce(self, goal: str, *, auto_publish: bool = False) -> ProductionResult:
-        """自主跑完整条内容生产链路，默认停在审核（不自动发布）。"""
+    def produce(self, goal: str, *, auto_publish: bool = False,
+                reference_image: Optional[str] = None) -> ProductionResult:
+        """自主跑完整条内容生产链路，默认停在审核（不自动发布）。
+
+        reference_image: 可选参考图路径，经 vision.understand 真看图并入创作。
+        """
         task_id = uuid.uuid4().hex[:8]
         res = ProductionResult(task_id=task_id, goal=goal)
 
-        # 1) 找内容
+        # 1) 找内容：web.search + 项目已有的 memory.knowledge（RAG 知识库补全）
         materials = self._gather(goal)
+        materials += self._gather_knowledge(goal)
         res.materials = materials
         res.stages.append("gather")
 
+        # 1b) 人设：从 270 个 agency_roles 角色库挑最相关者定调（让角色库不再闲置）
+        persona = self._select_persona(goal)
+        # 1c) 参考图理解：有图则经 vision.understand 真看图
+        reference_desc = self._describe_reference(reference_image) if reference_image else None
+        if reference_desc:
+            res.analysis["reference_desc"] = reference_desc
+
         # 2) 分析
-        analysis = self._analyze(goal, materials)
-        res.analysis = analysis
+        analysis = self._analyze(goal, materials, reference_desc=reference_desc)
+        res.analysis.update(analysis)
+        if persona:
+            res.analysis["persona"] = persona
         res.stages.append("analyze")
 
         # 3) 写剧本
         script_path = os.path.join(self._dir("drafts"), task_id, "script.md")
         os.makedirs(os.path.dirname(script_path), exist_ok=True)
         with open(script_path, "w", encoding="utf-8") as f:
-            f.write(self._write_script(goal, analysis, materials))
+            f.write(self._write_script(goal, analysis, materials, persona=persona))
         res.script_path = script_path
         res.stages.append("write_script")
 
         # 4) 导演：拆镜头 + 每个镜头自己构造意图、自己改节点图
         shots_dir = os.path.join(self._dir("drafts"), task_id, "shots")
         os.makedirs(shots_dir, exist_ok=True)
-        shots = self._direct(goal, analysis)
+        shots = self._direct(goal, analysis, reference_desc=reference_desc)
         for i, shot in enumerate(shots):
             intent: ComfyIntent = shot["intent"]
             # 导演自己把节点图拼出来（动态编排），落盘供审计（验证「自己改节点图」）
@@ -218,6 +250,71 @@ class ContentDirector(BaseAgentAdapter):
             logger.warning("检索素材失败（降级空素材，不谎报）: %s", e)
             return []
 
+    def _gather_knowledge(self, goal: str) -> List[str]:
+        """用项目已有的 memory.knowledge（RAG 知识库）补全检索——复用而非重写检索能力。"""
+        if self._route_fn is None:
+            return []
+        try:
+            out = self._route_fn("memory.knowledge",
+                                 {"action": "search", "query": goal, "opts": {}})
+            data = self._unwrap(out)
+            res = data.get("result") or data.get("data") or data.get("text")
+            if isinstance(res, str) and res.strip():
+                return [f"[知识库] {res.strip()[:300]}"]
+            if isinstance(res, list):
+                return [f"[知识库] {str(x)[:300]}" for x in res[:3]]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("知识库检索失败（跳过，不谎报）: %s", e)
+        return []
+
+    @staticmethod
+    def _role_docstring(path: str) -> str:
+        """安全读取角色 .py 的模块 docstring 人设（只解析 AST，不执行代码）。"""
+        try:
+            tree = ast.parse(open(path, encoding="utf-8").read())
+            doc = ast.get_docstring(tree)
+            if doc:
+                return doc.strip()
+        except Exception:
+            pass
+        return ""
+
+    def _select_persona(self, goal: str) -> str:
+        """从 270 个 agency_roles 角色库按目标关键词挑最相关人设（不再闲置角色库）。"""
+        if not os.path.isdir(_ROLE_DIR):
+            return ""
+        low = goal.lower()
+        for kw, frag in _CONTENT_ROLE_HINTS:
+            if kw in low and os.path.isfile(os.path.join(_ROLE_DIR, f"{frag}.py")):
+                doc = self._role_docstring(os.path.join(_ROLE_DIR, f"{frag}.py"))
+                if doc:
+                    return f"[参考人设·{frag}] {doc}"
+        # 兜底：取第一个含「内容」的角色作通用人设
+        try:
+            for fn in sorted(os.listdir(_ROLE_DIR)):
+                if fn.endswith(".py") and "内容" in fn and not fn.startswith("_"):
+                    doc = self._role_docstring(os.path.join(_ROLE_DIR, fn))
+                    if doc:
+                        return f"[参考人设·{fn[:-3]}] {doc}"
+        except Exception:
+            pass
+        return ""
+
+    def _describe_reference(self, image_path: str) -> Optional[str]:
+        """有参考图时，经 vision.understand 真看图，把视觉描述喂给导演/剧本。"""
+        if self._route_fn is None or not image_path or not os.path.isfile(image_path):
+            return None
+        try:
+            out = self._route_fn("vision.understand", {
+                "action": "describe", "image_path": image_path,
+                "prompt": "请描述这张参考图的画面构成、主体、风格、色调，用于内容创作参考。",
+            })
+            data = self._unwrap(out)
+            return (data.get("text") or "").strip() or None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("参考图理解失败（跳过）: %s", e)
+            return None
+
     # ── LLM 思考（复用 hub 单一可信路由 inference.llm，不自造 LLM）──────────
     def _llm_think(self, system: str, user: str) -> Optional[str]:
         """经 hub 路由 inference.llm 真正思考；无 route_fn / 失败则返 None（诚实降级）。"""
@@ -267,12 +364,14 @@ class ContentDirector(BaseAgentAdapter):
                 return None
         return None
 
-    def _analyze(self, goal: str, materials: List[str]) -> Dict[str, Any]:
+    def _analyze(self, goal: str, materials: List[str],
+                 reference_desc: Optional[str] = None) -> Dict[str, Any]:
         """分析目标与素材，抽主题/受众/调性。优先走 inference.llm 真思考，失败回退规则。"""
         mats = "\n".join(f"- {m}" for m in materials) or "（无外部素材）"
+        ref_block = f"\n参考图视觉描述：\n{reference_desc}\n" if reference_desc else ""
         prompt = (
             f"你是内容策略分析师。请分析以下创作目标并输出结构化结论。\n"
-            f"目标：{goal}\n参考素材：\n{mats}\n\n"
+            f"目标：{goal}\n参考素材：\n{mats}{ref_block}\n\n"
             f"只输出 JSON，字段：theme(主题) / audience(受众) / tone(调性:cinematic|"
             f"natural|playful|serious) / key_message(核心信息) / visual_style(视觉风格建议)。"
         )
@@ -302,17 +401,20 @@ class ContentDirector(BaseAgentAdapter):
             "material_count": len(materials),
         }
 
-    def _write_script(self, goal: str, analysis: Dict[str, Any], materials: List[str]) -> str:
+    def _write_script(self, goal: str, analysis: Dict[str, Any], materials: List[str],
+                      persona: str = "") -> str:
         """写剧本：分场/分镜/视觉描述。优先走 inference.llm 真编剧，失败回退模板。"""
         analysis_json = json.dumps(analysis, ensure_ascii=False)
         mats = "\n".join(f"- {m}" for m in materials) or "- （无外部素材，纯原创）"
+        persona_block = f"\n人设参考（用于定调，不照搬）:\n{persona}\n" if persona else ""
         prompt = (
             f"你是专业短视频/广告剧本编剧。基于以下分析与素材，写一页分场剧本。\n"
-            f"创作目标：{goal}\n分析结果：{analysis_json}\n参考素材：\n{mats}\n\n"
+            f"创作目标：{goal}\n分析结果：{analysis_json}\n参考素材：\n{mats}{persona_block}\n\n"
             f"输出 Markdown：含『分析』『参考素材』『分场（每场：画面描述+旁白/台词）』。"
         )
-        llm_out = self._llm_think(
-            "你是专业内容编剧，输出结构清晰的中文 Markdown 剧本。", prompt)
+        persona_sys = (f"你是专业内容编剧，输出结构清晰的中文 Markdown 剧本。"
+                       f"{' 请参考人设定调：' + persona[:200] if persona else ''}")
+        llm_out = self._llm_think(persona_sys, prompt)
         if llm_out and len(llm_out.strip()) > 20:
             return f"# 内容剧本：{goal}\n\n{llm_out.strip()}\n"
         # 降级模板（无 LLM / 返回过短）
@@ -333,7 +435,8 @@ class ContentDirector(BaseAgentAdapter):
             f"- 台词/旁白：（待录制）\n"
         )
 
-    def _direct(self, goal: str, analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _direct(self, goal: str, analysis: Dict[str, Any],
+                 reference_desc: Optional[str] = None) -> List[Dict[str, Any]]:
         """导演：拆镜头，并为每个镜头自己构造意图（含自主决定的 LoRA/ControlNet）。"""
         p = goal.lower()
         style = ""
@@ -346,13 +449,14 @@ class ContentDirector(BaseAgentAdapter):
                 controlnets = list(cn)
                 break
         motion = any(k in p for k in ["动", "视频", "motion", "短片", "动画"])
-        has_image = False  # 自产内容，无输入图 → 文生图/文生视频
+        has_image = bool(reference_desc)  # 有参考图 → 图生图/图生视频，否则文生图/文生视频
+        ref_suffix = f"，参考图视觉：{reference_desc[:80]}" if reference_desc else ""
 
         shots: List[Dict[str, Any]] = []
         # 场1：主视觉（导演自主加风格 LoRA / 人像 ControlNet）
         shots.append({
             "intent": ComfyIntent(
-                prompt=f"{goal}，{style} 风格，高清细节" if style else goal,
+                prompt=(f"{goal}，{style} 风格，高清细节" if style else goal) + ref_suffix,
                 has_image=has_image,
                 motion=motion,
                 style=style,
@@ -365,7 +469,7 @@ class ContentDirector(BaseAgentAdapter):
         # 场2：细节特写（复用同一意图族，强化质感）
         shots.append({
             "intent": ComfyIntent(
-                prompt=f"{goal} 的细节特写，质感强化",
+                prompt=f"{goal} 的细节特写，质感强化" + ref_suffix,
                 has_image=has_image,
                 motion=motion,
                 style=style,
