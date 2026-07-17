@@ -168,10 +168,10 @@ ENGINE_TIER: dict[str, str] = {
     "litellm": TIER_MEDIUM,      # 云端模型网关
     "hermes": TIER_MEDIUM,
     "deerflow": TIER_MEDIUM,
-    "browseruse": TIER_MEDIUM,
+    "browser-use": TIER_MEDIUM,     # 云端浏览器自动化（依赖 browser-use + LLM）
     "langfuse": TIER_MEDIUM,
     # 低：轻量兜底（免费 / 最小依赖）
-    "search": TIER_LOW,          # 含免费搜索源
+    "web-search": TIER_LOW,      # 含免费搜索源（兜底，质量一般）
     "web-fetch": TIER_LOW,
     # minicpm_o 由适配器实例按配置返回自身档位（覆盖此默认）
     "minicpm_o": TIER_MEDIUM,
