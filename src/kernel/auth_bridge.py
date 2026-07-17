@@ -191,7 +191,7 @@ def generate_self_contained_token(identity_id: str, identity_type: str = "agent"
         "iat": __import__("time").time(),
     }
     payload_str = json.dumps(payload, separators=(",", ":"))
-    sig = hmac.new(secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac.new(secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()
     full = json.dumps({"payload": payload, "sig": sig})
     return base64.urlsafe_b64encode(full.encode()).decode().rstrip("=")
 
@@ -215,7 +215,7 @@ def _default_token_verify(token: str) -> Optional[Dict[str, Any]]:
         payload = decoded.get("payload", {})
         sig = decoded.get("sig", "")
         payload_str = json.dumps(payload, separators=(",", ":"))
-        expected = hmac.new(secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()[:16]
+        expected = hmac.new(secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, sig):
             return None
         return payload

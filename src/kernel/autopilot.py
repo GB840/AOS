@@ -283,10 +283,16 @@ def _try_direct_install(pkg: str) -> Any:
             req = urllib.request.Request(spec["url"], headers={"User-Agent": "AOS-autopilot"})
             with urllib.request.urlopen(req, timeout=300) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
-            # 2) 解压
+            # 2) 校验zip完整性
+            with zipfile.ZipFile(zip_path) as zf:
+                bad_file = zf.testzip()
+                if bad_file:
+                    _os.remove(zip_path)
+                    return InvokeResult(ok=False, error=f"autopilot: zip文件损坏，坏文件: {bad_file}")
+            # 3) 解压
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(base)
-            # 3) 找 exe 所在目录
+            # 4) 找 exe 所在目录
             for root, _, files in _os.walk(base):
                 if spec["exe"] in files:
                     bin_dir = root
@@ -297,8 +303,10 @@ def _try_direct_install(pkg: str) -> Any:
         # 4) 加 PATH（持久用户级，优先 .NET 写法避免 setx 1024 截断）
         cur = _os.environ.get("PATH", "")
         if bin_dir not in cur.split(";"):
+            print(f"[autopilot] 即将修改用户PATH，添加: {bin_dir}")
             _add_to_user_path(bin_dir)
             _os.environ["PATH"] = f"{cur};{bin_dir}"
+            print(f"[autopilot] 已添加到PATH: {bin_dir}")
 
         # 5) 验证（硬门槛：ffmpeg.exe -version 必须成功才报 ✅）
         exe = _os.path.join(bin_dir, spec["exe"])
@@ -1232,7 +1240,7 @@ class _RunState:
     收拢成一个对象，使其能被 sqlite 持久化并在 resume_run 时完整还原。
     """
 
-    def __init__(self, task: str, planner: str, plan_text: str, steps, max_reflect: int = None):
+    def __init__(self, task: str, planner: str, plan_text: str, steps, max_reflect: int = None, per_run_id: str = ""):
         self.task = task
         self.planner = planner
         self.plan_text = plan_text
@@ -1243,6 +1251,7 @@ class _RunState:
         self.cycle = -1
         self.start = time.time()
         self.run_id = _new_run_id(task)
+        self.per_run_id = per_run_id
         self.max_reflect = max_reflect or MAX_REFLECT
 
     def to_dict(self) -> dict:
@@ -1258,11 +1267,12 @@ class _RunState:
             "cycle": self.cycle,
             "start": self.start,
             "max_reflect": self.max_reflect,
+            "per_run_id": self.per_run_id,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "_RunState":
-        s = cls(d["task"], d["planner"], d["plan_text"], d["steps"], max_reflect=d.get("max_reflect"))
+        s = cls(d["task"], d["planner"], d["plan_text"], d["steps"], max_reflect=d.get("max_reflect"), per_run_id=d.get("per_run_id", ""))
         s.prior_success = d.get("prior_success", [])
         s.reflection_log = d.get("reflection_log", [])
         s.last = d.get("last", {})
@@ -1341,7 +1351,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
             "duration_s": round(time.time() - start, 1),
         }
 
-    s = _RunState(task, used_planner, plan_text, steps, max_reflect=_max_reflect_for(task))
+    s = _RunState(task, used_planner, plan_text, steps, max_reflect=_max_reflect_for(task), per_run_id=run_id)
     if run_id:
         s.run_id = run_id
     create_run(s.run_id, task, used_planner)

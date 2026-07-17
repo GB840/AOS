@@ -147,6 +147,32 @@ app.add_middleware(RateLimitMiddleware, max_requests=config.MAX_REQUESTS_PER_MIN
 setup_exception_handlers(app)
 logger.info("统一异常处理器已注册")
 
+# 产品飞轮 API（Studio / Hub / Pulse / Evolve）
+try:
+    from api.product_flywheel_api import mount_product_flywheel
+    mount_product_flywheel(app)
+except Exception as e:  # noqa: BLE001
+    logger.warning("产品飞轮 API 挂载失败: %s", e)
+
+# AutoSkill 全自动技能 API
+try:
+    from api.autoskill_api import router as autoskill_router
+    app.include_router(autoskill_router)
+    logger.info("AutoSkill API 已挂载: /api/autoskill")
+except Exception as e:  # noqa: BLE001
+    logger.warning("AutoSkill API 挂载失败: %s", e)
+
+# 产品飞轮前端页面（/studio/）
+try:
+    from fastapi.staticfiles import StaticFiles
+    import os
+    studio_web_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "web", "studio")
+    if os.path.exists(studio_web_dir):
+        app.mount("/studio", StaticFiles(directory=studio_web_dir, html=True), name="studio")
+        logger.info("产品飞轮前端已挂载: /studio/")
+except Exception as e:  # noqa: BLE001
+    logger.warning("产品飞轮前端挂载失败: %s", e)
+
 # ---- Unified Brain (singleton: Hermes + DeerFlow + Memory + Skills + SubAgents) ----
 # 延迟代理：UnifiedBrain() 构造极重（~2min，加载 mem0/ChromaDB/Hermes/AG2 等），
 # 用代理把构造推迟到首次真实访问，避免 import/启动期阻塞事件循环导致 /health 超时误杀。

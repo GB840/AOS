@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from typing import Dict
 
@@ -50,6 +51,7 @@ def _load_oss_adapter(spec: str):
         return None
 
 
+@functools.lru_cache(maxsize=1)
 def build_fabric_hub(isolate_heavy: bool = True) -> "FabricHub":
     """构造并配置 fabric 能力枢纽。
 

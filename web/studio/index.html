@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AOS Hub — 智能体商店</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .card-hover { transition: all 0.2s ease; }
+  .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin: 2px; }
+  .rating-star { color: #fbbf24; }
+  .skeleton { background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .nav-link.active { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- 导航栏 -->
+<nav class="bg-white shadow-sm sticky top-0 z-50">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="flex justify-between items-center h-16">
+      <div class="flex items-center space-x-8">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold">A</div>
+          <span class="text-xl font-bold text-gray-900">AOS Hub</span>
+        </div>
+        <div class="hidden md:flex space-x-6">
+          <a href="#/hub" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="hub">商店</a>
+          <a href="#/studio" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="studio">工作室</a>
+          <a href="#/pulse" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="pulse">数据</a>
+        </div>
+      </div>
+      <div class="flex items-center space-x-4">
+        <span class="text-sm text-gray-500">7.9万+ 技能</span>
+        <button class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium">
+          创建智能体
+        </button>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- 主内容区 -->
+<main id="app" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <!-- 动态内容 -->
+</main>
+
+<script>
+const API_BASE = '/api';
+
+// ── 路由 ──
+function getRoute() {
+  const hash = window.location.hash.slice(2) || 'hub';
+  return hash.split('/')[0];
+}
+
+function setActiveNav(route) {
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.toggle('active', link.dataset.route === route);
+  });
+}
+
+function render() {
+  const route = getRoute();
+  setActiveNav(route);
+  const app = document.getElementById('app');
+
+  switch(route) {
+    case 'hub': renderHub(app); break;
+    case 'studio': renderStudio(app); break;
+    case 'pulse': renderPulse(app); break;
+    case 'agent': renderAgentDetail(app); break;
+    default: renderHub(app);
+  }
+}
+
+window.addEventListener('hashchange', render);
+window.addEventListener('DOMContentLoaded', render);
+
+// ── Hub 商店页 ──
+async function renderHub(container) {
+  container.innerHTML = `
+    <div class="mb-8">
+      <h1 class="text-3xl font-bold text-gray-900 mb-2">智能体商店</h1>
+      <p class="text-gray-600">发现并使用 7.9 万+ AI 智能体，一键启动你的工作流</p>
+    </div>
+
+    <div class="flex flex-col md:flex-row gap-4 mb-6">
+      <div class="flex-1">
+        <input type="text" id="searchInput" placeholder="搜索智能体..."
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+      </div>
+      <select id="sortSelect" class="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+        <option value="popular">最热门</option>
+        <option value="rating">评分最高</option>
+        <option value="newest">最新上架</option>
+      </select>
+    </div>
+
+    <div class="flex flex-col lg:flex-row gap-8">
+      <aside class="lg:w-64 flex-shrink-0">
+        <h3 class="font-semibold text-gray-900 mb-4">分类</h3>
+        <div id="categories" class="space-y-2">
+          <div class="skeleton h-6 rounded w-3/4"></div>
+          <div class="skeleton h-6 rounded w-2/3"></div>
+          <div class="skeleton h-6 rounded w-4/5"></div>
+        </div>
+      </aside>
+      <div class="flex-1">
+        <div id="agentGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          ${Array(6).fill(0).map(() => `
+            <div class="bg-white rounded-xl p-5 shadow-sm">
+              <div class="skeleton h-6 w-3/4 rounded mb-3"></div>
+              <div class="skeleton h-4 w-full rounded mb-2"></div>
+              <div class="skeleton h-4 w-5/6 rounded mb-4"></div>
+              <div class="flex gap-2">
+                <div class="skeleton h-5 w-16 rounded-full"></div>
+                <div class="skeleton h-5 w-20 rounded-full"></div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+
+  loadCategories();
+  loadAgents();
+
+  document.getElementById('searchInput').addEventListener('input', debounce(loadAgents, 300));
+  document.getElementById('sortSelect').addEventListener('change', loadAgents);
+}
+
+let currentCategory = '';
+
+async function loadCategories() {
+  try {
+    const res = await fetch(`${API_BASE}/hub/categories`);
+    const data = await res.json();
+    const container = document.getElementById('categories');
+    if (data.categories && data.categories.length) {
+      container.innerHTML = `
+        <button class="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 ${!currentCategory ? 'bg-blue-50 text-blue-700' : ''}" onclick="selectCategory('')">
+          全部分类
+        </button>
+        ${data.categories.map(c => `
+          <button class="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 flex justify-between items-center ${currentCategory === c.category ? 'bg-blue-50 text-blue-700' : ''}" onclick="selectCategory('${c.category}')">
+            <span>${c.category || '未分类'}</span>
+            <span class="text-xs text-gray-500">${c.count}</span>
+          </button>
+        `).join('')}
+      `;
+    }
+  } catch(e) {
+    console.error('加载分类失败', e);
+  }
+}
+
+function selectCategory(cat) {
+  currentCategory = cat;
+  loadCategories();
+  loadAgents();
+}
+
+async function loadAgents() {
+  const search = document.getElementById('searchInput').value;
+  const sort = document.getElementById('sortSelect').value;
+
+  try {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (sort) params.set('sort', sort);
+    if (currentCategory) params.set('category', currentCategory);
+
+    const res = await fetch(`${API_BASE}/hub/agents?${params}`);
+    const data = await res.json();
+    const grid = document.getElementById('agentGrid');
+
+    if (data.items && data.items.length) {
+      grid.innerHTML = data.items.map(agent => `
+        <div class="bg-white rounded-xl p-5 shadow-sm card-hover cursor-pointer" onclick="showAgentDetail('${agent.id}')">
+          <div class="flex items-start justify-between mb-3">
+            <div class="w-10 h-10 bg-gradient-to-br from-blue-400 to-purple-500 rounded-lg flex items-center justify-center text-white font-bold">
+              ${(agent.name || '?').charAt(0).toUpperCase()}
+            </div>
+            <div class="flex items-center text-sm">
+              <span class="rating-star">★</span>
+              <span class="ml-1 text-gray-600">${agent.rating || 0}</span>
+            </div>
+          </div>
+          <h3 class="font-semibold text-gray-900 mb-2">${agent.name}</h3>
+          <p class="text-sm text-gray-600 mb-4 line-clamp-2 h-10">${agent.description || '暂无描述'}</p>
+          <div class="flex flex-wrap gap-1 mb-3">
+            ${(agent.tags || []).slice(0, 3).map(t =>
+              `<span class="tag bg-gray-100 text-gray-600">${t}</span>`
+            ).join('')}
+          </div>
+          <div class="flex justify-between items-center text-xs text-gray-500">
+            <span>${agent.use_count || 0} 次使用</span>
+            <span>${agent.step_count || 0} 步</span>
+          </div>
+        </div>
+      `).join('');
+    } else {
+      grid.innerHTML = `
+        <div class="col-span-full text-center py-12 text-gray-500">
+          <p class="text-lg mb-2">暂无匹配的智能体</p>
+          <p class="text-sm">试试其他关键词</p>
+        </div>
+      `;
+    }
+  } catch(e) {
+    console.error('加载智能体失败', e);
+  }
+}
+
+function showAgentDetail(id) {
+  window.location.hash = `#/agent/${id}`;
+}
+
+// ── 智能体详情页 ──
+async function renderAgentDetail(container) {
+  const id = window.location.hash.split('/')[2] || '';
+  container.innerHTML = `
+    <button onclick="history.back()" class="text-blue-600 hover:text-blue-800 mb-6 flex items-center">
+      ← 返回商店
+    </button>
+    <div class="skeleton h-12 w-1/3 rounded mb-4"></div>
+    <div class="skeleton h-6 w-2/3 rounded mb-8"></div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div class="lg:col-span-2 space-y-6">
+        <div class="bg-white rounded-xl p-6 shadow-sm">
+          <div class="skeleton h-6 w-1/4 rounded mb-4"></div>
+          <div class="skeleton h-4 w-full rounded mb-2"></div>
+          <div class="skeleton h-4 w-full rounded mb-2"></div>
+          <div class="skeleton h-4 w-3/4 rounded"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  try {
+    const res = await fetch(`${API_BASE}/hub/agents/${id}`);
+    const data = await res.json();
+    if (data.agent) {
+      const agent = data.agent;
+      container.innerHTML = `
+        <button onclick="history.back()" class="text-blue-600 hover:text-blue-800 mb-6 flex items-center">
+          ← 返回商店
+        </button>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div class="lg:col-span-2 space-y-6">
+            <div class="bg-white rounded-xl p-6 shadow-sm">
+              <div class="flex items-center gap-4 mb-4">
+                <div class="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center text-white text-2xl font-bold">
+                  ${(agent.name || '?').charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <h1 class="text-2xl font-bold text-gray-900">${agent.name}</h1>
+                  <p class="text-gray-500">作者：${agent.author || '未知'}</p>
+                </div>
+              </div>
+              <p class="text-gray-700 mb-6">${agent.description || '暂无描述'}</p>
+
+              <div class="flex flex-wrap gap-2 mb-6">
+                ${(agent.tags || []).map(t =>
+                  `<span class="tag bg-blue-50 text-blue-700">${t}</span>`
+                ).join('')}
+              </div>
+
+              <h3 class="font-semibold text-gray-900 mb-4">工作流步骤（${agent.step_count || 0} 步）</h3>
+              <div class="space-y-3">
+                ${(agent.steps || []).map((step, i) => `
+                  <div class="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
+                    <div class="w-8 h-8 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-sm font-medium">
+                      ${i + 1}
+                    </div>
+                    <div class="flex-1">
+                      <div class="font-medium text-gray-900">${step.name || step.capability}</div>
+                      <div class="text-xs text-gray-500">${step.capability || ''}</div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-6 shadow-sm">
+              <h3 class="font-semibold text-gray-900 mb-4">用户评价</h3>
+              <div id="reviewsList" class="space-y-4">
+                <p class="text-gray-500 text-sm">加载中...</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-6">
+            <div class="bg-white rounded-xl p-6 shadow-sm sticky top-24">
+              <div class="grid grid-cols-2 gap-4 mb-6 text-center">
+                <div>
+                  <div class="text-2xl font-bold text-gray-900">${agent.rating || 0}</div>
+                  <div class="text-xs text-gray-500">评分</div>
+                </div>
+                <div>
+                  <div class="text-2xl font-bold text-gray-900">${agent.use_count || 0}</div>
+                  <div class="text-xs text-gray-500">使用次数</div>
+                </div>
+                <div>
+                  <div class="text-2xl font-bold text-gray-900">${agent.success_rate || 0}%</div>
+                  <div class="text-xs text-gray-500">成功率</div>
+                </div>
+                <div>
+                  <div class="text-2xl font-bold text-gray-900">${agent.avg_duration || 0}s</div>
+                  <div class="text-xs text-gray-500">平均耗时</div>
+                </div>
+              </div>
+
+              <button class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-medium mb-3" onclick="useAgent('${agent.id}')">
+                立即使用
+              </button>
+              <button class="w-full border border-gray-300 text-gray-700 py-3 rounded-lg hover:bg-gray-50 font-medium" onclick="saveAgent('${agent.id}')">
+                收藏
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      loadReviews(id);
+    }
+  } catch(e) {
+    console.error('加载智能体详情失败', e);
+  }
+}
+
+async function loadReviews(id) {
+  try {
+    const res = await fetch(`${API_BASE}/hub/agents/${id}/reviews`);
+    const data = await res.json();
+    const container = document.getElementById('reviewsList');
+    if (data.reviews && data.reviews.length) {
+      container.innerHTML = data.reviews.map(r => `
+        <div class="border-b border-gray-100 pb-4 last:border-b-0">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium text-gray-900">${r.user || '匿名用户'}</span>
+            <span class="text-xs text-gray-500">${r.created_at || ''}</span>
+          </div>
+          <div class="mb-2">
+            ${Array(r.rating || 0).fill('<span class="rating-star">★</span>').join('')}
+            ${Array(5 - (r.rating || 0)).fill('<span class="text-gray-300">★</span>').join('')}
+          </div>
+          <p class="text-sm text-gray-600">${r.comment || '无评价内容'}</p>
+        </div>
+      `).join('');
+    } else {
+      container.innerHTML = '<p class="text-gray-500 text-sm">暂无评价</p>';
+    }
+  } catch(e) {
+    console.error('加载评价失败', e);
+  }
+}
+
+async function useAgent(id) {
+  const input = prompt('输入运行参数（JSON 格式，可选）：', '{}');
+  if (input === null) return;
+
+  try {
+    const inputData = JSON.parse(input || '{}');
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '运行中...';
+
+    const res = await fetch(`${API_BASE}/hub/agents/${id}/use`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: inputData })
+    });
+    const data = await res.json();
+
+    btn.disabled = false;
+    btn.textContent = '立即使用';
+
+    if (data.result) {
+      alert(`运行完成！\n状态：${data.result.run_status}\n耗时：${data.result.duration}s`);
+    }
+  } catch(e) {
+    alert('运行失败：' + e.message);
+    event.target.disabled = false;
+    event.target.textContent = '立即使用';
+  }
+}
+
+function saveAgent(id) {
+  alert('已收藏！');
+}
+
+// ── Studio 工作流编辑器 ──
+async function renderStudio(container) {
+  container.innerHTML = `
+    <div class="mb-8 flex justify-between items-center">
+      <div>
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">工作流工作室</h1>
+        <p class="text-gray-600">可视化编排你的智能体工作流</p>
+      </div>
+      <button class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium" onclick="createNewWorkflow()">
+        + 新建工作流
+      </button>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div class="lg:col-span-1">
+        <h3 class="font-semibold text-gray-900 mb-4">我的工作流</h3>
+        <div id="workflowList" class="space-y-2">
+          <div class="skeleton h-12 rounded mb-2"></div>
+          <div class="skeleton h-12 rounded mb-2"></div>
+          <div class="skeleton h-12 rounded"></div>
+        </div>
+
+        <h3 class="font-semibold text-gray-900 mb-4 mt-8">模板市场</h3>
+        <div id="templateList" class="space-y-2">
+          <div class="skeleton h-12 rounded mb-2"></div>
+          <div class="skeleton h-12 rounded"></div>
+        </div>
+      </div>
+
+      <div class="lg:col-span-3">
+        <div id="workflowEditor" class="bg-white rounded-xl shadow-sm p-6 min-h-[600px]">
+          <div class="text-center py-20 text-gray-500">
+            <p class="text-lg mb-2">选择或创建一个工作流</p>
+            <p class="text-sm">从左侧选择，或点击上方"新建工作流"开始</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  loadWorkflowList();
+  loadTemplateList();
+}
+
+let currentWorkflowId = null;
+
+async function loadWorkflowList() {
+  try {
+    const res = await fetch(`${API_BASE}/studio/workflows`);
+    const data = await res.json();
+    const container = document.getElementById('workflowList');
+    if (data.items && data.items.length) {
+      container.innerHTML = data.items.map(wf => `
+        <div class="p-3 bg-white rounded-lg shadow-sm cursor-pointer hover:bg-blue-50 ${currentWorkflowId === wf.id ? 'bg-blue-50 border border-blue-200' : ''}" onclick="selectWorkflow('${wf.id}')">
+          <div class="font-medium text-gray-900 text-sm truncate">${wf.name}</div>
+          <div class="text-xs text-gray-500">${wf.step_count || 0} 步 · ${wf.updated_at ? wf.updated_at.slice(0, 10) : ''}</div>
+        </div>
+      `).join('');
+    } else {
+      container.innerHTML = '<p class="text-sm text-gray-500">暂无工作流</p>';
+    }
+  } catch(e) {
+    console.error('加载工作流列表失败', e);
+  }
+}
+
+async function loadTemplateList() {
+  try {
+    const res = await fetch(`${API_BASE}/studio/templates`);
+    const data = await res.json();
+    const container = document.getElementById('templateList');
+    if (data.items && data.items.length) {
+      container.innerHTML = data.items.slice(0, 5).map(t => `
+        <div class="p-3 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg cursor-pointer hover:from-purple-100 hover:to-pink-100" onclick="useTemplate('${t.id}')">
+          <div class="font-medium text-gray-900 text-sm truncate">📦 ${t.name}</div>
+          <div class="text-xs text-gray-500">${t.step_count || 0} 步</div>
+        </div>
+      `).join('');
+    }
+  } catch(e) {
+    console.error('加载模板列表失败', e);
+  }
+}
+
+async function createNewWorkflow() {
+  const name = prompt('输入工作流名称：', '我的工作流');
+  if (!name) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/studio/workflows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description: '' })
+    });
+    const data = await res.json();
+    if (data.workflow) {
+      loadWorkflowList();
+      selectWorkflow(data.workflow.id);
+    }
+  } catch(e) {
+    alert('创建失败：' + e.message);
+  }
+}
+
+async function useTemplate(id) {
+  const name = prompt('输入新工作流名称：', '');
+  if (name === null) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/studio/templates/${id}/use`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_name: name })
+    });
+    const data = await res.json();
+    if (data.workflow) {
+      loadWorkflowList();
+      selectWorkflow(data.workflow.id);
+    }
+  } catch(e) {
+    alert('使用模板失败：' + e.message);
+  }
+}
+
+async function selectWorkflow(id) {
+  currentWorkflowId = id;
+  loadWorkflowList();
+
+  try {
+    const res = await fetch(`${API_BASE}/studio/workflows/${id}`);
+    const data = await res.json();
+    if (data.workflow) {
+      renderWorkflowEditor(data.workflow);
+    }
+  } catch(e) {
+    console.error('加载工作流失败', e);
+  }
+}
+
+function renderWorkflowEditor(wf) {
+  const editor = document.getElementById('workflowEditor');
+  const steps = wf.steps || [];
+
+  editor.innerHTML = `
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <input type="text" id="wfName" value="${wf.name}" class="text-xl font-bold text-gray-900 border-b-2 border-transparent hover:border-gray-300 focus:border-blue-500 outline-none bg-transparent" onchange="saveWorkflowName()">
+        <p class="text-sm text-gray-500 mt-1">版本 ${wf.version} · ${steps.length} 步</p>
+      </div>
+      <div class="flex gap-2">
+        <button class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm" onclick="addStep()">
+          + 添加步骤
+        </button>
+        <button class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium" onclick="runWorkflow()">
+          ▶ 运行
+        </button>
+      </div>
+    </div>
+
+    <div id="stepsContainer" class="space-y-3 mb-6">
+      ${steps.length === 0 ? `
+        <div class="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl text-gray-400">
+          <p>还没有步骤</p>
+          <p class="text-sm mt-1">点击上方"添加步骤"开始构建</p>
+        </div>
+      ` : steps.map((step, i) => `
+        <div class="flex items-center gap-4 p-4 bg-gray-50 rounded-lg group">
+          <div class="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
+            ${i + 1}
+          </div>
+          <div class="flex-1">
+            <div class="font-medium text-gray-900">${step.name || step.capability}</div>
+            <div class="text-xs text-gray-500">能力: ${step.capability} · 输入: ${step.in_from || 'previous'}</div>
+          </div>
+          <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button class="p-2 hover:bg-gray-200 rounded text-sm" title="上移" onclick="moveStep(${i}, -1)">↑</button>
+            <button class="p-2 hover:bg-gray-200 rounded text-sm" title="下移" onclick="moveStep(${i}, 1)">↓</button>
+            <button class="p-2 hover:bg-red-100 text-red-600 rounded text-sm" title="删除" onclick="removeStep('${step.id}')">✕</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+
+    <div id="runResult" class="hidden bg-gray-50 rounded-xl p-4">
+      <h4 class="font-semibold mb-3">运行结果</h4>
+      <div id="runResultContent" class="text-sm text-gray-600"></div>
+    </div>
+  `;
+}
+
+async function saveWorkflowName() {
+  if (!currentWorkflowId) return;
+  const name = document.getElementById('wfName').value;
+  try {
+    await fetch(`${API_BASE}/studio/workflows/${currentWorkflowId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    loadWorkflowList();
+  } catch(e) {
+    console.error('保存名称失败', e);
+  }
+}
+
+async function addStep() {
+  if (!currentWorkflowId) {
+    alert('请先创建或选择一个工作流');
+    return;
+  }
+
+  const capability = prompt('输入能力名（如 web.search、inference.llm 等）：', 'web.search');
+  if (!capability) return;
+
+  const name = prompt('输入步骤名称（可选）：', '') || capability;
+
+  try {
+    const res = await fetch(`${API_BASE}/studio/workflows/${currentWorkflowId}/steps`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ capability, name, in_from: 'previous' })
+    });
+    if (res.ok) {
+      selectWorkflow(currentWorkflowId);
+    }
+  } catch(e) {
+    alert('添加步骤失败：' + e.message);
+  }
+}
+
+async function removeStep(stepId) {
+  if (!confirm('确定删除此步骤？')) return;
+  try {
+    await fetch(`${API_BASE}/studio/workflows/${currentWorkflowId}/steps/${stepId}`, {
+      method: 'DELETE'
+    });
+    selectWorkflow(currentWorkflowId);
+  } catch(e) {
+    alert('删除失败：' + e.message);
+  }
+}
+
+async function moveStep(index, direction) {
+  // 简化实现：重新加载
+  selectWorkflow(currentWorkflowId);
+}
+
+async function runWorkflow() {
+  if (!currentWorkflowId) return;
+
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '运行中...';
+
+  try {
+    const res = await fetch(`${API_BASE}/studio/workflows/${currentWorkflowId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: {} })
+    });
+    const data = await res.json();
+
+    btn.disabled = false;
+    btn.textContent = '▶ 运行';
+
+    const resultDiv = document.getElementById('runResult');
+    const resultContent = document.getElementById('runResultContent');
+    resultDiv.classList.remove('hidden');
+
+    if (data.run_status === 'success') {
+      resultContent.innerHTML = `
+        <div class="text-green-600 font-medium mb-2">✅ 运行成功</div>
+        <div>耗时：${data.duration}s</div>
+        <div>成功步骤：${(data.output && data.output.success_steps) || 0} / ${(data.output && data.output.total_steps) || 0}</div>
+      `;
+    } else {
+      resultContent.innerHTML = `
+        <div class="text-red-600 font-medium mb-2">❌ 运行失败</div>
+        <div>${data.error || '未知错误'}</div>
+      `;
+    }
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '▶ 运行';
+    alert('运行失败：' + e.message);
+  }
+}
+
+// ── Pulse 数据看板 ──
+async function renderPulse(container) {
+  container.innerHTML = `
+    <div class="mb-8">
+      <h1 class="text-3xl font-bold text-gray-900 mb-2">数据看板</h1>
+      <p class="text-gray-600">实时监控智能体使用情况和优化建议</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div class="bg-white rounded-xl p-6 shadow-sm">
+        <div class="text-gray-500 text-sm mb-2">总使用次数</div>
+        <div id="totalRuns" class="text-3xl font-bold text-gray-900">...</div>
+      </div>
+      <div class="bg-white rounded-xl p-6 shadow-sm">
+        <div class="text-gray-500 text-sm mb-2">平均成功率</div>
+        <div id="avgSuccess" class="text-3xl font-bold text-green-600">...%</div>
+      </div>
+      <div class="bg-white rounded-xl p-6 shadow-sm">
+        <div class="text-gray-500 text-sm mb-2">智能体数量</div>
+        <div id="agentCount" class="text-3xl font-bold text-blue-600">...</div>
+      </div>
+      <div class="bg-white rounded-xl p-6 shadow-sm">
+        <div class="text-gray-500 text-sm mb-2">进行中的 A/B 测试</div>
+        <div id="abTestCount" class="text-3xl font-bold text-purple-600">...</div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-xl p-6 shadow-sm">
+        <h3 class="font-semibold text-gray-900 mb-4">热门智能体 TOP 10</h3>
+        <div id="topAgents" class="space-y-3">
+          ${Array(5).fill(0).map(() => `
+            <div class="flex items-center gap-4">
+              <div class="skeleton w-6 h-6 rounded-full"></div>
+              <div class="flex-1">
+                <div class="skeleton h-4 w-1/3 rounded mb-1"></div>
+                <div class="skeleton h-3 w-1/2 rounded"></div>
+              </div>
+              <div class="skeleton h-6 w-16 rounded"></div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl p-6 shadow-sm">
+        <h3 class="font-semibold text-gray-900 mb-4">优化建议</h3>
+        <div id="suggestions" class="space-y-3">
+          <p class="text-gray-500 text-sm">加载中...</p>
+        </div>
+      </div>
+    </div>
+  `;
+
+  loadPulseData();
+}
+
+async function loadPulseData() {
+  try {
+    const res = await fetch(`${API_BASE}/pulse/metrics?limit=50`);
+    const data = await res.json();
+
+    if (data.metrics) {
+      const metrics = data.metrics;
+      const totalRuns = metrics.reduce((sum, m) => sum + (m.total_runs || 0), 0);
+      const avgSuccess = metrics.length ? metrics.reduce((sum, m) => sum + (m.success_rate || 0), 0) / metrics.length : 0;
+
+      document.getElementById('totalRuns').textContent = totalRuns;
+      document.getElementById('avgSuccess').textContent = avgSuccess.toFixed(1) + '%';
+      document.getElementById('agentCount').textContent = metrics.length;
+
+      // Top 10
+      const top = metrics.slice(0, 10);
+      const container = document.getElementById('topAgents');
+      if (top.length) {
+        container.innerHTML = top.map((m, i) => `
+          <div class="flex items-center gap-4">
+            <div class="w-6 h-6 rounded-full ${i < 3 ? 'bg-yellow-400 text-yellow-900' : 'bg-gray-200 text-gray-600'} flex items-center justify-center text-xs font-bold">
+              ${i + 1}
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="font-medium text-gray-900 text-sm truncate">${m.workflow_id}</div>
+              <div class="text-xs text-gray-500">${m.total_runs || 0} 次运行</div>
+            </div>
+            <div class="text-sm font-medium ${(m.success_rate || 0) >= 80 ? 'text-green-600' : (m.success_rate || 0) >= 50 ? 'text-yellow-600' : 'text-red-600'}">
+              ${m.success_rate || 0}%
+            </div>
+          </div>
+        `).join('');
+      } else {
+        container.innerHTML = '<p class="text-gray-500 text-sm">暂无数据</p>';
+      }
+    }
+  } catch(e) {
+    console.error('加载指标失败', e);
+  }
+
+  // 加载优化建议
+  try {
+    const res = await fetch(`${API_BASE}/hub/agents?limit=1`);
+    const data = await res.json();
+    if (data.items && data.items.length) {
+      const agentId = data.items[0].id;
+      const sugRes = await fetch(`${API_BASE}/evolve/suggestions/${agentId}`);
+      const sugData = await sugRes.json();
+
+      const container = document.getElementById('suggestions');
+      if (sugData.suggestions && sugData.suggestions.length) {
+        container.innerHTML = sugData.suggestions.map(s => `
+          <div class="p-3 rounded-lg ${s.priority === 'high' ? 'bg-red-50 border-l-4 border-red-400' : s.priority === 'medium' ? 'bg-yellow-50 border-l-4 border-yellow-400' : 'bg-blue-50 border-l-4 border-blue-400'}">
+            <div class="font-medium text-gray-900 text-sm">${s.suggestion}</div>
+            <div class="text-xs text-gray-600 mt-1">${s.detail || ''}</div>
+          </div>
+        `).join('');
+      } else {
+        container.innerHTML = '<p class="text-gray-500 text-sm">暂无优化建议</p>';
+      }
+    }
+  } catch(e) {
+    console.error('加载建议失败', e);
+  }
+
+  // 加载 A/B 测试数
+  try {
+    const res = await fetch(`${API_BASE}/evolve/ab-tests?status=running`);
+    const data = await res.json();
+    document.getElementById('abTestCount').textContent = (data.tests || []).length;
+  } catch(e) {
+    document.getElementById('abTestCount').textContent = 0;
+  }
+}
+
+// ── 工具函数 ──
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => { clearTimeout(timeout); func(...args); };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+</script>
+
+</body>
+</html>

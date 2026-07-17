@@ -171,14 +171,30 @@ def create_access_token(subject: str, expires_min: Optional[int] = None) -> str:
     return jwt.encode(payload, private_pem, algorithm=config.AUTH_JWT_ALGORITHM)
 
 
-def decode_access_token(token: str) -> Optional[str]:
-    """校验 JWT，返回 subject；无效/过期返回 None。"""
+def decode_access_token(token: str) -> tuple[Optional[str], str]:
+    """校验 JWT，返回 (subject, status)。status: "valid" | "expired" | "invalid" | "error"."""
     try:
         jwt = _import_jwt()
         _private_pem, public_pem = _get_jwt_keys()
         payload = jwt.decode(token, public_pem, algorithms=[config.AUTH_JWT_ALGORITHM])
-        return payload.get("sub")
-    except Exception:
+        return payload.get("sub"), "valid"
+    except jwt.ExpiredSignatureError:
+        # Token过期
+        logger.warning("JWT token expired")
+        return None, "expired"
+    except jwt.InvalidTokenError:
+        # Token无效（格式错误、签名错误等）
+        logger.warning("JWT token invalid")
+        return None, "invalid"
+    except Exception as e:
+        logger.error(f"JWT decode error: {e}")
+        return None, "error"
+    except jwt.InvalidTokenError:
+        # Token无效（格式错误、签名错误等）
+        logger.warning("JWT token invalid")
+        return None
+    except Exception as e:
+        logger.error(f"JWT decode error: {e}")
         return None
 
 
@@ -287,12 +303,19 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
 
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
-            sub = decode_access_token(auth[7:].strip())
+            sub, token_status = decode_access_token(auth[7:].strip())
             if sub:
                 return await call_next(request)
+            # 区分Token过期和无效（token_status 为字符串，避免遮蔽 starlette.status 模块）
+            if token_status == "expired":
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"error": "Unauthorized", "detail": "token expired"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"error": "Unauthorized", "detail": "Invalid or expired token"},
+                content={"error": "Unauthorized", "detail": "invalid"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
@@ -338,8 +361,11 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         # 团队级 Bearer(JWT)
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
-            if decode_access_token(auth[7:].strip()):
+            sub, status = decode_access_token(auth[7:].strip())
+            if sub:
                 return True
+            # Token过期或无效，继续尝试其他认证方式
+            pass
 
         # 网关间共享令牌（如配置了 UPSTREAM_TOKEN），恒定时间比较
         tok = request.headers.get("X-Upstream-Token")

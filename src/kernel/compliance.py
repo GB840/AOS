@@ -37,7 +37,7 @@ _LOG = logging.getLogger(__name__)
 class AuditEntry:
     """一条不可篡改的审计记录。
 
-    每条记录带链式哈希（prev_hash），确保记录序列不可事后插入/删除。
+    每条记录带链式哈希（prev_hash + chain_hash），确保记录序列不可事后插入/删除。
     """
     actor: str                      # 操作主体（agent_id / user_id）
     action: str                     # 操作（chat / skill_call / agent_register / ...）
@@ -48,6 +48,7 @@ class AuditEntry:
     prev_hash: str = ""             # 链式哈希（防篡改）
     event_id: str = ""              # 自动生成
     entry_hash: str = ""            # 本条哈希
+    chain_hash: str = ""            # 链累积哈希（从创世到本条）
 
     def __post_init__(self):
         if not self.event_id:
@@ -57,6 +58,16 @@ class AuditEntry:
         if not self.entry_hash:
             content = f"{self.event_id}|{self.actor}|{self.action}|{self.resource}|{self.result}|{self.timestamp}|{self.prev_hash}"
             self.entry_hash = hashlib.sha256(content.encode()).hexdigest()
+        if not self.chain_hash:
+            self.chain_hash = hashlib.sha256(f"{self.prev_hash}|{self.entry_hash}".encode()).hexdigest()
+
+    def __str__(self):
+        detail = self.detail.copy()
+        if "ip_address" in detail:
+            detail["ip_address"] = "x.x.x.x"
+        if "wechat_id" in detail:
+            detail["wechat_id"] = "wxid_xxxxx"
+        return f"AuditEntry(actor={self.actor!r}, action={self.action!r}, resource={self.resource!r}, result={self.result!r}, detail={detail!r}, timestamp={self.timestamp}, event_id={self.event_id!r}, entry_hash={self.entry_hash!r}, chain_hash={self.chain_hash!r})"
 
 
 class AuditTrail:
@@ -190,12 +201,12 @@ class ContentGuard:
     SENSITIVE_PATTERNS: Dict[str, Pattern] = {
         "phone_cn":    re.compile(r"1[3-9]\d{9}"),
         "id_card":     re.compile(r"\d{17}[\dXx]"),
-        "bank_card":   re.compile(r"\d{16,19}"),
+        "bank_card":   re.compile(r"^\d{16,19}$"),
         "email":       re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
         "ip_address":   re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
         "api_key_bearer": re.compile(r"(?:sk-|TK-|AK-)[a-zA-Z0-9]{20,}"),
         "wechat_id":   re.compile(r"wxid_[a-zA-Z0-9]+"),
-        "qq_number":    re.compile(r"[1-9]\d{4,10}"),
+        "qq_number":    re.compile(r"(?<![0-9])[1-9]\d{4,10}(?![0-9])"),
     }
 
     # 有害内容关键词模式

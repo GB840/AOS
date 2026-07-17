@@ -54,7 +54,7 @@ class AnomalyDetector:
         self._on_alert = on_alert
 
         self._lock = threading.RLock()
-        self._events: List[Event] = []
+        self._events_by_type: Dict[str, List[Event]] = defaultdict(list)
         self._consecutive_fail_count = 0
         self._latency_baseline: Dict[str, float] = {}
         self._alerts: List[Dict[str, Any]] = []
@@ -88,10 +88,15 @@ class AnomalyDetector:
 
     def _record(self, event: Event) -> None:
         with self._lock:
-            self._events.append(event)
+            self._events_by_type[event.event_type].append(event)
             cutoff = time.time() - self._window
-            self._events = [e for e in self._events
-                            if _event_timestamp(e) > cutoff]
+            for event_type in list(self._events_by_type.keys()):
+                self._events_by_type[event_type] = [
+                    e for e in self._events_by_type[event_type]
+                    if _event_timestamp(e) > cutoff
+                ]
+                if not self._events_by_type[event_type]:
+                    del self._events_by_type[event_type]
 
     def _check_consecutive(self, event: Event) -> None:
         with self._lock:
@@ -106,11 +111,13 @@ class AnomalyDetector:
     def error_rate(self) -> float:
         """窗口内错误率。"""
         with self._lock:
-            if not self._events:
-                return 0.0
-            failures = sum(1 for e in self._events
-                           if e.event_type.endswith((".failed", ".denied")))
-            return failures / len(self._events)
+            total = 0
+            failures = 0
+            for events in self._events_by_type.values():
+                total += len(events)
+                failures += sum(1 for e in events
+                               if e.event_type.endswith((".failed", ".denied")))
+            return failures / total if total > 0 else 0.0
 
     def is_healthy(self) -> bool:
         """综合健康判定。"""
@@ -154,12 +161,14 @@ class CircuitBreaker:
     OPEN = Open()
 
     def __init__(self, name: str, failure_threshold: int = 3,
-                 cooldown_seconds: float = 30.0):
+                 cooldown_seconds: float = 30.0, success_threshold: int = 3):
         self.name = name
         self._threshold = failure_threshold
         self._cooldown = cooldown_seconds
+        self._success_threshold = success_threshold
         self._failures = 0
         self._last_failure_time = 0.0
+        self._success_count = 0
         self._state = "closed"    # closed → open → half_open → closed
         self._lock = threading.RLock()
 
@@ -173,17 +182,26 @@ class CircuitBreaker:
             if self._state == "open":
                 if time.time() - self._last_failure_time > self._cooldown:
                     self._state = "half_open"
+                    self._success_count = 0
                 else:
                     raise CircuitBreakerOpenError(self.name)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         with self._lock:
             if exc_type is None:
-                self._state = "closed"
-                self._failures = 0
+                if self._state == "half_open":
+                    self._success_count += 1
+                    if self._success_count >= self._success_threshold:
+                        self._state = "closed"
+                        self._failures = 0
+                        self._success_count = 0
+                else:
+                    self._state = "closed"
+                    self._failures = 0
             else:
                 self._failures += 1
                 self._last_failure_time = time.time()
+                self._success_count = 0
                 if self._failures >= self._threshold:
                     self._state = "open"
         return False  # 不抑制异常，让调用方处理
@@ -192,6 +210,7 @@ class CircuitBreaker:
         with self._lock:
             self._state = "closed"
             self._failures = 0
+            self._success_count = 0
 
 
 class CircuitBreakerOpenError(Exception):
@@ -220,6 +239,7 @@ class SelfHealer:
     """
 
     def __init__(self, event_bus: EventBus,
+                 detector: AnomalyDetector | None = None,
                  restart_agent: Callable[[str], bool] | None = None,
                  fallback_model: Callable[[str], str] | None = None,
                  isolate_skill: Callable[[str], bool] | None = None):
@@ -233,9 +253,31 @@ class SelfHealer:
         self._agent_fail_count: Dict[str, int] = defaultdict(int)
         self._skill_fail_count: Dict[str, int] = defaultdict(int)
 
+        # 订阅AnomalyDetector的异常事件
+        if detector:
+            detector._on_alert = self._on_anomaly
+
         self._bus.subscribe("agent.*", self._on_agent_event)
         self._bus.subscribe("model.failed", self._on_model_failed)
         self._bus.subscribe("skill.failed", self._on_skill_failed)
+
+    def _on_anomaly(self, rule: str, message: str, detail: Dict[str, Any]) -> None:
+        """处理AnomalyDetector检测到的异常。"""
+        if rule == "consecutive_failures":
+            last_event = detail.get("last_event", "")
+            source = detail.get("source", "")
+            if last_event.startswith("agent"):
+                agent_id = source
+                self._heal("restart", agent_id, f"anomaly: {message}",
+                           lambda: self._restart(agent_id))
+            elif last_event.startswith("skill"):
+                skill_id = source
+                self._heal("isolate", skill_id, f"anomaly: {message}",
+                           lambda: self._isolate(skill_id))
+            elif last_event.startswith("model"):
+                model = source
+                self._heal("rollback", model, f"anomaly: {message}",
+                           lambda: self._fallback(model) if self._fallback(model) else None)
 
     def _on_agent_event(self, event: Event) -> None:
         agent_id = event.payload.get("agent_id", "")

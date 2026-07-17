@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
+from itertools import islice
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 
 # ─── 事件命名空间 ─────────────────────────────────────────────────
@@ -115,7 +117,7 @@ class EventBus:
     def __init__(self, max_history: int = 500) -> None:
         self._lock = Lock()
         self._subscribers: Dict[str, List[EventHandler]] = {}
-        self._history: List[Event] = []
+        self._history: Deque[Event] = deque(maxlen=max_history)
         self._max_history = max_history
 
     # ── 订阅 ──
@@ -166,9 +168,10 @@ class EventBus:
         """获取最近 N 条历史事件，可过滤类型。"""
         with self._lock:
             if event_type is None:
-                return list(self._history[-n:])
-            return [e for e in self._history
-                    if _event_matches(e.event_type, event_type)][-n:]
+                return list(islice(self._history, max(0, len(self._history) - n), None))
+            filtered = [e for e in self._history
+                    if _event_matches(e.event_type, event_type)]
+            return filtered[-n:]
 
     def clear_history(self) -> None:
         with self._lock:
@@ -186,8 +189,7 @@ class EventBus:
     def _record(self, event: Event) -> None:
         with self._lock:
             self._history.append(event)
-            if len(self._history) > self._max_history:
-                self._history = self._history[-self._max_history:]
+
 
 
 # ─── 通配符匹配 ───────────────────────────────────────────────────

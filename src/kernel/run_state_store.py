@@ -23,23 +23,26 @@ _DB_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "_traces", "aos_runs.db"
 )
 _LOCK = threading.Lock()
+_CONN: sqlite3.Connection | None = None
 
 
 def _conn() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-    c = sqlite3.connect(_DB_PATH)
-    c.execute(
-        """CREATE TABLE IF NOT EXISTS runs (
-               run_id  TEXT PRIMARY KEY,
-               task    TEXT,
-               planner TEXT,
-               status  TEXT,
-               created REAL,
-               updated REAL,
-               state   TEXT
-           )"""
-    )
-    return c
+    global _CONN
+    if _CONN is None:
+        os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
+        _CONN = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        _CONN.execute(
+            """CREATE TABLE IF NOT EXISTS runs (
+                   run_id  TEXT PRIMARY KEY,
+                   task    TEXT,
+                   planner TEXT,
+                   status  TEXT,
+                   created REAL,
+                   updated REAL,
+                   state   TEXT
+               )"""
+        )
+    return _CONN
 
 
 def create_run(run_id: str, task: str, planner: str) -> None:

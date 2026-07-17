@@ -19,8 +19,10 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -197,6 +199,7 @@ class CognitionTrack:
         self._nodes: Dict[str, CognitionNode] = {}
         self._by_anchor: Dict[str, List[str]] = {}  # anchor_id → [node_ids]
         self._by_entity: Dict[str, List[str]] = {}  # entity → [node_ids]
+        self._inverted_index: Dict[str, List[str]] = defaultdict(list)  # keyword → [node_ids]
 
     def add_consensus(self, anchor_id: str, content: str,
                       source: str = "", evidence_refs: List[str] | None = None) -> str:
@@ -262,7 +265,7 @@ class CognitionTrack:
             return [self._nodes[n] for n in nids if n in self._nodes]
 
     def _add_node(self, anchor_id, ntype, content, confidence,
-                  source, refs) -> str:
+                   source, refs) -> str:
         nid = hashlib.sha256(f"{anchor_id}{ntype}{content[:50]}{time.time()}".encode()).hexdigest()[:12]
         node = CognitionNode(
             node_id=nid, anchor_id=anchor_id, node_type=ntype,
@@ -272,6 +275,11 @@ class CognitionTrack:
         with self._lock:
             self._nodes[nid] = node
             self._by_anchor.setdefault(anchor_id, []).append(nid)
+            # 更新倒排索引
+            keywords = re.findall(r'\w+', content.lower())
+            for kw in keywords:
+                if len(kw) >= 2:  # 只索引长度>=2的关键词
+                    self._inverted_index[kw].append(nid)
         return nid
 
     @property
@@ -359,9 +367,16 @@ class PyramidRetriever:
     def _semantic_scan(self, query: str, top_k: int) -> List[Dict[str, Any]]:
         """顶层语义粗召回：在 cognition nodes 中做文本匹配。"""
         q = query.lower()
+        keywords = re.findall(r'\w+', q)
+        candidate_node_ids = set()
+        for kw in keywords:
+            if len(kw) >= 2:
+                candidate_node_ids.update(self._cognition._inverted_index.get(kw, []))
+        
         scored = []
-        for nid, node in self._cognition._nodes.items():
-            if q in node.content.lower():
+        for nid in candidate_node_ids:
+            node = self._cognition._nodes.get(nid)
+            if node and q in node.content.lower():
                 anchor = self._evidence.get(node.anchor_id)
                 scored.append({
                     "node_id": nid,

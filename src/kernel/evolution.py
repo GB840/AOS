@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import random
+import threading
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -207,56 +208,98 @@ class FitnessTracker:
         self._stats: Dict[str, Dict[str, Any]] = {}
         self._latency_baseline = 2.0
         self._token_baseline = 500
+        self._lock = threading.Lock()
 
     def record_success(self, agent_id: str, latency: float = 0.0,
                        tokens: int = 0, generation: int = 0) -> None:
-        s = self._ensure(agent_id, generation)
-        s["successes"] += 1
-        s["total_latency"] += latency
-        s["total_tokens"] += tokens
-        s["tasks"] += 1
+        with self._lock:
+            s = self._ensure(agent_id, generation)
+            s["successes"] += 1
+            s["total_latency"] += latency
+            s["total_tokens"] += tokens
+            s["tasks"] += 1
 
     def record_failure(self, agent_id: str, generation: int = 0) -> None:
-        s = self._ensure(agent_id, generation)
-        s["failures"] += 1
-        s["tasks"] += 1
+        with self._lock:
+            s = self._ensure(agent_id, generation)
+            s["failures"] += 1
+            s["tasks"] += 1
 
     def score(self, agent_id: str) -> Optional[FitnessScore]:
-        s = self._stats.get(agent_id)
-        if s is None or s["tasks"] == 0:
-            return None
-        total = s["tasks"]
-        success_rate = s["successes"] / total
-        avg_latency = s["total_latency"] / total if total > 0 else self._latency_baseline
-        latency_score = max(0.0, 1.0 - avg_latency / self._latency_baseline)
-        avg_tokens = s["total_tokens"] / total if total > 0 else self._token_baseline
-        cost_eff = max(0.0, 1.0 - avg_tokens / self._token_baseline)
-        return FitnessScore(
-            agent_id=agent_id, generation=s.get("generation", 0),
-            success_rate=success_rate, latency_score=latency_score,
-            cost_efficiency=cost_eff, tasks_completed=total,
-        )
+        with self._lock:
+            s = self._stats.get(agent_id)
+            if s is None or s["tasks"] == 0:
+                return None
+            total = s["tasks"]
+            success_rate = s["successes"] / total
+            avg_latency = s["total_latency"] / total if total > 0 else self._latency_baseline
+            latency_score = max(0.0, 1.0 - avg_latency / self._latency_baseline)
+            avg_tokens = s["total_tokens"] / total if total > 0 else self._token_baseline
+            cost_eff = max(0.0, 1.0 - avg_tokens / self._token_baseline)
+            return FitnessScore(
+                agent_id=agent_id, generation=s.get("generation", 0),
+                success_rate=success_rate, latency_score=latency_score,
+                cost_efficiency=cost_eff, tasks_completed=total,
+            )
 
     def top_agents(self, n: int = 5) -> List[FitnessScore]:
-        scores = []
-        for aid in self._stats:
-            s = self.score(aid)
-            if s:
-                scores.append(s)
-        scores.sort(key=lambda x: x.overall, reverse=True)
-        return scores[:n]
+        with self._lock:
+            scores = []
+            for aid, s in self._stats.items():
+                if s["tasks"] == 0:
+                    continue
+                total = s["tasks"]
+                success_rate = s["successes"] / total
+                avg_latency = s["total_latency"] / total if total > 0 else self._latency_baseline
+                latency_score = max(0.0, 1.0 - avg_latency / self._latency_baseline)
+                avg_tokens = s["total_tokens"] / total if total > 0 else self._token_baseline
+                cost_eff = max(0.0, 1.0 - avg_tokens / self._token_baseline)
+                scores.append(FitnessScore(
+                    agent_id=aid, generation=s.get("generation", 0),
+                    success_rate=success_rate, latency_score=latency_score,
+                    cost_efficiency=cost_eff, tasks_completed=total,
+                ))
+            scores.sort(key=lambda x: x.overall, reverse=True)
+            return scores[:n]
 
     def bottom_agents(self, n: int = 5) -> List[FitnessScore]:
-        scores = []
-        for aid in self._stats:
-            s = self.score(aid)
-            if s:
-                scores.append(s)
-        scores.sort(key=lambda x: x.overall)
-        return scores[:n]
+        with self._lock:
+            scores = []
+            for aid, s in self._stats.items():
+                if s["tasks"] == 0:
+                    continue
+                total = s["tasks"]
+                success_rate = s["successes"] / total
+                avg_latency = s["total_latency"] / total if total > 0 else self._latency_baseline
+                latency_score = max(0.0, 1.0 - avg_latency / self._latency_baseline)
+                avg_tokens = s["total_tokens"] / total if total > 0 else self._token_baseline
+                cost_eff = max(0.0, 1.0 - avg_tokens / self._token_baseline)
+                scores.append(FitnessScore(
+                    agent_id=aid, generation=s.get("generation", 0),
+                    success_rate=success_rate, latency_score=latency_score,
+                    cost_efficiency=cost_eff, tasks_completed=total,
+                ))
+            scores.sort(key=lambda x: x.overall)
+            return scores[:n]
 
     def all_scores(self) -> List[FitnessScore]:
-        return [s for aid in self._stats if (s := self.score(aid))]
+        with self._lock:
+            scores = []
+            for aid, s in self._stats.items():
+                if s["tasks"] == 0:
+                    continue
+                total = s["tasks"]
+                success_rate = s["successes"] / total
+                avg_latency = s["total_latency"] / total if total > 0 else self._latency_baseline
+                latency_score = max(0.0, 1.0 - avg_latency / self._latency_baseline)
+                avg_tokens = s["total_tokens"] / total if total > 0 else self._token_baseline
+                cost_eff = max(0.0, 1.0 - avg_tokens / self._token_baseline)
+                scores.append(FitnessScore(
+                    agent_id=aid, generation=s.get("generation", 0),
+                    success_rate=success_rate, latency_score=latency_score,
+                    cost_efficiency=cost_eff, tasks_completed=total,
+                ))
+            return scores
 
     def _ensure(self, agent_id: str, gen: int) -> Dict[str, Any]:
         if agent_id not in self._stats:

@@ -899,6 +899,30 @@ class FabricHub:
         except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
             _LOG.warning("content_director 引擎注册失败(将跳过): %s", e)
 
+        try:
+            from core.fabric.adapters.content_marketer_adapter import ContentMarketerAdapter
+            self._registry.register(ContentMarketerAdapter(route_fn=self.route))
+        except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
+            _LOG.warning("content_marketer 引擎注册失败(将跳过): %s", e)
+
+        try:
+            from core.fabric.adapters.cast_adapter import CastAdapter
+            self._registry.register(CastAdapter(route_fn=self.route))
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("cast 引擎注册失败(将跳过): %s", e)
+
+        try:
+            from core.fabric.adapters.echo_adapter import EchoAdapter
+            self._registry.register(EchoAdapter(route_fn=self.route))
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("echo 引擎注册失败(将跳过): %s", e)
+
+        try:
+            from core.fabric.adapters.refine_adapter import RefineAdapter
+            self._registry.register(RefineAdapter(route_fn=self.route))
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("refine 引擎注册失败(将跳过): %s", e)
+
     def _register_env_codebase_mcp(self) -> None:
         """环境驱动自动注册：让真实工具「装好即通电」，无需改代码。
 
