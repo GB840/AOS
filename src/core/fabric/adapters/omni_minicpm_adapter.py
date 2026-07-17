@@ -43,9 +43,9 @@ logger = logging.getLogger(__name__)
 CLOUD_BASE = os.environ.get(
     "AOS_MINICPM_CLOUD_BASE", "https://api.modelbest.cn/v1"
 )
-CLOUD_API_KEY = os.environ.get(
-    "AOS_MINICPM_API_KEY", "sk-pQ8L2zF3XmR5kY9wV4jB7hN1tC6vM0xG3aD5sH2bJ9lK4cZ8"
-)
+# 不硬编码任何默认 key：未配则 health() 如实报不可用（诚实理念），
+# 而非用一个占位 key 让 bool() 永远为 True、谎报云端可用。
+CLOUD_API_KEY = os.environ.get("AOS_MINICPM_API_KEY", "")
 LOCAL_HTTP_URL = os.environ.get(
     "AOS_MINICPM_LOCAL_HTTP", "http://localhost:8080/v1"
 )
