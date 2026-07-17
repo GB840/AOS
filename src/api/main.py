@@ -377,6 +377,23 @@ async def startup_event():
         app.state.hippo_scroll = None
         logger.warning("hippo-scroll memory engine skipped: %s", e)
 
+    # 活体进化闭环（LiveEvolutionEngine）：默认构造会 build_default_system() 接真实内核
+    # （生产：真 LLM 进化）。该构造较重（可能联网），故放后台任务，不阻塞 /health；
+    # 沙箱无内核/网络时 best-effort 跳过，绝不阻断启动，也不伪造成功。
+    asyncio.create_task(_deferred_live_init(app))
+
+
+async def _deferred_live_init(app):
+    """后台挂载活体进化引擎单例（构造较重，放后台不阻塞 /health）。"""
+    try:
+        from kernel.live import get_live_engine
+        engine = get_live_engine()
+        app.state.live_engine = engine
+        logger.info("live evolution engine mounted")
+    except Exception as e:  # noqa: BLE001
+        app.state.live_engine = None
+        logger.warning("live evolution engine skipped: %s", e)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -2179,7 +2196,37 @@ async def hippo_scroll_status():
             "total_nodes": engine.cognition.total_nodes,
             "conflicts_found": len(conflicts),
             "sample_query": "猫",
-            "sample_retrieve": sample_retrieve,
+        "sample_retrieve": sample_retrieve,
+    }
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/live/status")
+async def live_evolution_status():
+    """活体进化闭环状态（只读）：真实调用 engine.status()，非假数据。
+
+    返回：当前代、种群规模、完成任务数、淘汰数、孵化数、Top Agent 与适应度。
+    引擎未挂载（startup 失败/沙箱无内核）时返回 503，不伪造成功。
+    """
+    engine = getattr(app.state, "live_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="live evolution engine not mounted")
+    try:
+        s = engine.status()
+        return {
+            "status": "ok",
+            "generation": s.generation,
+            "population": s.population,
+            "tasks_completed": s.tasks_completed,
+            "eliminations": s.eliminations,
+            "spawns": s.spawns,
+            "heal_events": s.heal_events,
+            "anomaly_alerts": s.anomaly_alerts,
+            "total_tokens": s.total_tokens,
+            "top_agent": s.top_agent,
+            "top_fitness": round(s.top_fitness, 4),
+            "uptime_seconds": s.uptime_seconds,
         }
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=_safe_detail(e))

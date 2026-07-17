@@ -29,6 +29,46 @@ from kernel.evolution import AgentDNA, Gene, FitnessTracker, Breeder
 from kernel.ecology import NaturalSelection, ResourceEconomy
 from kernel.immunity import AnomalyDetector, SelfHealer
 from kernel.events import Event
+from typing import Protocol, runtime_checkable
+
+
+# ─── LLM 执行器（可注入：生产走真内核→真LLM，离线注入 fake 真跑闭环） ──
+
+@runtime_checkable
+class LLMExecutor(Protocol):
+    """封装「一次真实 LLM 调用」。默认走真内核，可注入 fake 离线真跑验证。"""
+    def __call__(self, prompt: str, agent_id: str, engine: str) -> "Response": ...
+
+
+class _KernelLLMExecutor:
+    """默认执行器：经真实内核路由到真 LLM（生产路径）。"""
+    def __init__(self, kernel):
+        self.kernel = kernel
+
+    def __call__(self, prompt: str, agent_id: str, engine: str) -> "Response":
+        return self.kernel.send_message(Message(
+            sender="live_engine", recipient=agent_id,
+            payload={"prompt": prompt, "model": ""}))
+
+
+class _FakeLLMExecutor:
+    """离线/测试执行器：不调真 LLM，返回确定性模拟 Response。
+
+    用于真跑验证整个进化算法闭环（变异→评估→选择→育种→孵化），
+    不伪造成功——fail_rate>0 时如实返回 ok=False，淘汰逻辑仍真实触发。
+    """
+    def __init__(self, fail_rate: float = 0.0, latency: float = 0.001):
+        self.fail_rate = fail_rate
+        self.latency = latency
+        self.calls: list = []
+
+    def __call__(self, prompt: str, agent_id: str, engine: str) -> "Response":
+        self.calls.append((prompt, agent_id, engine))
+        if self.latency:
+            time.sleep(self.latency)
+        if self.fail_rate and (abs(hash(prompt)) % 1000) / 1000.0 < self.fail_rate:
+            return Response(ok=False, error="simulated transient failure")
+        return Response(ok=True, data={"content": ("answer " + prompt + " ") * 8})
 
 
 # ─── 活体任务 ─────────────────────────────────────────────────────
@@ -97,9 +137,13 @@ class LiveEvolutionEngine:
                  max_population: int = 10,
                  keep_top_agents: int = 3,
                  offspring_per_generation: int = 2,
+                 system: Optional[AOSSystem] = None,    # 可注入（离线测试用轻量内核）
+                 executor: Optional[LLMExecutor] = None, # 可注入（离线测试用 fake LLM）
                  ):
-        self.system: AOSSystem = build_default_system()
+        # 依赖注入：默认走真实内核 + 真实 LLM；离线/沙箱可注入 fake 真跑闭环。
+        self.system: AOSSystem = system or build_default_system()
         self.kernel = self.system.kernel
+        self._executor: LLMExecutor = executor or _KernelLLMExecutor(self.kernel)
 
         # 进化参数
         self._evolution_interval = evolution_interval
@@ -194,13 +238,9 @@ class LiveEvolutionEngine:
 
             t0 = time.monotonic()
 
-            # === 真正走内核路由 (real LLM call) ===
+            # === 真正走 LLM 执行器（默认真内核→真LLM；注入 fake 则离线真跑）===
             try:
-                response = self.kernel.send_message(Message(
-                    sender="live_engine",
-                    recipient=aid,
-                    payload={"prompt": prompt, "model": ""},
-                ))
+                response = self._executor(prompt, aid, engine)
                 task.result = response
                 task.latency_seconds = round(time.monotonic() - t0, 3)
 
@@ -338,4 +378,25 @@ class LiveEvolutionEngine:
         return True
 
 
-__all__ = ["LiveEvolutionEngine", "LiveStatus", "LiveTask"]
+# ─── 进程内单例（接电用） ───────────────────────────────────────────
+
+_live_engine_instance: Optional["LiveEvolutionEngine"] = None
+
+
+def get_live_engine(system=None,
+                    executor=None) -> "LiveEvolutionEngine":
+    """返回活体进化引擎单例。
+
+    - 默认构造会 build_default_system() 并接入真实内核（生产：真 LLM 进化）。
+    - 离线/沙箱可注入 system + executor 真跑闭环而不连外网。
+    - 构造失败（如沙箱无内核/网络）时**原样抛出**，由调用方 best-effort 捕获，
+      绝不伪造成功。
+    """
+    global _live_engine_instance
+    if _live_engine_instance is None:
+        _live_engine_instance = LiveEvolutionEngine(system=system, executor=executor)
+    return _live_engine_instance
+
+
+__all__ = ["LiveEvolutionEngine", "LiveStatus", "LiveTask", "get_live_engine",
+           "LLMExecutor", "_KernelLLMExecutor", "_FakeLLMExecutor"]
