@@ -6,6 +6,7 @@ DeerFlow = Scheduler (multi-agent orchestration, workflow dispatch)
 """
 
 import sys
+import os as _os
 import logging
 import json
 import uuid
@@ -20,6 +21,19 @@ from skills import JStackSkill, FrontendDesignSkill, UIUXProMaxSkill, DuckDuckGo
 from router import LLMRouter, TaskType
 
 logger = logging.getLogger(__name__)
+
+# FabricHub 统一 LLM 桥：AOS_FABRIC_LLM=1 时 LLM 对话走 FabricHub.inference.llm
+# 路由（LiteLLM 云端优先→本地兜底，级联不写死），替代自建的 LLMRouter
+_fabric_hub_singleton = None
+
+
+def _get_fabric_hub():
+    """惰性缓存 FabricHub 单例（首次调用构造较重，后续复用）。"""
+    global _fabric_hub_singleton
+    if _fabric_hub_singleton is None:
+        from kernel.plugins.fabric_hub import FabricHub
+        _fabric_hub_singleton = FabricHub()
+    return _fabric_hub_singleton
 
 _HERMES_SRC = None
 _HERMES_AVAILABLE = False
@@ -297,6 +311,7 @@ class HermesAgent:
         return False
 
     def route_chat(self, message: str, task_type: str = "general", **kwargs) -> Dict[str, Any]:
+        """LLM 对话路由——可选走 FabricHub 统一推理路（AOS_FABRIC_LLM=1）。"""
         task_types = {
             "coding": TaskType.CODING,
             "high_concurrency": TaskType.HIGH_CONCURRENCY,
@@ -306,6 +321,22 @@ class HermesAgent:
             "general": TaskType.GENERAL,
         }
         tt = task_types.get(task_type, TaskType.GENERAL)
+        # FabricHub 统一推理桥：AOS_FABRIC_LLM=1 时走 inference.llm 路由
+        # （LiteLLM 云端优先→本地兜底），失败自动回退原 LLMRouter
+        if _os.environ.get("AOS_FABRIC_LLM") == "1":
+            try:
+                hub = _get_fabric_hub()
+                res = hub.chat(message)
+                if res.get("ok"):
+                    return {
+                        "content": res["response"],
+                        "provider": "fabric/" + res.get("engine", "?"),
+                        "model": "routed",
+                        "task_type": task_type,
+                        "success": True,
+                    }
+            except Exception as e:
+                logger.warning("FabricHub LLM 路由失败，回退 LLMRouter: %s", e)
         messages = [{"role": "user", "content": message}]
         return self._router.chat(messages, task_type=tt, **kwargs)
 
