@@ -113,6 +113,11 @@ try:
 except Exception:  # noqa: BLE001 - 缺依赖则跳过，不拖垮内核
     VLMAdapter = None
 
+try:
+    from .video_maker_adapter import VideoMakerAdapter
+except Exception:  # noqa: BLE001
+    VideoMakerAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -136,6 +141,7 @@ __all__ = [
         "ScriptsAdapter",
         "MiniCPMOAdapter",
         "VLMAdapter",
+        "VideoMakerAdapter",
     )
     if globals().get(n) is not None
 ]
