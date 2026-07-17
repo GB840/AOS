@@ -54,6 +54,10 @@ class Capability(str, Enum):
 
     # Action
     CODE_EXECUTION = "action.code_exec"
+    # 多智能体代码团队（code_team 芯粒）：自然语言需求 → 多文件代码
+    # （架构/编码/质量门/隔离真实测试）。与 CODE_EXECUTION（只跑给定代码）
+    # 正交：前者「生成」代码，后者「执行」代码。
+    CODE_GENERATE = "code.generate"
     FILE_ACCESS = "action.file_access"           # read/write/list files in workspace
     ACI = "action.aci"                           # agent computer interface: hands on the machine
     TOOL_USE = "action.tool_use"
@@ -133,6 +137,9 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
         Capability.CODE_EXECUTION,
         Capability.MEMORY_SEMANTIC,
     ],
+    # code_team 多智能体代码团队：NL→多文件代码（架构/编码/质量门/真实测试）。
+    # 本地 heuristic 生成（零依赖/零成本），真实 LLM 由 AOS_CODETEAM_LLM=1 开启。
+    "code-team": [Capability.CODE_GENERATE],
     # Agnes AI: OpenAI-compatible multimodal hub (text / image / video).
     # Not one of the four mandated OSS engines - a cloud media plane AOS can
     # route to by capability when configured with AGNES_API_KEY.
@@ -153,6 +160,7 @@ ENGINE_TIER: dict[str, str] = {
     "ag2": TIER_HIGH,            # 本地规划推理
     "mem0": TIER_HIGH,           # 本地零成本记忆（AOS_MEM0_LOCAL=1）
     "code-exec": TIER_HIGH,      # 本地 subprocess 隔离
+    "code-team": TIER_HIGH,      # 本地 heuristic 生成 + 隔离执行（零成本/最强隐私）
     "file-io": TIER_HIGH,        # 本地文件读写
     # 中：云端优质（质量高，有成本/依赖网络）
     "openclaw": TIER_MEDIUM,     # 云端 LLM 网关

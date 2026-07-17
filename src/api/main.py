@@ -2387,8 +2387,25 @@ async def code_team_run(req: CodeTeamRequest):
     借鉴华为云码道(CodeArts) Agent Team 的协作生成形态，落到 AOS 已有的
     compliance 质量门 + 隔离执行之上。默认 heuristic 生成（无 GPU/key 可跑），
     真实 LLM 由调用方在 CodeTeamOrchestrator 注入。
+
+    通电：若 FabricHub 已热身（/_fabric_hub_cache 非空，通常由 /api/fabric/health
+    或 /api/orchestrator/run 拉起），则经统一能力路由 hub.route("code.generate",...)
+    派发——享受引擎透明化（响应带 engine_id="code-team"）且真实流量喂路由预测器。
+    否则回落直连编排器（零依赖、行为不变），避免在该端点首次拉起重型 hub。
     """
     try:
+        global _fabric_hub_cache
+        hub = _fabric_hub_cache
+        if hub is not None:
+            res = await asyncio.to_thread(
+                hub.route, "code.generate",
+                {"requirement": req.requirement, "lang": req.lang})
+            from core.fabric.adapter import InvokeResult
+            if isinstance(res, InvokeResult) and res.data is not None:
+                out = dict(res.data)
+                out["engine_id"] = res.engine_id  # 诚实标注执行引擎
+                return out
+        # 兜底：直连编排器（与历史行为一致）
         llm = make_llm_generate()
         result = CodeTeamOrchestrator(llm_generate=llm).run(req.requirement, lang=req.lang)
         result["llm_used"] = llm is not None  # 诚实标注：是否走了真实 LLM
@@ -2404,8 +2421,22 @@ async def code_team_render(req: CodeTeamRequest):
     复用 code_team.to_a2ui_surface 把 run() 结果转成 A2UI v0.9 surface，
     再经 a2ui 安全渲染器输出 HTML（声明式、不执行代码、不注入 HTML）。
     默认走 heuristic 生成；设 AOS_CODETEAM_LLM=1 则走真实 LLM。
+
+    通电：hub 已热身时同样经 hub.route("code.generate",...) 派发（透明化+预测器），
+    否则回落直连编排器。
     """
     try:
+        global _fabric_hub_cache
+        hub = _fabric_hub_cache
+        if hub is not None:
+            res = await asyncio.to_thread(
+                hub.route, "code.generate",
+                {"requirement": req.requirement, "lang": req.lang})
+            from core.fabric.adapter import InvokeResult
+            if isinstance(res, InvokeResult) and res.data is not None:
+                html = render_code_team(res.data, standalone=True)
+                return Response(content=html, media_type="text/html")
+        # 兜底：直连编排器（与历史行为一致）
         llm = make_llm_generate()
         result = CodeTeamOrchestrator(llm_generate=llm).run(req.requirement, lang=req.lang)
         result["llm_used"] = llm is not None

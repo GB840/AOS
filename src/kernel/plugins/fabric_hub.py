@@ -285,6 +285,12 @@ class FabricHub:
             self.add_orchestrator()
         except Exception as e:  # noqa: BLE001 - 编排芯粒注册失败不拖垮枢纽
             _LOG.warning("默认注册编排芯粒失败: %s", e)
+        # code_team 多智能体代码团队：接成可路由引擎（code.generate 能力），
+        # 让它从「独立 API 端点孤岛」进入统一能力路由（健康/预测器/透明化）。
+        try:
+            self.register_code_team()
+        except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
+            _LOG.warning("默认注册 code_team 引擎失败: %s", e)
         # 后台预热重型依赖（autogen 80s / litellm 22s import），避免 health/
         # 初始化被卡死。预热期间 guarded_import 命中 _WARMING 直接返回 None，
         # health 如实标 dead，预热线程完成后再标 live，全程不阻塞调用方。
@@ -765,6 +771,23 @@ class FabricHub:
             self._errors[f"codebase-mcp:{bin_path}"] = repr(e)
             _LOG.warning("codebase-memory-mcp 注册失败 %s: %s", bin_path, e)
             return None
+
+    # ---- code_team 多智能体代码团队（本地芯粒）-------------------
+    def register_code_team(self) -> None:
+        """把 code_team 多智能体代码团队接成可路由引擎（code.generate 能力）。
+
+        此前 code_team 只是独立 API 端点 + 模块（孤岛）。接进来后：
+        - ``hub.route("code.generate", {requirement, lang})`` 可达；
+        - health_report 列出 code-team 为 live；
+        - 真实流量喂路由预测器；享引擎透明化（engine_id="code-team"）。
+        适配器构造轻量（仅本地 compliance，无重型依赖）；构造失败静默跳过，
+        绝不谎报 live。
+        """
+        try:
+            from kernel.plugins.code_team_adapter import CodeTeamAdapter
+            self._registry.register(CodeTeamAdapter())
+        except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
+            _LOG.warning("code_team 引擎注册失败(将跳过): %s", e)
 
     def _register_env_codebase_mcp(self) -> None:
         """环境驱动自动注册：让真实工具「装好即通电」，无需改代码。
