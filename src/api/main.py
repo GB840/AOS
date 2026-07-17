@@ -1501,6 +1501,24 @@ async def orchestrator_render(req: OrchestratorRunRequest):
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
+@app.get("/api/route/predictor")
+async def route_predictor_diagnostics():
+    """路由预测器状态快照（只读可观测端点）。
+
+    返回当前 FabricHub 注册表里的 learned 策略诊断：是否已注入 predictor /
+    是否已训练 / 落盘样本数 / 最小训练阈值 / 词汇表规模 / 对各已注册能力×引擎
+    的预测成功概率。无 predictor（默认 preference 策略）时诚实返回「未启用」。
+
+    对应 AOS 第 9 条「可验证即真理」——路由学了什么必须可查、不黑盒。
+    """
+    try:
+        from mcp.protocol import _get_hub
+        hub = _get_hub()
+        return hub._registry.predictor_diagnostics()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
 # ---- RuFlo API ----
 
 class RuFloRequest(BaseModel):

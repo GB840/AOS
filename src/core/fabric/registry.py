@@ -20,7 +20,7 @@ from .capability import (
     TIER_AUTO,
     TIER_RANK,
 )
-from .route_outcome_store import RouteOutcomeStore
+from .route_outcome_store import RouteOutcomeStore, _MIN_SAMPLES
 from .route_predictor import RoutePredictor
 
 
@@ -175,6 +175,46 @@ class FabricRegistry:
     def capability_to_str(cap) -> str:
         """公开包装：能力统一成字符串，供调用方（FabricHub）落盘时与预测端对齐。"""
         return FabricRegistry._cap_to_str(cap)
+
+    def predictor_diagnostics(self) -> Dict[str, Any]:
+        """只读的路由预测器状态快照（可观测性）。
+
+        不含任何副作用：不落盘、不训练、不改动 predictor 状态。
+        让「learned 策略到底学了什么 / 多少样本 / 是否已训练 / 对各能力×引擎
+        的预测成功概率」可查可验证（对应 AOS 第 9 条「可验证即真理」）。
+
+        诚实回落：
+        - 未注入 predictor → has_predictor=False、trained=False、词汇表全 0；
+        - 未训练 → sample_predictions=[]（不假装给出了概率）；
+        - 仅对训练集覆盖范围内的 (能力,引擎,档位) 给出学到的概率，否则诚实 0.5。
+        """
+        diag: Dict[str, Any] = {
+            "strategy": self.strategy,
+            "tier": self.tier,
+            "has_predictor": self.predictor is not None,
+            "trained": bool(self.predictor and self.predictor.trained),
+            "outcome_store_connected": self.outcome_store is not None,
+            "sample_count": self.outcome_store.count() if self.outcome_store else 0,
+            "min_train_samples": _MIN_SAMPLES if self.outcome_store else None,
+            "vocab_capabilities": len(self.predictor._vocab_cap) if self.predictor else 0,
+            "vocab_engines": len(self.predictor._vocab_eng) if self.predictor else 0,
+            "vocab_tiers": len(self.predictor._vocab_tier) if self.predictor else 0,
+            "sample_predictions": [],
+        }
+        if self.predictor is not None and self.predictor.trained:
+            preds = []
+            for eid, adapter in self._adapters.items():
+                for cap in adapter.advertise_capabilities():
+                    cap_str = self.capability_to_str(cap)
+                    p = self.predictor.predict(cap_str, eid, self.tier)
+                    preds.append({
+                        "capability": cap_str,
+                        "engine": eid,
+                        "tier": self.tier,
+                        "p_success": round(p, 4),
+                    })
+            diag["sample_predictions"] = preds
+        return diag
 
     def _tier_of(self, a: BaseAgentAdapter) -> str:
         """取引擎实际档位（高/中/低），非法值回落中档。"""
