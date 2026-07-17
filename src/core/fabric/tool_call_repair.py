@@ -389,7 +389,11 @@ def execute_with_repair(executor, tool_name: str, raw_args: Union[str, dict],
                         "error": result.report.final_error or "参数不可解析",
                         "repair": result.report.to_dict()}
             continue
-        res = executor.execute_tool(tool_name, result.fixed)
+        # 用不带修复的底层执行，避免 execute_tool→execute_with_repair→execute_tool 递归
+        if hasattr(executor, "_execute_raw"):
+            res = executor._execute_raw(tool_name, result.fixed)
+        else:
+            res = executor.execute_tool(tool_name, result.fixed)
         if res.get("success"):
             result.report.ok = True
             result.report.rounds = rnd + 1

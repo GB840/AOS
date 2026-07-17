@@ -50,31 +50,46 @@ class ToolExecutor:
         logger.info(f"工具注册成功: {name}")
         return {"success": True, "message": f"工具 {name} 已注册"}
     
-    def execute_tool(self, 
-                     tool_name: str,
-                     arguments: Dict = None) -> Dict[str, Any]:
-        """执行工具"""
+    def _execute_raw(self, tool_name: str, arguments: Any) -> Dict[str, Any]:
+        """不加修复的原始执行（execute_tool 的内层）。保留现有语义：
+        合法调用一次成功即返回；handler 抛异常则捕获为 error dict。"""
         tool = self._tool_registry.get(tool_name)
-        
         if not tool:
             return {"success": False, "error": f"工具不存在: {tool_name}"}
-        
         try:
             start_time = datetime.now()
-            
             result = tool["handler"](**(arguments or {}))
-            
             duration = (datetime.now() - start_time).total_seconds()
-            
             return {
                 "success": True,
                 "tool_name": tool_name,
                 "result": result,
                 "duration": round(duration, 2),
             }
-        
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def execute_tool(self, 
+                     tool_name: str,
+                     arguments: Any = None,
+                     *, repair: bool = True) -> Dict[str, Any]:
+        """执行工具（默认带 Tool-Call Repair 自愈，借鉴 Reasonix）。
+
+        修复层作为「前置参数规范化 + 失败自愈」始终生效（repair=True 时）：
+        先按 JSON Schema 规范化参数（类型强制/枚举裁剪/未知字段剔除/缺必填报
+        default），再执行；执行失败则升级 aggressiveness（激进 JSON 容错/推断补
+        必填）重试。合法调用零改写，且 repair 报告始终量化附回（理念6 诚实+量化）。
+        repair=False 时退化为纯原样执行（无 repair 键）。
+        """
+        tool = self._tool_registry.get(tool_name)
+        if not tool:
+            return {"success": False, "error": f"工具不存在: {tool_name}"}
+        if not repair or not isinstance(arguments, (str, dict)):
+            return self._execute_raw(tool_name, arguments)
+        schema = tool.get("parameters") or {}
+        repaired = execute_with_repair(self, tool_name, arguments, schema=schema)
+        repaired.setdefault("tool_name", tool_name)
+        return repaired
     
     def execute_with_repair(self, 
                             tool_name: str,
@@ -96,32 +111,38 @@ class ToolExecutor:
     
     async def execute_tool_async(self, 
                                   tool_name: str,
-                                  arguments: Dict = None) -> Dict[str, Any]:
-        """异步执行工具"""
+                                  arguments: Any = None,
+                                  *, repair: bool = True) -> Dict[str, Any]:
+        """异步执行工具（默认带修复自愈，同 execute_tool）"""
         tool = self._tool_registry.get(tool_name)
-        
         if not tool:
             return {"success": False, "error": f"工具不存在: {tool_name}"}
-        
         try:
             start_time = datetime.now()
-            
             if asyncio.iscoroutinefunction(tool["handler"]):
                 result = await tool["handler"](**(arguments or {}))
             else:
                 result = await asyncio.to_thread(tool["handler"], **(arguments or {}))
-            
             duration = (datetime.now() - start_time).total_seconds()
-            
             return {
                 "success": True,
                 "tool_name": tool_name,
                 "result": result,
                 "duration": round(duration, 2),
             }
-        
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            first_err = str(e)
+            if not repair or not isinstance(arguments, (str, dict)):
+                return {"success": False, "error": first_err}
+            schema = tool.get("parameters") or {}
+            repaired = execute_with_repair(self, tool_name, arguments, schema=schema)
+            if repaired.get("success"):
+                repaired.setdefault("tool_name", tool_name)
+                return repaired
+            out = {"success": False, "error": first_err}
+            if repaired.get("repair"):
+                out["repair"] = repaired["repair"]
+            return out
     
     def execute_tools_batch(self, 
                             tools: List[Dict]) -> List[Dict[str, Any]]:
