@@ -2195,6 +2195,31 @@ async def api_fabric_health():
         return {"error": _safe_detail(e)}
 
 
+@app.get("/api/skills")
+async def api_skills(capability: str = ""):
+    """Skill 生态化对外接口：查询 AOS 所有技能或按能力发现技能。
+
+    - GET /api/skills → 全部 31 技能的摘要（id/name/category/capabilities）
+    - GET /api/skills?capability=web.search → 只返回声明 web.search 的能力技能
+
+    数据源为 skills/manifest.json（单一真相），零导入开销（纯 json 读），
+    不触发 skills/__init__.py 的急加载链。
+    """
+    try:
+        from kernel.skill_registry import get_skill_registry
+        reg = get_skill_registry()
+        if capability:
+            skills = reg.discover(capability)
+            return {"capability": capability, "skills": skills, "total": len(skills)}
+        return {"skills": [{"id": s["id"], "name": s["name"], "category": s["category"],
+                             "capabilities": s["capabilities"], "status": s["status"]}
+                           for s in reg.list_all()],
+                "total": len(reg.list_all()),
+                "summary": reg.summary()}
+    except Exception as e:  # noqa: BLE001
+        return {"error": _safe_detail(e)}
+
+
 @app.get("/api/failure_monitor")
 async def failure_monitor_api():
     """MAST 式多智能体失败监控快照（只读）：失败率/按模式计数/告警/最近失败。
