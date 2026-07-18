@@ -96,16 +96,18 @@ install:
 		echo "Creating .env from template..."; \
 		$(CP) .env.example $(ENV_FILE); \
 	fi
-	$(PIP) install -e .
+	$(PIP) install -r requirements.txt
+	@echo "  [提示] pyproject.toml 仅描述最小内核(aos-kernel, stdlib-only)打包, 完整运行时依赖见 requirements.txt"
 
 install-dev: install
 	@echo "Installing dev dependencies..."
-	$(PIP) install -e ".[dev]"
+	$(PIP) install pytest pytest-cov
 
 deps: SHELL := /bin/bash
 deps:
-	@echo "Verifying dependencies..."
-	@$(PY) -c "import fastapi, uvicorn, pydantic, langgraph" 2>/dev/null && echo "  [OK] Core dependencies" || echo "  [FAIL] Missing core dependencies"
+	@echo "Verifying dependencies (对照 requirements.txt)..."
+	@$(PY) -c "import fastapi, uvicorn, pydantic, sqlmodel, aiosqlite" 2>/dev/null && echo "  [OK] Core API dependencies" || echo "  [FAIL] Missing core API dependencies (pip install -r requirements.txt)"
+	@$(PY) -c "import mcp, ag2, litellm" 2>/dev/null && echo "  [OK] Agent/MCP/LLM plane" || echo "  [WARN] Agent/MCP/LLM plane not installed"
 	@$(PY) -c "import chromadb" 2>/dev/null && echo "  [OK] ChromaDB" || echo "  [WARN] ChromaDB not installed"
 	@$(PY) -c "import streamlit" 2>/dev/null && echo "  [OK] Streamlit" || echo "  [WARN] Streamlit not installed"
 	@$(PY) -c "import pytest" 2>/dev/null && echo "  [OK] Pytest" || echo "  [WARN] Pytest not installed"

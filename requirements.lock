@@ -1,6 +1,18 @@
 # =============================================================================
 # AOS 运行时依赖锁 (deterministic snapshot)
 #
+# ⚠️ 过期警告 (2026-07-19): 本 lock 冻结于 2026-07-10, 此后 requirements.txt 又补充了
+#    fastapi / uvicorn / pydantic / aiosqlite / bcrypt / psycopg2-binary / pandas /
+#    cachetools / temporalio 等核心依赖 —— 当前 lock 并不包含它们。
+#    直接 `pip install -r requirements.lock` 会"安装成功却漏装核心包" -> 镜像启动即崩。
+#    在重新生成前, 请以 requirements.txt 为权威安装源 (Dockerfile / Makefile 已改为如此)。
+#
+# 重新生成本文件 (需联网):
+#   python -m venv .venv
+#   .venv/Scripts/pip install -r requirements.txt
+#   .venv/Scripts/pip freeze > requirements.lock
+#
+# -----------------------------------------------------------------------------
 # 生成来源 : default venv (C:/Users/Administrator/.workbuddy/binaries/python/envs/default)
 # 说明     : AOS 运行时经 supervisor 的 AOS_EXTRA_SITE / PYTHONPATH 接入该 venv 的
 #            site-packages, 故它是『真实依赖来源』。本文件是其 pip freeze 快照,
