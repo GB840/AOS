@@ -32,6 +32,7 @@
           <a href="#/studio" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="studio">工作室</a>
           <a href="#/pulse" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="pulse">数据</a>
           <a href="#/trace" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="trace">追踪</a>
+          <a href="#/review" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="review">审核</a>
         </div>
       </div>
       <div class="flex items-center space-x-4">
@@ -74,6 +75,7 @@ function render() {
     case 'studio': renderStudio(app); break;
     case 'pulse': renderPulse(app); break;
     case 'trace': renderTrace(app); break;
+    case 'review': renderReviews(app); break;
     case 'agent': renderAgentDetail(app); break;
     default: renderHub(app);
   }
@@ -828,6 +830,7 @@ function statusBadge(status) {
     success: ['bg-green-100 text-green-700', '✅ 全部成功'],
     partial: ['bg-yellow-100 text-yellow-700', '⚠️ 部分成功'],
     failed:  ['bg-red-100 text-red-700', '❌ 全部失败'],
+    awaiting: ['bg-amber-100 text-amber-700', '⏳ 待审核'],
     empty:   ['bg-gray-100 text-gray-500', '○ 空运行']
   };
   const pair = map[status] || map.empty;
@@ -876,17 +879,23 @@ async function renderTrace(container) {
           <svg id="chev-${idx}" class="w-5 h-5 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
         </div>
         <div id="trace-detail-${idx}" class="hidden border-t border-gray-100 bg-gray-50 p-5 space-y-2">
-          ${(run.steps || []).map((s, i) => `
+          ${(run.steps || []).map((s, i) => {
+            let dotCls, txtCls, mark;
+            if (s.status === 'awaiting_review') { dotCls = 'bg-amber-100 text-amber-700'; txtCls = 'text-amber-600'; mark = '⏳'; }
+            else if (s.status === 'rejected') { dotCls = 'bg-red-100 text-red-700'; txtCls = 'text-red-600'; mark = '🚫'; }
+            else if (s.ok) { dotCls = 'bg-green-100 text-green-700'; txtCls = 'text-green-600'; mark = '✅'; }
+            else { dotCls = 'bg-red-100 text-red-700'; txtCls = 'text-red-600'; mark = '❌'; }
+            return `
             <div class="flex items-center gap-3 p-3 bg-white rounded-lg">
-              <div class="w-7 h-7 ${s.ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">${i + 1}</div>
+              <div class="w-7 h-7 ${dotCls} rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">${i + 1}</div>
               <div class="flex-1 min-w-0">
                 <div class="font-medium text-gray-900 text-sm">${escapeHtml(s.capability || '?')}</div>
-                <div class="text-xs text-gray-500">引擎: ${escapeHtml(s.engine || '—')} · 延迟: ${s.latency_ms ?? '—'}ms</div>
-                ${s.ok ? '' : `<div class="text-xs text-red-600 mt-1">错误: ${escapeHtml(s.error || '未知')}</div>`}
+                <div class="text-xs text-gray-500">引擎: ${escapeHtml(s.engine || '—')} · 延迟: ${s.latency_ms ?? '—'}ms${s.status ? ' · ' + escapeHtml(s.status) : ''}</div>
+                ${(s.ok || s.status === 'awaiting_review' || s.status === 'rejected') ? '' : `<div class="text-xs text-red-600 mt-1">错误: ${escapeHtml(s.error || '未知')}</div>`}
               </div>
-              <span class="text-xs font-medium ${s.ok ? 'text-green-600' : 'text-red-600'}">${s.ok ? '✅' : '❌'}</span>
-            </div>
-          `).join('') || '<p class="text-sm text-gray-500">无 step 记录</p>'}
+              <span class="text-xs font-medium ${txtCls}">${mark}</span>
+            </div>`;
+          }).join('') || '<p class="text-sm text-gray-500">无 step 记录</p>'}
         </div>
       </div>
     `).join('');
@@ -903,6 +912,80 @@ function toggleTrace(idx) {
   if (!el) return;
   el.classList.toggle('hidden');
   if (chev) chev.style.transform = el.classList.contains('hidden') ? '' : 'rotate(180deg)';
+}
+
+// ── 步骤级审核（三省六部制式封驳）──
+async function renderReviews(container) {
+  container.innerHTML = `
+    <div class="mb-8 flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">步骤级审核 · 封驳</h1>
+        <p class="text-gray-600">敏感步骤执行前需人工准/驳；驳回即封驳不执行。此页列出待审核步骤并可直接处置。</p>
+      </div>
+      <button onclick="renderReviews(document.getElementById('app'))" class="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-2 rounded-lg whitespace-nowrap">刷新</button>
+    </div>
+    <div id="reviewList" class="space-y-4">
+      <div class="skeleton h-24 rounded-xl"></div>
+    </div>
+  `;
+  const list = document.getElementById('reviewList');
+  try {
+    const res = await fetch(`${API_BASE}/approvals?status=pending`);
+    const data = await res.json();
+    const items = data.items || [];
+    if (!items.length) {
+      list.innerHTML = `<div class="text-center py-16 text-gray-500"><p class="text-lg mb-2">暂无待审核步骤</p><p class="text-sm">开启审核模式运行流水线（review_mode=gate），敏感步骤会在此等待人工准/驳。</p></div>`;
+      return;
+    }
+    const byRun = {};
+    items.forEach(a => { (byRun[a.run_id || 'unknown'] ||= []).push(a); });
+    list.innerHTML = Object.entries(byRun).map(([runId, apps]) => `
+      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="p-4 flex items-center justify-between bg-gray-50 border-b border-gray-100">
+          <div class="font-semibold text-gray-900">运行 ${escapeHtml(runId)}</div>
+          <button onclick="resumeRun('${escapeHtml(runId)}')" class="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700">继续执行（准后）</button>
+        </div>
+        <div class="divide-y divide-gray-100">
+          ${apps.map(a => `
+            <div class="p-4 flex items-center justify-between gap-4">
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-gray-900 text-sm">${escapeHtml(a.title)}</div>
+                <div class="text-xs text-gray-500 mt-1">${escapeHtml(a.description || '')} · 风险: ${escapeHtml(a.risk_level)}</div>
+              </div>
+              <div class="flex gap-2 flex-shrink-0">
+                <button onclick="decideApproval('${a.id}','approve')" class="text-sm bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700">✓ 准</button>
+                <button onclick="decideApproval('${a.id}','reject')" class="text-sm bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700">✕ 驳</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    console.error('加载审核失败', e);
+    list.innerHTML = '<p class="text-red-600 text-sm">加载失败：' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function decideApproval(id, action) {
+  try {
+    const res = await fetch(`${API_BASE}/approvals/${id}/${action}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decided_by: 'reviewer'})
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); alert('操作失败: ' + (d.detail || res.status)); return; }
+    renderReviews(document.getElementById('app'));
+  } catch(e) { alert('操作异常: ' + e.message); }
+}
+
+async function resumeRun(runId) {
+  try {
+    const res = await fetch(`${API_BASE}/review/resume/${encodeURIComponent(runId)}`, { method: 'POST' });
+    const d = await res.json().catch(()=>({}));
+    if (!res.ok) { alert('继续执行失败: ' + (d.detail || res.status)); return; }
+    alert('已重新拉起运行 ' + runId + (d.success ? '（成功）' : ''));
+    renderReviews(document.getElementById('app'));
+  } catch(e) { alert('异常: ' + e.message); }
 }
 
 // ── 工具函数 ──

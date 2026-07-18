@@ -57,7 +57,8 @@ class TaskTraceStore:
     def add_step(self, trace_id: str, capability: str,
                  engine: Optional[str] = None, ok: bool = True,
                  error: Optional[str] = None,
-                 latency_ms: Optional[float] = None) -> None:
+                 latency_ms: Optional[float] = None,
+                 status: Optional[str] = None) -> None:
         buf = self._buf.get(trace_id)
         if buf is None:
             return
@@ -70,6 +71,8 @@ class TaskTraceStore:
             rec["error"] = str(error)
         if latency_ms is not None:
             rec["latency_ms"] = latency_ms
+        if status is not None:
+            rec["status"] = status
         buf["steps"].append(rec)
 
     def finish(self, trace_id: str, ok: bool = True) -> Optional[str]:

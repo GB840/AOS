@@ -226,6 +226,14 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.warning("记忆控制面 API 挂载失败: %s", e)
 
+# 步骤级审核控制面（三省六部制式封驳闭环：/api/review/*）
+try:
+    from api.review_api import mount_review_api
+    mount_review_api(app)
+    logger.info("审核控制面 API 已挂载: /api/review")
+except Exception as e:  # noqa: BLE001
+    logger.warning("审核控制面 API 挂载失败: %s", e)
+
 # 产品飞轮前端页面（/studio/）
 try:
     from fastapi.staticfiles import StaticFiles
@@ -1634,6 +1642,7 @@ class OrchestratorRunRequest(BaseModel):
     initial: Optional[Dict[str, Any]] = Field(default={}, description="初始上下文（首步输入）")
     auto_handoff: bool = Field(False, description="收尾自动存结构化交接信封存 IMA 知识库")
     parallel_groups: Optional[List[Any]] = Field(None, description="并行分组（可选，进阶用法）")
+    review_mode: str = Field("", description="审核模式：'gate' 开启步骤级审核封驳（敏感步执行前需人工准/驳）")
 
 
 @app.post("/api/orchestrator/run")
@@ -1663,6 +1672,8 @@ async def orchestrator_run(req: OrchestratorRunRequest):
             spec["task_id"] = req.task_id
         if req.parallel_groups:
             spec["parallel_groups"] = req.parallel_groups
+        if req.review_mode:
+            spec["review_mode"] = req.review_mode
         res = await asyncio.to_thread(hub.route, Capability.WORKFLOW_EXECUTE.value, spec)
         return {
             "success": getattr(res, "ok", False),
@@ -1701,6 +1712,8 @@ async def orchestrator_render(req: OrchestratorRunRequest):
             spec["task_id"] = req.task_id
         if req.parallel_groups:
             spec["parallel_groups"] = req.parallel_groups
+        if req.review_mode:
+            spec["review_mode"] = req.review_mode
         res = await asyncio.to_thread(hub.route, Capability.WORKFLOW_EXECUTE.value, spec)
         html = render_orchestration_result(res, standalone=True)
         return Response(content=html, media_type="text/html")

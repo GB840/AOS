@@ -62,7 +62,8 @@ class _RunState:
 
     def __init__(self, initial: Dict[str, Any], task_id: Optional[str] = None,
                  auto_handoff: bool = False, seed_context: Optional[Dict[str, Any]] = None,
-                 context_cm: Any = None, context_auto_persist: bool = True) -> None:
+                 context_cm: Any = None, context_auto_persist: bool = True,
+                 review_gate: Any = None) -> None:
         self.lock = threading.Lock()
         self.initial = initial
         self.task_id = task_id or str(uuid.uuid4())[:8]
@@ -78,6 +79,9 @@ class _RunState:
         # Context Engineering 集成（Task 2）：上下文会话管理器（None = 不记录）
         self.context_cm: Any = context_cm
         self.context_auto_persist: bool = context_auto_persist
+        # 步骤级审核闸门（三省六部制式封驳）：None = 不开启（零副作用）
+        self.review_gate: Any = review_gate
+        self.awaiting_review: bool = False
 
 
 class OrchestrationChiplet(BaseAgentAdapter):
@@ -122,25 +126,47 @@ class OrchestrationChiplet(BaseAgentAdapter):
                 logger.debug("Context 会话创建失败，跳过上下文记录: %s", e)
                 ctx_cm = None
 
+        # —— 步骤级审核闸门（三省六部制式封驳）——
+        # 仅 review_mode=="gate" 时启用；审批模块不可用时自动降级为 None（不阻断主流程）。
+        review_gate = None
+        if spec.get("review_mode") == "gate":
+            try:
+                from kernel.approval.review_gate import get_review_gate
+                review_gate = get_review_gate()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("审核闸门不可用，降级为不开启: %s", e)
+                review_gate = None
+        if review_gate is not None:
+            # 持久化规格，供「准后 resume 重新拉起」使用（封驳闭环关键一步）。
+            # 固定 task_id，确保首次运行与 resume 命中同一 run。
+            if not spec.get("task_id"):
+                spec["task_id"] = str(uuid.uuid4())[:8]
+            try:
+                review_gate.persist_spec(spec["task_id"], spec)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("审核规格持久化失败（resume 将不可用）: %s", e)
+
         parallel_groups = spec.get("parallel_groups")
         if parallel_groups:
-            return self._invoke_parallel(steps, spec, parallel_groups, ctx_cm, ctx_auto_persist)
+            return self._invoke_parallel(steps, spec, parallel_groups, ctx_cm, ctx_auto_persist, review_gate)
 
         # —— 顺序路径（既有行为，保持不变）——
         state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
                           auto_handoff=spec.get("auto_handoff", False),
                           seed_context=spec.get("seed_context"),
-                          context_cm=ctx_cm, context_auto_persist=ctx_auto_persist)
+                          context_cm=ctx_cm, context_auto_persist=ctx_auto_persist,
+                          review_gate=review_gate)
         for idx, step in enumerate(steps):
             self._run_step(idx, step, state)
         return self._finalize(state)
 
     def _invoke_parallel(self, steps, spec, parallel_groups,
-                         ctx_cm=None, ctx_auto_persist=True) -> InvokeResult:
+                         ctx_cm=None, ctx_auto_persist=True, review_gate=None) -> InvokeResult:
         state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
                           auto_handoff=spec.get("auto_handoff", False),
                           seed_context=spec.get("seed_context"),
-                          context_cm=ctx_cm, context_auto_persist=ctx_auto_persist)
+                          context_cm=ctx_cm, context_auto_persist=ctx_auto_persist,
+                          review_gate=review_gate)
         covered: set[int] = set()
         for group in parallel_groups:
             idxs = self._resolve_group(group, steps)
@@ -205,6 +231,32 @@ class OrchestrationChiplet(BaseAgentAdapter):
                                     "error": "缺 capability"})
             self._record_step_context(state, idx, cap, False, "缺 capability", None)
             return
+        # —— 步骤级审核闸门（三省六部制式封驳）——
+        # 在执行前咨询闸门：pending/无决策 → 挡住(awaiting_review，不执行)；
+        # rejected → 封驳(不执行、标记 rejected)；approved → 放行继续正常执行。
+        # 落 pending 审批是「非侵入」记录（不改运行时状态），对齐 approval_api 设计。
+        gate = state.review_gate
+        if gate is not None and gate.should_review(step):
+            decision, _ap = gate.resolve(state.task_id, idx, step)
+            if decision == "await":
+                with state.lock:
+                    state.awaiting_review = True
+                    state.trace.append({"step": idx, "capability": _as_str(cap),
+                                        "engine": None, "ok": False,
+                                        "status": "awaiting_review",
+                                        "error": "待人工审核（封驳闸门拦截，未执行）"})
+                self._record_step_context(state, idx, cap, False, "待人工审核", None)
+                return
+            if decision == "reject":
+                with state.lock:
+                    state.failed_steps += 1
+                    state.trace.append({"step": idx, "capability": _as_str(cap),
+                                        "engine": None, "ok": False,
+                                        "status": "rejected",
+                                        "error": "已被审核驳回（封驳，未执行）"})
+                self._record_step_context(state, idx, cap, False, "已被审核驳回", None)
+                return
+            # decision == "execute" → 放行，继续下方正常执行
         # 解析本步入参
         if "in" in step:
             payload = step["in"]
@@ -294,7 +346,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
                     cm.persist()
             except Exception as e:  # noqa: BLE001
                 logger.debug("上下文收尾失败: %s", e)
-        if state.ok_steps == 0:
+        if state.ok_steps == 0 and not state.awaiting_review:
             _flush_trace(state)  # 白盒 trace 落盘（即便全失败也保留失败上下文）
             return InvokeResult(
                 ok=False,
@@ -304,12 +356,13 @@ class OrchestrationChiplet(BaseAgentAdapter):
         if state.auto_handoff:
             _auto_store_handoff(state)
         _flush_trace(state)  # 白盒 trace 落盘（供 MemoryDistiller 提炼，理念8 闭环一环）
-        return InvokeResult(
-            ok=True,
-            data={"ok_steps": state.ok_steps, "failed_steps": state.failed_steps,
-                  "final": state.context, "trace": state.trace,
-                  **({"parallel": True} if parallel else {})},
-        )
+        data = {"ok_steps": state.ok_steps, "failed_steps": state.failed_steps,
+                "final": state.context, "trace": state.trace,
+                **({"parallel": True} if parallel else {})}
+        if state.awaiting_review:
+            # 流水线未失败、只是停在待审核步：用 status 标注，不伪造成功/失败。
+            data["status"] = "awaiting_review"
+        return InvokeResult(ok=True, data=data)
 
 
 def _brief(obj: Any, limit: int = 200) -> Any:
@@ -339,6 +392,7 @@ def _flush_trace(state: "_RunState") -> None:
                 t.get("engine"),
                 bool(t.get("ok")),
                 t.get("error"),
+                status=t.get("status"),
             )
         store.finish(state.task_id, state.ok_steps > 0)
     except Exception:  # noqa: BLE001 - trace 落盘失败不影响主流程

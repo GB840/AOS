@@ -31,6 +31,9 @@ def _status_of(rec: Dict[str, Any]) -> str:
     steps = rec.get("steps", []) or []
     if not steps:
         return "empty"
+    # 任一待审核步 → 整体处于「待审核/暂停」状态（非失败、非成功）
+    if any(s.get("status") == "awaiting_review" for s in steps):
+        return "awaiting"
     ok_steps = sum(1 for s in steps if s.get("ok"))
     if ok_steps == len(steps):
         return "success"
@@ -64,6 +67,7 @@ def _normalize(rec: Dict[str, Any], run_id: str) -> Dict[str, Any]:
                 "ok": bool(s.get("ok")),
                 "error": s.get("error"),
                 "latency_ms": s.get("latency_ms"),
+                "status": s.get("status"),
             }
             for s in steps
         ],
