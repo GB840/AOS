@@ -34,6 +34,19 @@ except ImportError:
 
 from utils.config import config
 
+# 记忆生命周期桥接层（理念2：TTL + 分层降级）。opt-in：仅当 AOS_MEMORY_LIFECYCLE=1
+# 时启用；关闭时桥接层为 no-op 且不建任何表，零足迹，绝不破坏既有工作记忆。
+try:
+    from memory.lifecycle import (
+        MemoryLifecycleBridge,
+        CATEGORY_FAILURE,
+        CATEGORY_PREFERENCE,
+        CATEGORY_GENERAL,
+    )
+except ImportError:  # pragma: no cover - 仅在非标准路径布局下触发
+    MemoryLifecycleBridge = None
+    CATEGORY_FAILURE = CATEGORY_PREFERENCE = CATEGORY_GENERAL = "general"
+
 logger = logging.getLogger(__name__)
 
 
@@ -226,6 +239,14 @@ class MemoryManager:
         self._use_connection_pool = False
 
         self._init_vector_store()
+
+        # 记忆生命周期桥接层（理念2）。opt-in：AOS_MEMORY_LIFECYCLE=1 时启用并建 companion 表；
+        # 关闭时 MemoryLifecycleBridge.enabled=False，所有钩子为 no-op，零足迹。
+        self.lifecycle = (
+            MemoryLifecycleBridge.from_env(self.sqlite_conn)
+            if MemoryLifecycleBridge is not None
+            else None
+        )
     
     @contextmanager
     def get_connection(self):
@@ -499,8 +520,14 @@ class MemoryManager:
                 metadata={"hnsw:space": "cosine"},
             )
 
-    def add_conversation(self, session_id: str, role: str, content: str, metadata: Optional[Dict] = None) -> int:
-        """添加对话（批量写入优化，N+1查询防护）"""
+    def add_conversation(self, session_id: str, role: str, content: str, metadata: Optional[Dict] = None, category: str = CATEGORY_GENERAL) -> int:
+        """添加对话（批量写入优化，N+1查询防护）
+
+        Args:
+            category: 记忆分类（理念2），控制 TTL 与淘汰策略：
+                      'failure' 短期故障记忆 / 'preference' 长期环境偏好 / 'general' 通用。
+                      仅当桥接层启用(AOS_MEMORY_LIFECYCLE=1)时生效，否则忽略。
+        """
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         
         # 使用连接池避免全局锁竞争，提高并发性能
@@ -511,6 +538,10 @@ class MemoryManager:
             )
             conn.commit()
             conv_id = cursor.lastrowid
+
+        # 桥接层：记录新增记忆的分类与初始热度（opt-in，失败隔离）
+        if self.lifecycle is not None:
+            self.lifecycle.record_add("conversations", conv_id, category)
 
         if self.vector_enabled and self.collection:
             self._add_to_vector_store(
@@ -587,7 +618,11 @@ class MemoryManager:
             
             cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
-        
+
+        # 桥接层：记录被命中的记忆热度（opt-in，失败隔离）。批量单次事务，降低热路径开销。
+        if self.lifecycle is not None and rows:
+            self.lifecycle.record_access_many("conversations", [row["id"] for row in rows])
+
         # 批量构建结果，减少循环开销
         return [
             {
@@ -598,8 +633,12 @@ class MemoryManager:
             for row in rows
         ]
 
-    def add_knowledge(self, title: str, content: str, source: str = "", tags: Optional[List[str]] = None, metadata: Optional[Dict] = None) -> int:
-        """添加知识库（批量写入优化）"""
+    def add_knowledge(self, title: str, content: str, source: str = "", tags: Optional[List[str]] = None, metadata: Optional[Dict] = None, category: str = CATEGORY_GENERAL) -> int:
+        """添加知识库（批量写入优化）
+
+        Args:
+            category: 记忆分类（理念2），控制 TTL 与淘汰策略。仅桥接层启用时生效。
+        """
         tags_json = json.dumps(tags or [], ensure_ascii=False)
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         
@@ -611,6 +650,10 @@ class MemoryManager:
             )
             conn.commit()
             knowledge_id = cursor.lastrowid
+
+        # 桥接层：记录新增记忆的分类与初始热度（opt-in，失败隔离）
+        if self.lifecycle is not None:
+            self.lifecycle.record_add("knowledge", knowledge_id, category)
 
         # 向量存储异步处理，避免阻塞主流程
         if self.vector_enabled and self.collection:
@@ -655,6 +698,11 @@ class MemoryManager:
                     "tags": json.loads(row["tags"] or "[]"),
                 }
             )
+
+        # 桥接层：记录被命中的知识热度（opt-in，失败隔离）
+        if self.lifecycle is not None and rows:
+            self.lifecycle.record_access_many("knowledge", [row["id"] for row in rows])
+
         return result
 
     def semantic_search(self, query: str, n_results: int = 5, filter_type: Optional[str] = None) -> List[Dict[str, Any]]:

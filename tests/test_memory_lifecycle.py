@@ -1,162 +1,190 @@
-"""概念2 农耕层循环记忆（memory_lifecycle）专项测试。
+"""记忆生命周期桥接层测试（理念2：TTL + 分层降级，opt-in）。
 
-覆盖：TTL 过期降级、访问热度延缓降级、偏好记忆永生、分层降级、
-量化报告、与 MemoryDistiller 端到端接入、无 lifecycle 向后兼容。
-纯标准库、用可控 now_provider，秒级运行，不触发重型冷导入。
+覆盖：
+- 禁用态零足迹（no-op，不建表）
+- 热度 / 分类记录
+- 分层降级阶梯（full -> summarized -> archived，软归档 / 硬删）
+- 长期环境偏好受保护
+- TTL 环境变量覆盖与未超 TTL 不淘汰
+- 批量访问记录
+- 与 MemoryManager 的 opt-in 集成
 """
-import json
 import os
-import tempfile
+import sqlite3
+from datetime import datetime, timedelta
 
-from kernel.memory_lifecycle import (
-    MemoryLifecycleManager,
-    TIER_ETERNAL, TIER_IMPORTANT, TIER_NORMAL, TIER_ARCHIVED,
+import pytest
+
+from memory.lifecycle import (
+    MemoryLifecycleBridge,
+    CATEGORY_FAILURE,
+    CATEGORY_PREFERENCE,
+    CATEGORY_GENERAL,
+    TIER_FULL,
+    TIER_SUMMARIZED,
+    TIER_ARCHIVED,
 )
-from kernel.memory_distiller import DistilledMemory, MemoryDistiller
 
 
-def _mgr(d, now=1000.0):
-    return MemoryLifecycleManager(os.path.join(d, "lc.json"),
-                                  now_provider=lambda: now)
+def _conn():
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    return c
 
 
-def test_register_tier_mapping():
-    with tempfile.TemporaryDirectory() as d:
-        mgr = _mgr(d)
-        items = [
-            DistilledMemory(text="f", category="failure_pattern", source="s", confidence=0.3),
-            DistilledMemory(text="r", category="capability_reliability", source="s", confidence=0.9),
-            DistilledMemory(text="l", category="latency_fact", source="s", confidence=0.3),
-        ]
-        assert mgr.register(items) == 3
-        rep = mgr.report()
-        assert rep["by_tier"][TIER_NORMAL] == 2     # failure + latency
-        assert rep["by_tier"][TIER_IMPORTANT] == 1  # reliability
+def test_disabled_is_noop_and_no_table():
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=False)
+    assert bridge.is_enabled() is False
+    bridge.record_add("conversations", 1, CATEGORY_FAILURE)
+    bridge.record_access("conversations", 1)
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    assert "memory_lifecycle" not in tables
+    assert bridge.prune() == {"skipped": True}
+    assert bridge.stats() == {"enabled": False}
 
 
-def test_register_idempotent():
-    with tempfile.TemporaryDirectory() as d:
-        mgr = _mgr(d)
-        it = DistilledMemory(text="x", category="fact", source="s", confidence=0.5)
-        assert mgr.register([it]) == 1
-        assert mgr.register([it]) == 0  # 同 id 跳过，幂等
+def test_enabled_creates_table_and_records_heat():
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    assert "memory_lifecycle" in tables
+
+    bridge.record_add("conversations", 1, CATEGORY_FAILURE)
+    bridge.record_access("conversations", 1)
+    bridge.record_access("conversations", 1)
+
+    st = bridge.stats()
+    assert st["total"] == 1
+    assert st["failures"] == 1
+    cnt = conn.execute(
+        "SELECT access_count FROM memory_lifecycle WHERE scope='conversations' AND row_id=1"
+    ).fetchone()["access_count"]
+    # 1(add 内部 +1) + 2(access) = 3
+    assert cnt == 3
 
 
-def test_preference_eternal():
-    with tempfile.TemporaryDirectory() as d:
-        mgr = _mgr(d)
-        it = DistilledMemory(text="p", category="fact", source="s", confidence=0.5,
-                             metadata={"kind": "preference"})
-        mgr.register([it])
-        assert mgr.mark_preference(it.id) is True
-        assert mgr.report()["by_tier"][TIER_ETERNAL] == 1
+def test_prune_failure_ladder_soft_archive():
+    os.environ.pop("AOS_MEMORY_HARD_DELETE", None)
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    old = (datetime.now() - timedelta(days=40)).isoformat()
+    conn.execute(
+        "INSERT INTO memory_lifecycle (scope, row_id, category, access_count, last_accessed_at, tier, created_at) "
+        "VALUES ('conversations', 99, 'failure', 1, ?, 0, ?)",
+        (old, old),
+    )
+    conn.commit()
+    now = datetime.now()
+
+    stats = bridge.prune(now=now)
+    assert stats["promoted_to_summary"] == 1
+    assert conn.execute("SELECT tier FROM memory_lifecycle WHERE row_id=99").fetchone()["tier"] == TIER_SUMMARIZED
+
+    stats2 = bridge.prune(now=now)
+    assert stats2["archived"] == 1
+    assert conn.execute("SELECT tier FROM memory_lifecycle WHERE row_id=99").fetchone()["tier"] == TIER_ARCHIVED
+    # 软归档：companion 行仍在（仅标记 deleted_at）
+    assert conn.execute("SELECT deleted_at FROM memory_lifecycle WHERE row_id=99").fetchone()["deleted_at"] is not None
 
 
-def test_recall_heats_and_ranks():
-    with tempfile.TemporaryDirectory() as d:
-        mgr = _mgr(d)
-        a = DistilledMemory(text="a", category="fact", source="s", confidence=0.9)
-        b = DistilledMemory(text="b", category="fact", source="s", confidence=0.3)
-        mgr.register([a, b])
-        # a 召回两次升温，置信也高 -> 始终排在 b 前
-        mgr.recall([a.to_record(), b.to_record()])
-        mgr.recall([a.to_record(), b.to_record()])
-        r = mgr.recall([a.to_record(), b.to_record()])
-        assert r[0]["text"] == "a"
+def test_preference_protected_from_prune():
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    old = (datetime.now() - timedelta(days=400)).isoformat()
+    conn.execute(
+        "INSERT INTO memory_lifecycle (scope, row_id, category, access_count, last_accessed_at, tier, created_at) "
+        "VALUES ('knowledge', 5, 'preference', 0, ?, 0, ?)",
+        (old, old),
+    )
+    conn.commit()
+    stats = bridge.prune(now=datetime.now())
+    assert stats["protected"] == 1
+    assert conn.execute("SELECT tier FROM memory_lifecycle WHERE row_id=5").fetchone()["tier"] == TIER_FULL
 
 
-def test_prune_ttl_demote_and_archive():
-    with tempfile.TemporaryDirectory() as d:
-        now = [1000.0]
-        mgr = MemoryLifecycleManager(os.path.join(d, "lc.json"),
-                                     now_provider=lambda: now[0])
-        normal = DistilledMemory(text="n", category="latency_fact", source="s", confidence=0.3)
-        imp = DistilledMemory(text="i", category="capability_reliability", source="s", confidence=0.9)
-        mgr.register([normal, imp])
-        now[0] = 1000.0 + 100 * 86400  # 100 天后未访问
-        rep = mgr.prune()
-        assert rep.archived == 1   # normal -> archived
-        assert rep.demoted == 1    # important -> normal
-        rep2 = mgr.prune()
-        assert rep2.archived == 1  # 已降为 normal 的 important 现归档
-        final = mgr.report()
-        assert final["by_tier"][TIER_ARCHIVED] == 2
-        assert final["total"] == 2  # 归档不物理删
+def test_ttl_env_override_and_within_ttl_not_pruned(monkeypatch):
+    monkeypatch.setenv("AOS_MEMORY_TTL_FAILURE_DAYS", "3")
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    recent = (datetime.now() - timedelta(days=2)).isoformat()
+    conn.execute(
+        "INSERT INTO memory_lifecycle (scope, row_id, category, access_count, tier, created_at) "
+        "VALUES ('conversations', 7, 'failure', 1, 0, ?)",
+        (recent,),
+    )
+    conn.commit()
+    stats = bridge.prune(now=datetime.now())
+    assert stats["promoted_to_summary"] == 0
 
 
-def test_high_heat_delays_expiry():
-    with tempfile.TemporaryDirectory() as d:
-        now = [1000.0]
-        mgr = MemoryLifecycleManager(os.path.join(d, "lc.json"),
-                                     now_provider=lambda: now[0])
-        it = DistilledMemory(text="h", category="latency_fact", source="s", confidence=0.3)
-        mgr.register([it])
-        rec = it.to_record()
-        for _ in range(10):
-            mgr.recall([rec])  # 高热度
-        now[0] = 1000.0 + 15 * 86400  # 15天 < effective_ttl(21天)，高热度延缓生效
-        rep = mgr.prune()
-        assert rep.expired == 0  # 高热度延缓降级
-        assert mgr.report()["by_tier"][TIER_NORMAL] == 1
-        # 高热度非永久：远超 effective_ttl 仍降级（延缓有上限）
-        now[0] = 1000.0 + 100 * 86400
-        rep2 = mgr.prune()
-        assert rep2.archived == 1
-        assert mgr.report()["by_tier"][TIER_ARCHIVED] == 1
+def test_record_access_many_batches_without_duplicating():
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    bridge.record_access_many("knowledge", [1, 2, 3])
+    assert conn.execute("SELECT COUNT(*) FROM memory_lifecycle").fetchone()[0] == 3
+    bridge.record_access_many("knowledge", [1, 2, 3])
+    # 行数不变，命中计数 +1
+    assert conn.execute("SELECT COUNT(*) FROM memory_lifecycle").fetchone()[0] == 3
+    assert conn.execute("SELECT access_count FROM memory_lifecycle WHERE row_id=1").fetchone()[0] == 2
 
 
-def test_eternal_never_pruned():
-    with tempfile.TemporaryDirectory() as d:
-        now = [1000.0]
-        mgr = MemoryLifecycleManager(os.path.join(d, "lc.json"),
-                                     now_provider=lambda: now[0])
-        it = DistilledMemory(text="e", category="fact", source="s", confidence=0.9)
-        mgr.register([it])
-        mgr.mark_preference(it.id)
-        now[0] = 1000.0 + 1000 * 86400
-        rep = mgr.prune()
-        assert rep.expired == 0
-        assert mgr.report()["by_tier"][TIER_ETERNAL] == 1
+def test_hard_delete_removes_main_row_when_flagged():
+    os.environ["AOS_MEMORY_HARD_DELETE"] = "1"
+    try:
+        conn = _conn()
+        conn.execute("CREATE TABLE conversations (id INTEGER PRIMARY KEY, content TEXT)")
+        conn.execute("INSERT INTO conversations VALUES (42, 'x')")
+        bridge = MemoryLifecycleBridge(conn, enabled=True)
+        old = (datetime.now() - timedelta(days=40)).isoformat()
+        conn.execute(
+            "INSERT INTO memory_lifecycle (scope, row_id, category, access_count, tier, created_at) "
+            "VALUES ('conversations', 42, 'failure', 1, 1, ?)",
+            (old,),
+        )
+        conn.commit()
+        stats = bridge.prune(now=datetime.now())
+        assert stats["hard_deleted"] == 1
+        assert conn.execute("SELECT id FROM conversations WHERE id=42").fetchone() is None
+        assert conn.execute("SELECT id FROM memory_lifecycle WHERE row_id=42").fetchone() is None
+    finally:
+        os.environ.pop("AOS_MEMORY_HARD_DELETE", None)
 
 
-def test_distiller_lifecycle_integration():
-    tmp = tempfile.mkdtemp()
-    sidecar = os.path.join(tmp, "distilled_lifecycle.json")
-    dist = MemoryDistiller(trace_dirs=[tmp], interval_seconds=300,
-                           lifecycle_path=sidecar)
-    trace = {
-        "input": {"task": "t1"},
-        "steps": [
-            {"capability": "media.video", "ok": False, "error": "render fail"},
-            {"capability": "media.video", "ok": True},
-        ],
-        "metrics": {"latency_ms": 1234},
-    }
-    with open(os.path.join(tmp, "trace_test.json"), "w", encoding="utf-8") as f:
-        json.dump(trace, f)
-    rep = dist.scan_once()
-    assert rep.new_items >= 1
-    assert os.path.exists(sidecar)
-    with open(sidecar, encoding="utf-8") as f:
-        meta = json.load(f)
-    assert len(meta) == rep.new_items  # 每条提炼都登记生命周期
-    assert isinstance(dist.recall_memories(limit=10), list)
-    prep = dist._lifecycle.prune()
-    assert prep.scanned == rep.new_items
+def test_memory_manager_lifecycle_integration(monkeypatch, tmp_path):
+    from memory import memory as memory_module
+    from memory.memory import MemoryManager
+    from utils.config import config
 
+    monkeypatch.setattr(memory_module, "CHROMADB_AVAILABLE", False)
+    monkeypatch.setattr(memory_module, "ZVEC_AVAILABLE", False)
+    monkeypatch.setattr(config, "SQLITE_DB_PATH", str(tmp_path / "mem.db"))
+    monkeypatch.setattr(config, "CHROMADB_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setattr(config, "VECTOR_COLLECTION_NAME", "test_mem")
+    monkeypatch.setenv("AOS_MEMORY_LIFECYCLE", "1")
 
-def test_distiller_no_lifecycle_compat():
-    tmp = tempfile.mkdtemp()
-    dist = MemoryDistiller(trace_dirs=[tmp])  # 不传 lifecycle_path
-    assert dist._lifecycle is None
-    assert dist.recall_memories() == []
-    trace = {
-        "input": {"task": "t2"},
-        "steps": [{"capability": "x", "ok": True}],
-        "metrics": {},
-    }
-    with open(os.path.join(tmp, "trace_nolc.json"), "w", encoding="utf-8") as f:
-        json.dump(trace, f)
-    rep = dist.scan_once()
-    assert rep.new_items >= 1
-    assert not os.path.exists(os.path.join(tmp, "distilled_lifecycle.json"))
+    mm = MemoryManager()
+    try:
+        assert mm.lifecycle is not None
+        assert mm.lifecycle.is_enabled() is True
+
+        cid = mm.add_conversation("sess1", "user", "hello failure", category=CATEGORY_FAILURE)
+        st = mm.lifecycle.stats()
+        assert st["total"] == 1
+        assert st["failures"] == 1
+
+        # 搜索记录命中热度
+        mm.search_conversations("hello")
+        cnt = mm.lifecycle.conn.execute(
+            "SELECT access_count FROM memory_lifecycle WHERE scope='conversations' AND row_id=?",
+            (cid,),
+        ).fetchone()["access_count"]
+        assert cnt >= 2  # 1(add) + >=1(search)
+
+        # 分类标记持久化
+        assert mm.lifecycle.conn.execute(
+            "SELECT category FROM memory_lifecycle WHERE scope='conversations' AND row_id=?",
+            (cid,),
+        ).fetchone()["category"] == CATEGORY_FAILURE
+    finally:
+        mm.close()
