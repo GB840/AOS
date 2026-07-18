@@ -73,8 +73,9 @@ class V5Bridge:
         self._chat_kernel_ok = 0
         self._chat_kernel_fail = 0
 
-        # 切流分流精确计数（让 AOS_KERNEL_TRAFFIC_PCT 的真实比例可见）
+        # 切流分流精确计数（让切流真实比例可见；fabric/kernel/brain 三档分开数）
         self._chat_request_total = 0   # 每次 /api/chat 命中（无论最终路由）
+        self._chat_route_fabric = 0    # 实际走 FabricHub 的请求数
         self._chat_route_kernel = 0    # 实际走内核的请求数
         self._chat_route_brain = 0     # 实际走 brain.py 的请求数
 
@@ -387,8 +388,14 @@ class V5Bridge:
         self._chat_request_total += 1
 
     def record_chat_route(self, route: str) -> None:
-        """记录一次请求最终路由到的引擎：'kernel' 或 'brain'。"""
-        if route == "kernel":
+        """记录一次请求最终路由到的引擎：'fabric' | 'kernel' | 'brain'。
+
+        三档分开计数，避免 fabric（默认主后端）被误计为 brain，
+        使切流比例真实可见（理念6/9 量化）。
+        """
+        if route == "fabric":
+            self._chat_route_fabric += 1
+        elif route == "kernel":
             self._chat_route_kernel += 1
         else:
             self._chat_route_brain += 1
@@ -409,6 +416,8 @@ class V5Bridge:
         """
         ratio = (self._chat_kernel_ok / self._chat_total) if self._chat_total > 0 else 0.0
         split = (self._chat_route_kernel / self._chat_request_total) if self._chat_request_total > 0 else 0.0
+        fabric_split = (self._chat_route_fabric / self._chat_request_total) if self._chat_request_total > 0 else 0.0
+        brain_split = (self._chat_route_brain / self._chat_request_total) if self._chat_request_total > 0 else 0.0
         return {
             "mount_attempts": self._mount_attempts,
             "mount_success": self._mount_success,
@@ -419,9 +428,12 @@ class V5Bridge:
             "chat_kernel_fail": self._chat_kernel_fail,
             "chat_kernel_ratio": round(ratio, 4),
             "chat_request_total": self._chat_request_total,
+            "chat_route_fabric": self._chat_route_fabric,
             "chat_route_kernel": self._chat_route_kernel,
             "chat_route_brain": self._chat_route_brain,
             "kernel_split_ratio": round(split, 4),
+            "fabric_split_ratio": round(fabric_split, 4),
+            "brain_split_ratio": round(brain_split, 4),
         }
 
 

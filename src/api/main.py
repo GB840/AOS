@@ -23,6 +23,13 @@ from datetime import datetime
 from utils.config import config
 from core import get_brain
 from core.fabric import a2ui as a2ui_mod
+from api.chat_routing import (
+    select_chat_backends,
+    BACKEND_FABRIC,
+    BACKEND_KERNEL,
+    BACKEND_BRAIN,
+    BRAIN_DEPRECATION_MSG,
+)
 from kernel.plugins.code_team import (
     CodeTeamOrchestrator,
     make_llm_generate,
@@ -434,8 +441,9 @@ async def startup_event():
     logger.info("=== AOS v5.0 ready ===")
 
     # ---- v1.0 内核接管（双轨并存）----
-    # 把极简内核挂到 app.state，供 /api/v1/* 使用。brain.py 完全不动，
-    # 旧 /api/chat 仍走 brain；新 /api/v1/chat 走内核 → mistralrs。
+    # 把极简内核挂到 app.state，供 /api/v1/* 使用。brain.py 已非默认
+    # chat 运行时（/api/chat 现默认走 FabricHub，brain.py 仅 opt-in 兜底）；
+    # 新 /api/v1/chat 走内核 → mistralrs。
     # 铁律：内核挂载失败绝不阻断启动（try/except 包裹，降级为无内核）。
     try:
         from kernel.v5_bridge import V5Bridge
@@ -672,111 +680,116 @@ async def fabric_status():
 
 # ---- Chat ----
 
-# 灰度切流：AOS_KERNEL_TRAFFIC_PCT 控制 /api/chat 走 kernel 的百分比（0-100）。
-# 0 = 全部走 brain.py（回退），100 = 全部走 kernel（默认）。kernel 失败时自动回退 brain。
-# 该值每次请求动态读取，改 env 无需重启即生效（便于真实测量切流比例）。
-import random as _random
+# 单基座第一性：/api/chat 默认经 FabricHub 单一运行时（目标「唯一运行时」），
+# brain.py（legacy UnifiedBrain）已废弃，仅作 opt-in 兜底（AOS_BRAIN_FALLBACK=1）。
+# 后端链由 api.chat_routing.select_chat_backends() 依据 env 决策，每个后端失败
+# 诚实回退到下一后端（理念6/9），绝不伪造响应。改 env 无需重启即生效。
+# 旧灰度旋钮 AOS_KERNEL_TRAFFIC_PCT / AOS_FABRIC_CHAT 已被 AOS_CHAT_BACKEND 取代。
 
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    # 动态读取切流比例与 fabirc 开关：改 env 无需重启即生效
-    kernel_traffic_pct = int(os.environ.get("AOS_KERNEL_TRAFFIC_PCT", "100"))
-    use_fabric_chat = os.environ.get("AOS_FABRIC_CHAT") == "1"
+    # 单基座第一性：默认经 FabricHub 单一运行时；brain.py 已废弃为 opt-in 兜底。
+    # 后端链由 select_chat_backends() 依据 env 决策（默认 [fabric, kernel]），
+    # 每个后端失败诚实回退到下一后端（理念6/9），绝不伪造响应。
     bridge = getattr(app.state, "bridge", None)
     try:
-        routed_to_kernel = False
         if bridge is not None:
             bridge.record_chat_request()
 
-        # ---- FabricHub 对话路径（AOS_FABRIC_CHAT=1）----
-        # 当 brain.py 不可用或主动选择「不走 legacy track」时，经 FabricHub.chat()
-        # 做纯 LLM 对话。复用 inference.llm 芯粒（LiteLLM 云端优先→本地兜底），
-        # 含会话历史上下文。失败诚实返回 [FabricHub chat failed: ...]，不伪造。
-        if use_fabric_chat:
-            if bridge is not None:
-                bridge.record_chat_route("fabric")
-            try:
-                hub = await _get_fabric_hub()
+        chain = select_chat_backends()
+        last_exc = None
+        for backend in chain:
+            if backend == BACKEND_FABRIC:
+                try:
+                    if bridge is not None:
+                        bridge.record_chat_route("fabric")
+                    hub = await _get_fabric_hub()
+                    result = await asyncio.to_thread(
+                        hub.chat,
+                        message=request.message,
+                        session_id=request.session_id or "",
+                    )
+                    engine = result.get("engine") or "fabric"
+                    logger.info("chat routed to FabricHub (%s)", engine)
+                    return {"response": result["response"],
+                            "route": f"fabric/{engine}", "ok": result.get("ok")}
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning("FabricHub chat failed, rolling back: %s", exc)
+                    continue
+
+            elif backend == BACKEND_KERNEL:
+                try:
+                    if bridge is not None:
+                        bridge.record_chat_route("kernel")
+                    resp = await asyncio.to_thread(
+                        bridge.chat,
+                        prompt=request.message,
+                        session_id=request.session_id or "",
+                    )
+                    content = resp.data.get("content", "") if resp.data else ""
+                    logger.info("chat routed to kernel (v1.0)")
+                    return {"response": content, "route": "kernel/v1", "ok": resp.ok}
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning("kernel chat failed, rolling back: %s", exc)
+                    continue
+
+            elif backend == BACKEND_BRAIN:
+                # legacy 路径（已废弃）：仅当 AOS_CHAT_BACKEND=brain 或
+                # AOS_BRAIN_FALLBACK=1 时到达。打废弃标记以驱动迁移。
+                logger.warning(BRAIN_DEPRECATION_MSG)
+                if bridge is not None:
+                    bridge.record_chat_route("brain")
+                # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策。
+                # 关键：只算一次, 结果传给 brain.chat() 复用 —— 避免重复调用 route_intent
+                # 导致 evolution_log 双写 (此前 /api/chat 与 brain.chat() 各调一次)。
+                meta_decision = None
+                try:
+                    # Run the (synchronous, potentially long) governance + chat in a
+                    # worker thread so the event loop stays free to serve /health.
+                    # Without this, a single blocking chat would stall the only uvicorn
+                    # worker, /health would time out, and the supervisor would kill AOS
+                    # mid-request (taking the whole API down on one chat).
+                    meta_decision = await asyncio.to_thread(
+                        brain.meta_orchestrator.route_intent,
+                        intent=request.message, user_id="chat",
+                        trace_id=request.session_id or "")
+                except Exception as e:  # pragma: no cover - 治理钩子绝不阻断主流程
+                    logger.debug("meta governance hook skipped: %s", e)
                 result = await asyncio.to_thread(
-                    hub.chat,
-                    message=request.message,
-                    session_id=request.session_id or "",
-                )
-                logger.info("chat routed to FabricHub (AOS_FABRIC_CHAT=1)")
-                engine = result.get("engine") or "fabric"
-                return {"response": result["response"],
-                        "route": f"fabric/{engine}", "ok": result.get("ok")}
-            except Exception as exc:
-                logger.warning("FabricHub chat failed, falling back: %s", exc)
-                # FabricHub 失败 → 继续往下走 kernel/brain 降级路径
+                    brain.chat, message=request.message, session_id=request.session_id,
+                    meta_decision=meta_decision)
+                if isinstance(result, dict) and meta_decision:
+                    result["meta"] = {
+                        "layer": meta_decision.get("layer"),
+                        "complexity": meta_decision.get("complexity"),
+                        "workflow_id": meta_decision.get("workflow_id"),
+                        "priority": meta_decision.get("priority"),
+                    }
+                # 可观测钩子: 发 Langfuse trace (input/output/metadata 含 meta 分层)
+                try:
+                    tracer = getattr(brain, "langfuse_tracer", None)
+                    if tracer is not None and tracer.enabled:
+                        tracer.trace(
+                            name="chat",
+                            input=request.message,
+                            output=result if isinstance(result, (str, dict)) else None,
+                            metadata={"layer": (result.get("meta", {}) if isinstance(result, dict) else {}).get("layer")},
+                        )
+                except Exception as e:  # pragma: no cover - 可观测绝不阻断主流程
+                    logger.debug("langfuse trace skipped: %s", e)
+                return result
 
-        # ---- 灰度切流：按比例路由到 kernel ----
-        # record_chat_route("kernel") 记录「路由决策」（本请求发往内核），
-        # 与是否成功解耦：即便内核后端失败也计为发往内核，使 kernel_split_ratio
-        # 精确反映 AOS_KERNEL_TRAFFIC_PCT 的切流决策，不受后端健康度干扰。
-        # 后端成败由 chat_kernel_ok / chat_kernel_fail 单独刻画。
-        if kernel_traffic_pct > 0 and bridge is not None \
-                and _random.randint(1, 100) <= kernel_traffic_pct:
-            routed_to_kernel = True
-            bridge.record_chat_route("kernel")
-            try:
-                resp = await asyncio.to_thread(
-                    bridge.chat,
-                    prompt=request.message,
-                    session_id=request.session_id or "",
-                )
-                content = resp.data.get("content", "") if resp.data else ""
-                logger.info("chat routed to kernel (pct=%d%%)", kernel_traffic_pct)
-                return {"response": content, "route": "kernel/v1", "ok": resp.ok}
-            except Exception as exc:
-                logger.warning("kernel route failed, falling back to brain: %s", exc)
-                # 已记录 route=kernel（决策层面确实发往内核），此处仅回退执行，
-                # 不再重复 record_chat_route，避免 kernel+brain 双重计数。
-
-        # ---- v5 路径（brain.py）—— 逐步退化 ----
-        if bridge is not None and not routed_to_kernel:
-            bridge.record_chat_route("brain")
-        logger.debug("chat via brain.py (v5 path)")
-        # 进化治理钩子：每次对话经 L3.5 元调度引擎做意图分层决策。
-        # 关键：只算一次, 结果传给 brain.chat() 复用 —— 避免重复调用 route_intent
-        # 导致 evolution_log 双写 (此前 /api/chat 与 brain.chat() 各调一次)。
-        meta_decision = None
-        try:
-            # Run the (synchronous, potentially long) governance + chat in a
-            # worker thread so the event loop stays free to serve /health.
-            # Without this, a single blocking chat would stall the only uvicorn
-            # worker, /health would time out, and the supervisor would kill AOS
-            # mid-request (taking the whole API down on one chat).
-            meta_decision = await asyncio.to_thread(
-                brain.meta_orchestrator.route_intent,
-                intent=request.message, user_id="chat",
-                trace_id=request.session_id or "")
-        except Exception as e:  # pragma: no cover - 治理钩子绝不阻断主流程
-            logger.debug("meta governance hook skipped: %s", e)
-        result = await asyncio.to_thread(
-            brain.chat, message=request.message, session_id=request.session_id,
-            meta_decision=meta_decision)
-        if isinstance(result, dict) and meta_decision:
-            result["meta"] = {
-                "layer": meta_decision.get("layer"),
-                "complexity": meta_decision.get("complexity"),
-                "workflow_id": meta_decision.get("workflow_id"),
-                "priority": meta_decision.get("priority"),
-            }
-        # 可观测钩子: 发 Langfuse trace (input/output/metadata 含 meta 分层)
-        try:
-            tracer = getattr(brain, "langfuse_tracer", None)
-            if tracer is not None and tracer.enabled:
-                tracer.trace(
-                    name="chat",
-                    input=request.message,
-                    output=result if isinstance(result, (str, dict)) else None,
-                    metadata={"layer": (result.get("meta", {}) if isinstance(result, dict) else {}).get("layer")},
-                )
-        except Exception as e:  # pragma: no cover - 可观测绝不阻断主流程
-            logger.debug("langfuse trace skipped: %s", e)
-        return result
+        # 所有后端耗尽 —— 诚实返回 503（不伪造响应），附最后一跳错误（理念6/9）。
+        detail = "chat backend unavailable: all backends failed"
+        if last_exc is not None:
+            detail += f" (last: {_safe_detail(last_exc)})"
+        logger.error("Chat error: all backends exhausted: %s", last_exc)
+        raise HTTPException(status_code=503, detail=detail)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=_safe_detail(e))

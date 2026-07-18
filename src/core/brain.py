@@ -10,6 +10,13 @@ Orchestrates:
   - Checkpointing (SQLite persistence for multi-turn conversations)
 
 Single entry point for the entire AOS system.
+
+DEPRECATION (chat runtime role):
+  作为 /api/chat 的默认对话运行时，core/brain.py (UnifiedBrain) 正在退役。
+  /api/chat 现已默认走 FabricHub 单一运行时；brain.py 仅作 opt-in 兜底
+  （AOS_BRAIN_FALLBACK=1 或 AOS_CHAT_BACKEND=brain）。deerflow 任务、subagent、
+  语音/多模态等非 chat 端点仍沿用 brain.py，暂不在本次退场范围内。
+  新 chat 代码应经 FabricHub 路由。
 """
 
 import sys
@@ -26,6 +33,18 @@ from utils.config import config
 from deerflow.skill_provider import DeerFlowSkillProvider
 
 logger = logging.getLogger(__name__)
+
+# 废弃标记（一次性）：标记 brain.py 作为默认 chat 运行时的退役。
+# 仅作用于 chat 运行时角色；其余端点仍合法使用 brain.py。
+_BRAIN_DEPRECATION_WARNED = False
+if not _BRAIN_DEPRECATION_WARNED:
+    _BRAIN_DEPRECATION_WARNED = True
+    logger.warning(
+        "DEPRECATION: core/brain.py (UnifiedBrain) is being retired as the default "
+        "/api/chat runtime. /api/chat now defaults to FabricHub; brain.py remains "
+        "only as an opt-in fallback (AOS_BRAIN_FALLBACK=1). New chat code should "
+        "route through FabricHub."
+    )
 
 
 class DeerFlowGatewayClient:
@@ -1318,6 +1337,10 @@ class UnifiedBrain:
              use_deerflow: bool = False, meta_decision: Optional[Dict[str, Any]] = None,
              **kwargs) -> Dict[str, Any]:
         """Unified chat with five-channel routing: L1-L5 task classification.
+
+        DEPRECATED (chat runtime role): 作为 /api/chat 默认对话运行时已退役；
+        默认改走 FabricHub。仅当 AOS_BRAIN_FALLBACK=1 / AOS_CHAT_BACKEND=brain 时
+        经 /api/chat 的 legacy 分支到达。新 chat 代码应经 FabricHub 路由。
 
         meta_decision: 若调用方已算过 L3.5 意图分层决策(如 /api/chat 端点), 传入以
         复用, 避免重复调用 route_intent 导致 evolution_log 双写。为 None 时本方法自行计算。

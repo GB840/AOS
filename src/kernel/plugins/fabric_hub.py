@@ -1286,8 +1286,9 @@ class FabricHub:
         """FabricHub 对话入口：把用户消息路由到 inference.llm 做 LLM 对话。
 
         FabricHub 从「能力路由器」迈出一步成为「对话中枢」——复用现有 LiteLLM
-        芯粒，加载会话历史构造 chat messages，返回 LLM 文本回复。供 /api/chat
-        新开 FabricHub 路径（AOS_FABRIC_CHAT=1 时，brain.py 缺位下的轻量替代）。
+        芯粒，加载会话历史构造 chat messages，返回 LLM 文本回复。        供 /api/chat
+        新开 FabricHub 路径（/api/chat 默认走此；AOS_CHAT_BACKEND 可切 kernel/brain，
+        AOS_BRAIN_FALLBACK 控制 brain.py 作为 opt-in 兜底）。
 
         - 会话历史：经 _load_session 取最近最多 5 轮，注入 messages
         - 引擎：默认走 inference.llm 能力路由（云端优先→本地兜底，级联不写死）
