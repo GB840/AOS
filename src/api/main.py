@@ -186,6 +186,14 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.warning("Approval API 挂载失败: %s", e)
 
+# Replay & Debug API（Task 5: 失败回放、单步调试、trace 对比）
+try:
+    from api.replay_api import mount_replay_api
+    mount_replay_api(app)
+    logger.info("Replay & Debug API 已挂载: /api/replay")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Replay & Debug API 挂载失败: %s", e)
+
 # Self-Harness API（自测闭环：/api/self-harness/run）
 try:
     from api.self_harness_api import mount_self_harness_api
@@ -201,6 +209,22 @@ try:
     logger.info("多模态 API 已挂载: /api/multimodal")
 except Exception as e:  # noqa: BLE001
     logger.warning("多模态 API 挂载失败: %s", e)
+
+# 编排运行可视化看板 API（/api/kanban/*，只读 trace 落盘，理念8 白盒可视化）
+try:
+    from api.kanban_api import mount_kanban_api
+    mount_kanban_api(app)
+    logger.info("编排看板 API 已挂载: /api/kanban")
+except Exception as e:  # noqa: BLE001
+    logger.warning("编排看板 API 挂载失败: %s", e)
+
+# 可干预记忆控制面 API（/api/memory/control/*，补全理念8 最后一公里）
+try:
+    from api.memory_control_api import mount_memory_control_api
+    mount_memory_control_api(app)
+    logger.info("记忆控制面 API 已挂载: /api/memory/control")
+except Exception as e:  # noqa: BLE001
+    logger.warning("记忆控制面 API 挂载失败: %s", e)
 
 # 产品飞轮前端页面（/studio/）
 try:

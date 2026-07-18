@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AOS 编排运行看板</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#0f172a; }
+    .card { transition: transform .12s ease, box-shadow .12s ease; }
+    .card:hover { transform: translateY(-2px); }
+    .scroll::-webkit-scrollbar { width:8px; height:8px; }
+    .scroll::-webkit-scrollbar-thumb { background:#334155; border-radius:4px; }
+  </style>
+</head>
+<body class="text-slate-200 min-h-screen">
+  <div class="max-w-[1400px] mx-auto px-5 py-6">
+    <header class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-bold text-white">AOS 编排运行看板</h1>
+        <p class="text-sm text-slate-400">OrchestrationChiplet 逐步 trace 可视化（理念8「白盒才可进化」）</p>
+      </div>
+      <button id="refresh" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium">刷新</button>
+    </header>
+
+    <div id="summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 text-center"></div>
+
+    <div id="board" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
+      <div class="bg-slate-800/60 rounded-xl p-3" data-col="success">
+        <h2 class="text-emerald-400 font-semibold mb-3 flex items-center gap-2">✅ 成功 <span class="count text-xs text-slate-500"></span></h2>
+        <div class="space-y-3 scroll" style="max-height:70vh;overflow:auto"></div>
+      </div>
+      <div class="bg-slate-800/60 rounded-xl p-3" data-col="partial">
+        <h2 class="text-amber-400 font-semibold mb-3 flex items-center gap-2">⚠️ 部分成功 <span class="count text-xs text-slate-500"></span></h2>
+        <div class="space-y-3 scroll" style="max-height:70vh;overflow:auto"></div>
+      </div>
+      <div class="bg-slate-800/60 rounded-xl p-3" data-col="failed">
+        <h2 class="text-rose-400 font-semibold mb-3 flex items-center gap-2">❌ 失败 <span class="count text-xs text-slate-500"></span></h2>
+        <div class="space-y-3 scroll" style="max-height:70vh;overflow:auto"></div>
+      </div>
+      <div class="bg-slate-800/60 rounded-xl p-3" data-col="empty">
+        <h2 class="text-slate-400 font-semibold mb-3 flex items-center gap-2">∅ 空 <span class="count text-xs text-slate-500"></span></h2>
+        <div class="space-y-3 scroll" style="max-height:70vh;overflow:auto"></div>
+      </div>
+    </div>
+
+    <p id="empty-hint" class="hidden text-center text-slate-500 mt-10">暂无运行记录。编排任务跑过后，trace 会自动落盘到 <code>src/_traces/</code>，刷新即可看到。</p>
+  </div>
+
+  <script>
+    const COLS = { success: "成功", partial: "部分成功", failed: "失败", empty: "空" };
+
+    function esc(s) {
+      if (s === null || s === undefined) return "";
+      return String(s).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+    }
+    function trunc(s, n=80){ s = esc(s); return s.length > n ? s.slice(0,n)+"…" : s; }
+
+    function stepRow(st) {
+      const color = st.ok ? "text-emerald-400" : "text-rose-400";
+      const mark = st.ok ? "✓" : "✗";
+      const err = (!st.ok && st.error) ? `<div class="text-[11px] text-rose-300/80 mt-1 break-all">${trunc(st.error,160)}</div>` : "";
+      const lat = (st.latency_ms!=null) ? `<span class="text-[11px] text-slate-500 ml-2">${st.latency_ms}ms</span>` : "";
+      return `<div class="text-[12px] ${color}">${mark} <span class="text-slate-300">${esc(st.capability||"?")}</span> <span class="text-slate-500">@${esc(st.engine||"-")}</span>${lat}${err}</div>`;
+    }
+
+    function card(run) {
+      const badge = run.ok ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300";
+      const stepsHtml = run.steps.map(stepRow).join("");
+      return `<div class="card bg-slate-900/80 rounded-lg p-3 border border-slate-700/60 cursor-pointer" data-run="${esc(run.run_id)}">
+        <div class="flex items-start justify-between gap-2">
+          <div class="text-sm font-medium text-white leading-snug">${trunc(run.goal||"(无目标)",70)}</div>
+          <span class="text-[10px] px-2 py-0.5 rounded ${badge} whitespace-nowrap">${run.ok?"OK":"FAIL"}</span>
+        </div>
+        <div class="text-[11px] text-slate-400 mt-2 flex gap-3">
+          <span>✔ ${run.ok_steps}/${run.step_count} 步</span>
+          <span>⏱ ${run.total_latency_ms}ms</span>
+        </div>
+        <div class="text-[10px] text-slate-600 mt-1">${esc(run.ts||"")}</div>
+        <div class="steps hidden mt-2 pt-2 border-t border-slate-700/50 space-y-1">${stepsHtml}</div>
+      </div>`;
+    }
+
+    async function load() {
+      const board = document.getElementById("board");
+      const cols = {};
+      document.querySelectorAll("#board [data-col]").forEach(c => { cols[c.dataset.col] = c.querySelector("div"); cols[c.dataset.col].innerHTML=""; });
+      const summ = document.getElementById("summary");
+      summ.innerHTML = "";
+      try {
+        const r = await fetch("/api/kanban/runs");
+        const data = await r.json();
+        const items = data.items || [];
+        const counts = { success:0, partial:0, failed:0, empty:0 };
+        items.forEach(it => { counts[it.status] = (counts[it.status]||0)+1; cols[it.status] && cols[it.status].insertAdjacentHTML("beforeend", card(it)); });
+        document.getElementById("empty-hint").classList.toggle("hidden", items.length>0);
+        Object.keys(COLS).forEach(k => {
+          const col = document.querySelector(`#board [data-col="${k}"]`);
+          col.querySelector(".count").textContent = counts[k] || 0;
+        });
+        summ.innerHTML = [
+          ["总运行", items.length, "text-sky-300"],
+          ["成功", counts.success, "text-emerald-300"],
+          ["部分", counts.partial, "text-amber-300"],
+          ["失败", counts.failed, "text-rose-300"],
+        ].map(([l,v,c]) => `<div class="bg-slate-800/60 rounded-xl py-3"><div class="text-2xl font-bold ${c}">${v}</div><div class="text-xs text-slate-400">${l}</div></div>`).join("");
+      } catch (e) {
+        summ.innerHTML = `<div class="col-span-4 text-rose-400 text-sm">加载失败：${esc(e.message)}</div>`;
+      }
+    }
+
+    document.getElementById("board").addEventListener("click", e => {
+      const cardEl = e.target.closest(".card");
+      if (cardEl) cardEl.querySelector(".steps").classList.toggle("hidden");
+    });
+    document.getElementById("refresh").addEventListener("click", load);
+    load();
+  </script>
+</body>
+</html>

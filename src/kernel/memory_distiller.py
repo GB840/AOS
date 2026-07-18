@@ -28,6 +28,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
@@ -53,6 +54,9 @@ class DistilledMemory:
     confidence: float      # 0..1，按样本数三级（低<2 / 中2-4 / 高>=5）
     metadata: Dict[str, Any] = field(default_factory=dict)
     ts: str = ""
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)  # 稳定 id（理念8 可干预记忆基础）
+    scope: str = "global"            # global | user | project（任务②：项目级记忆维度）
+    project_id: Optional[str] = None
 
     def to_record(self) -> Dict[str, Any]:
         d = asdict(self)
