@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,8 @@ from typing import Any, Dict, List, Optional
 from ..interfaces import AgentRuntime
 from ..kernel import AOSKernel
 from ..types import AgentInstance, AgentSpec, AgentStatus, Response
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_async_run(coro):
@@ -64,6 +67,14 @@ class MemoryManager(ABC):
     def clear(self) -> None:
         ...
 
+    @abstractmethod
+    def keys(self) -> List[str]:
+        """返回所有记忆键（用于按 agent 命名空间精确清理）。"""
+
+    @abstractmethod
+    def remove(self, key: str) -> None:
+        """删除单个记忆键，不触碰其他 agent 的记忆。"""
+
 
 class InMemoryMemoryManager(MemoryManager):
     """进程内字典记忆后端（零依赖，默认值）。
@@ -93,6 +104,12 @@ class InMemoryMemoryManager(MemoryManager):
 
     def clear(self) -> None:
         self._store.clear()
+
+    def keys(self) -> List[str]:
+        return list(self._store.keys())
+
+    def remove(self, key: str) -> None:
+        self._store.pop(key, None)
 
 
 class FileMemoryManager(MemoryManager):
@@ -164,6 +181,25 @@ class FileMemoryManager(MemoryManager):
         except OSError:
             pass
 
+    def keys(self) -> List[str]:
+        return list(self._store.keys())
+
+    def remove(self, key: str) -> None:
+        if key in self._store:
+            del self._store[key]
+            self._rewrite()
+
+    def _rewrite(self) -> None:
+        import json
+        import os
+        try:
+            with open(self._filepath, "w", encoding="utf-8") as f:
+                for k, v in self._store.items():
+                    f.write(json.dumps({"k": k, "v": v}, ensure_ascii=False,
+                                       default=str) + "\n")
+        except OSError:
+            pass
+
 
 # ─── 工作流步骤 ─────────────────────────────────────────────────
 
@@ -230,14 +266,19 @@ class AgentRuntimeLayer:
 
     def stop_agent(self, agent_id: str) -> None:
         self._kernel.stop_agent(agent_id)
-        # 清理该 agent 的记忆
-        keys_to_remove = [k for k in self.memory if hasattr(self.memory, '_store')
-                          and f"{agent_id}:" in str(k)]
-        for k in keys_to_remove:
-            try:
-                self.memory.clear()  # 简易版: 全清（可优化为按 agent 隔离的命名空间）
-            except Exception:
-                pass
+        # 仅清理该 agent 命名空间下的记忆（键形如 "agent_id:..."）。
+        # 旧实现循环调用 self.memory.clear() 会把所有 agent 的全局记忆一并清空，
+        # 此处改为按键精确删除（理念：故障隔离——停一个 agent 不影响其他）。
+        prefix = f"{agent_id}:"
+        removed = 0
+        for k in self.memory.keys():
+            if prefix in str(k):
+                try:
+                    self.memory.remove(k)
+                    removed += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("清理 agent %s 记忆键 %s 失败: %s", agent_id, k, exc)
+        logger.info("stop_agent 清理记忆键 %d 个（agent=%s）", removed, agent_id)
 
     # ── 工作流编排（真并发） ──
     def run_workflow(self, steps: List[WorkflowStep],

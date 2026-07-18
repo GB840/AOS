@@ -18,6 +18,9 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 import re
 import threading
 import time
@@ -355,6 +358,10 @@ class PolicyEngine:
         PolicyRule("r007", "允许技能调用", "call:*", [], "allow", priority=10),
         PolicyRule("r008", "允许memory读写", "memory:*", [], "allow", priority=10),
         PolicyRule("r009", "admin完全权限", "*", ["admin"], "allow", priority=1000),
+        # 可信系统自主体（autopilot / workflow_runner 派发边界使用 actor="system"）
+        # 允许执行命令；非 system 主体的 system:shell 仍被 r003 拒绝——策略引擎
+        # 由此对不可信体真正具有约束力（关闭诚实性破口）。
+        PolicyRule("r010", "系统自主体允许执行命令", "system:shell", ["system"], "allow", priority=200),
     ]
 
     def __init__(self, custom_rules: List[PolicyRule] | None = None):
@@ -422,6 +429,72 @@ class PolicyEngine:
     def rules(self) -> List[PolicyRule]:
         with self._lock:
             return list(self._rules)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 策略网关 — 把 PolicyEngine 接到真实派发边界（理念6 诚实：让禁令有约束力）
+# ═══════════════════════════════════════════════════════════════════
+
+# 能力 → 策略动作 映射：内部可信派发统一经此校验。
+# 真实网络动作映射为 call:*（默认允许），不映射为 http:request
+# （r005 对 http:request 的全局拒绝保留给不可信/外部体使用）。
+CAPABILITY_POLICY_ACTION = {
+    "web.search": "call:web.search",
+    "action.code_exec": "system:shell",
+    "inference.llm": "call:inference.llm",
+    "cognition.reasoning": "call:cognition.reasoning",
+    "cognition.planning": "call:cognition.planning",
+    "memory.semantic": "memory:read",
+    "memory.write": "memory:write",
+}
+
+_POLICY_ENGINE: "PolicyEngine | None" = None
+
+
+def get_policy_engine() -> "PolicyEngine":
+    """进程内单例 PolicyEngine。"""
+    global _POLICY_ENGINE
+    if _POLICY_ENGINE is None:
+        _POLICY_ENGINE = PolicyEngine()
+    return _POLICY_ENGINE
+
+
+def policy_enforce_enabled() -> bool:
+    """是否进入硬阻断模式。默认审计模式（仅记录+告警），避免误伤自主智能体
+    的合法 code_exec。设环境变量 AOS_POLICY_ENFORCE=1 时命中 deny 规则即真阻断。"""
+    import os
+    return os.environ.get("AOS_POLICY_ENFORCE", "0") == "1"
+
+
+def check_action(action: str, actor: str = "system", resource: str = "",
+                 *, enforce: bool | None = None) -> Dict[str, Any]:
+    """在派发边界评估一个动作的合规性，并记审计日志。
+
+    默认审计模式：始终返回 verdict 并记日志，但**不**阻断（保持系统运行不破）。
+    设 enforce=True 或环境变量 AOS_POLICY_ENFORCE=1 时，命中 deny 规则则阻断，
+    caller 应据此拒绝执行——此时策略引擎真正具有约束力。
+    """
+    pe = get_policy_engine()
+    verdict = pe.evaluate(action, actor, resource)
+    block = enforce if enforce is not None else policy_enforce_enabled()
+    if not verdict["allowed"]:
+        logger.warning(
+            "POLICY %s actor=%s action=%s rule=%s reason=%s rate_limited=%s",
+            "BLOCK" if block else "AUDIT-DENY",
+            actor, action, verdict["matched_rule"], verdict["reason"],
+            verdict.get("rate_limited"),
+        )
+    else:
+        logger.debug("POLICY ALLOW actor=%s action=%s rule=%s",
+                     actor, action, verdict["matched_rule"])
+    return verdict
+
+
+def check_capability(capability: str, actor: str = "system",
+                    resource: str = "", *, enforce: bool | None = None) -> Dict[str, Any]:
+    """把派发能力翻译成策略动作后校验（autopilot / workflow_runner 派发边界用）。"""
+    action = CAPABILITY_POLICY_ACTION.get(capability, f"call:{capability}")
+    return check_action(action, actor=actor, resource=resource, enforce=enforce)
 
 
 # ═══════════════════════════════════════════════════════════════════

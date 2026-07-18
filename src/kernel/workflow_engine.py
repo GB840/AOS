@@ -795,15 +795,53 @@ class WorkflowEngine:
                 uniq.append(a)
         return uniq
 
+    @staticmethod
+    def _get_publisher_registry() -> Dict[str, Any]:
+        """返回已配置的真实平台发布器（目前为空，待接入各平台 SDK）。
+
+        设计：留好扩展点——未来各平台发布器在此注册即可被 phase5 自动调用，
+        在此之前 phase5 会如实报告 unavailable 而非假装发布成功。
+        """
+        return dict(getattr(WorkflowEngine, "_PUBLISHERS", {}) or {})
+
     def phase5_publish(self, platforms: List[str] | None = None) -> Dict[str, Any]:
-        """Phase 5: 审核通过后发布到各平台。"""
+        """Phase 5: 审核通过后发布到各平台。
+
+        诚实实现（理念6）：绝不伪造「已发布」。仅当本阶段确有产物、且配置中存在
+        真实可用的发布器时才尝试对接；否则如实标记 skipped / unavailable / error，
+        不以内置 pending 掩盖未实现（旧版即如此——API 对接本就是后续迭代）。
+        """
         if not self.state.approved:
             return {"error": "未通过审核，不能发布"}
 
+        artifacts = self._detect_artifacts(self.state.execution_result or {})
+        if not artifacts:
+            self.state.publish_results = {
+                "status": "skipped",
+                "reason": "no_artifacts",
+                "detail": "Phase4 未产出可发布文件，跳过发布",
+            }
+            self.state.current_phase = 5
+            self.save()
+            return self.state.publish_results
+
         platforms = platforms or ["bilibili", "douyin", "xiaohongshu"]
-        results = {}
+        registry = self._get_publisher_registry()
+        results: Dict[str, Any] = {}
         for p in platforms:
-            results[p] = {"status": "pending", "note": f"发布到 {p}（API 对接后续迭代）"}
+            pub = registry.get(p) if registry else None
+            if pub is None:
+                results[p] = {
+                    "status": "unavailable",
+                    "reason": "no_publisher_configured",
+                    "detail": f"{p} 未配置发布器（需在 .env/配置中接入真实平台 SDK）",
+                }
+            else:
+                try:
+                    out = pub.publish(artifacts)
+                    results[p] = {"status": "published", "detail": out}
+                except Exception as e:  # noqa: BLE001
+                    results[p] = {"status": "error", "reason": str(e)}
         self.state.publish_results = results
         self.state.current_phase = 5
         self.save()

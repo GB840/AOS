@@ -836,14 +836,18 @@ def mount_product_flywheel(app):
     app.include_router(pulse_router)
     app.include_router(evolve_router)
     app.include_router(approvals_router)
-    logger.info("产品飞轮 API 已挂载: /api/studio, /api/hub, /api/pulse, /api/evolve, /api/approvals")
+    logger.info("产品飞轮 API 已挂载: /api/studio, /api/hub, /api/pulse, /api/evolve, /api/proposals")
 
 
 # ═══════════════════════════════════════════
 #  HITL —— 人机协作审批（/api/approvals）
 # ═══════════════════════════════════════════
 
-approvals_router = APIRouter(prefix="/api/approvals", tags=["approvals"])
+# 注意：规范的、持久化、可审计的审批 API 在 api/approval_api.py（/api/approvals，
+# 单一真相：所有 Evolve 提案 / WorkflowRunner 步骤 / Autopilot 操作的审批统一走它）。
+# 本 router 仅服务「产品飞轮」的 evolve 提案审批 UI，故使用独立命名空间 /api/proposals，
+# 避免与 /api/approvals 撞车导致规范实现被遮蔽（双轨债 ④）。
+approvals_router = APIRouter(prefix="/api/proposals", tags=["proposals"])
 
 
 @approvals_router.get("")
@@ -913,7 +917,7 @@ _APPROVAL_PANEL_HTML = """<!DOCTYPE html>
 <div id="list">加载中…</div>
 <script>
 async function load(){
-  const r = await fetch('/api/approvals');
+  const r = await fetch('/api/proposals');
   const j = await r.json();
   const el = document.getElementById('list');
   if(!j.ok || !j.pending.length){ el.innerHTML = '<p>暂无待审提案 ✓</p>'; return; }
@@ -928,7 +932,7 @@ async function load(){
     </div>`).join('');
 }
 async function act(id, op){
-  await fetch('/api/approvals/'+id+'/'+op, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  await fetch('/api/proposals/'+id+'/'+op, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
   load();
 }
 load();

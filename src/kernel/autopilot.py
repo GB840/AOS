@@ -31,6 +31,7 @@ from core.fabric.adapters.ag2_adapter import _dedup_text
 from kernel.run_state_store import (
     create_run, save_checkpoint, load_checkpoint, mark_done,
 )
+from kernel.compliance import check_capability, policy_enforce_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +404,16 @@ def _ensure_parent_dirs(code: str) -> None:
 def _route(capability: str, payload: Dict[str, Any]) -> Any:
     """把 OrchestrationChiplet 的能力调用派发给真实适配器。"""
     from core.fabric.adapter import InvokeRequest
+
+    # 派发边界策略校验（理念6 诚实：让 PolicyEngine 在真实路径上具有约束力）。
+    # 默认审计模式仅记录；设 AOS_POLICY_ENFORCE=1 时命中 deny 规则即阻断，
+    # 不会误伤可信 system 体的合法 code_exec（r010 已放行）。
+    verdict = check_capability(capability, actor="system")
+    if not verdict["allowed"] and policy_enforce_enabled():
+        return InvokeResult(
+            ok=False,
+            error=f"autopilot: 策略拒绝 {capability}（{verdict['matched_rule']}：{verdict['reason']}）",
+        )
 
     if capability == "web.search":
         ad = _get_search()

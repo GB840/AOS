@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .workflow_models import WorkflowRun
 from .workflow_store import WorkflowStore, get_workflow_store
+from kernel.compliance import check_capability, policy_enforce_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,12 @@ class WorkflowRunner:
 
             try:
                 if self._route_fn:
+                    # 派发边界策略校验（理念6 诚实：策略引擎在真实路径上生效）。
+                    # 默认审计模式仅记录；AOS_POLICY_ENFORCE=1 时命中 deny 即阻断。
+                    verdict = check_capability(cap, actor="system")
+                    if not verdict["allowed"] and policy_enforce_enabled():
+                        raise RuntimeError(
+                            f"策略拒绝 {cap}（{verdict['matched_rule']}：{verdict['reason']}）")
                     res = self._route_fn(cap, payload)
                     if hasattr(res, "ok") and res.ok:
                         step_result["ok"] = True
