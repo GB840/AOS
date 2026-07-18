@@ -62,6 +62,7 @@ class GenerationResult:
     tokens_used: Dict[str, int]
     quality_score: float = 0.0
     revised: bool = False
+    simulated: bool = False  # True 表示 _call_model 未真实调用模型，返了模拟输出（调用方需识别）
 
 
 @dataclass
@@ -218,6 +219,7 @@ class AgentCARD:
                 cost_usd=result.get("cost", 0.0),
                 tokens_used=result.get("tokens", {}),
                 quality_score=0.0,
+                simulated=result.get("simulated", False),
             )
         except Exception as e:
             logger.warning(f"初稿生成失败: {e}")
@@ -228,6 +230,7 @@ class AgentCARD:
                 cost_usd=0.0,
                 tokens_used={},
                 quality_score=0.0,
+                simulated=True,  # 异常路径无真实输出
             )
 
     def review_draft(self, draft: GenerationResult, task: str) -> float:
@@ -289,6 +292,7 @@ class AgentCARD:
                 tokens_used=result.get("tokens", {}),
                 quality_score=0.9,
                 revised=True,
+                simulated=result.get("simulated", False),
             )
         except Exception as e:
             logger.warning(f"润色失败: {e}")
@@ -300,6 +304,7 @@ class AgentCARD:
                 tokens_used={},
                 quality_score=0.7,
                 revised=False,
+                simulated=True,  # 异常路径：保留 draft 内容但标记非真实润色
             )
 
     def execute_full_pipeline(self, task: str, task_level: str = "L3",
@@ -338,7 +343,13 @@ class AgentCARD:
 
     def _call_model(self, model: ModelConfig, prompt: str,
                     context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """调用指定模型"""
+        """调用指定模型。
+
+        返回 dict 含 `simulated` 标志：
+        - False：真实调用本地模型成功
+        - True：未真实调用（非 LOCAL 模型 / brain 不可用 / 本地调用 except），
+          content 是【模拟输出】前缀的占位文本，调用方必须识别此标志并按需处理
+        """
         estimated_input_tokens = len(prompt) // 4
         estimated_output_tokens = 1000
 
@@ -350,14 +361,23 @@ class AgentCARD:
                     "content": response,
                     "cost": 0.0,
                     "tokens": {"input": estimated_input_tokens, "output": len(response) // 4},
+                    "simulated": False,
                 }
             except Exception as e:
                 logger.warning("Local model call failed, falling back to simulation: %s", e)
 
+        # 模拟输出兜底：非 LOCAL 模型 / brain 不可用 / 本地调用 except 三种情形
+        # P2-1 修复：显式 simulated=True 标志 + warning 日志，避免调用方误信为真实输出
+        logger.warning(
+            "_call_model 返回模拟输出（model=%s, tier=%s, brain=%s）—— "
+            "content 为占位文本，非真实模型生成",
+            model.name, model.tier, bool(self.brain),
+        )
         return {
             "content": f"【模拟输出】使用{model.name}生成的内容\n\n基于任务: {prompt[:100]}...",
             "cost": model.estimate_cost(estimated_input_tokens, estimated_output_tokens),
             "tokens": {"input": estimated_input_tokens, "output": estimated_output_tokens},
+            "simulated": True,
         }
 
     def calculate_cost_saving(self, task_level: str) -> float:
