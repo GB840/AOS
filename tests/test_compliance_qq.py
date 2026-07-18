@@ -46,16 +46,16 @@ def test_compliance_layer_flags_qq():
     assert "qq_number" in rules
 
 
-def test_compliance_layer_detection_triggers_redaction_pipeline():
-    """含 QQ 的内容会触发脱敏管线（redacted 非空）。
+def test_compliance_layer_redacts_qq():
+    """QQ 号应被 _redact 真实遮罩（检测到即脱敏，与 phone 一致）。
 
-    注：当前 _redact 替换表只覆盖 phone/id_card/bank_card/email/api_key，
-    QQ 号虽被"检测"但未单独遮罩——这是现有实现的不一致点（已反馈待修），
-    本测试只验证"检测到敏感信息 → redacted 字段被填充"的管线连通性。
+    修复前 _redact 替换表缺 qq_number 规则，QQ 虽被检测却不遮罩（不一致点，
+    已在 src/kernel/compliance.py _redact 补 qq_number 规则修正）。
     """
     guard = ContentGuard(mode="audit")
     res = guard.check("联系方式 QQ 123456789")
-    assert res["redacted"] is not None          # 检测到敏感信息，脱敏管线已触发
+    assert res["redacted"] is not None          # 脱敏管线已触发
+    assert "123456789" not in res["redacted"]   # QQ 号已被遮盖
     rules = {f["rule"] for f in res["findings"]}
     assert "qq_number" in rules
 

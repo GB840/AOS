@@ -293,6 +293,7 @@ class ContentGuard:
             "bank_card":    lambda m: m.group()[:6] + "****" + m.group()[-4:],
             "email":        lambda m: m.group()[0] + "***@" + m.group().split("@")[-1],
             "api_key_bearer": lambda m: m.group()[:8] + "..." + m.group()[-4:],
+            "qq_number":    lambda m: m.group()[:3] + "****" + m.group()[-2:],
         }
         for name, pattern in self._sensitive.items():
             if name in replacements:
