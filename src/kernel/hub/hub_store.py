@@ -7,6 +7,7 @@ Hub 里的"智能体" = 公开的工作流模板。
 - 复用工作流系统：Hub 里的智能体就是公开的工作流模板
 - 轻量起步：先有基本的列表/详情/搜索/使用
 - 数据驱动：使用量、评分、评论都从真实使用中来
+- 闭环上报：使用/评价数据同步进 Pulse，供 Evolve 优化用
 """
 from __future__ import annotations
 
@@ -40,13 +41,26 @@ def _stats_path() -> str:
     return os.path.join(_hub_dir(), "stats.json")
 
 
+def _default_pulse():
+    """懒加载 PulseCollector（避免循环 import）。"""
+    try:
+        from kernel.pulse.pulse_collector import get_pulse_collector
+        return get_pulse_collector()
+    except Exception:
+        return None
+
+
 class HubStore:
     """智能体商店存储。"""
 
-    def __init__(self, wf_store: WorkflowStore = None):
+    def __init__(self, wf_store: WorkflowStore = None, pulse=None):
         self._wf_store = wf_store or get_workflow_store()
+        self._pulse = pulse or _default_pulse()
         self._reviews = self._load_reviews()
         self._stats = self._load_stats()
+
+    def set_pulse(self, pulse) -> None:
+        self._pulse = pulse
 
     # ── 列表 / 搜索 ──
 
@@ -129,12 +143,15 @@ class HubStore:
         try:
             run = runner.run(agent_id, input_data=input_data)
 
-            # 更新使用统计
+            # 更新使用统计（Hub 本地统计，用于排序）
             stats = self._stats.get(agent_id, {"use_count": 0})
             stats["use_count"] = stats.get("use_count", 0) + 1
             stats["last_used"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             self._stats[agent_id] = stats
             self._save_stats()
+
+            # 上报到 Pulse（通过 WorkflowRunner 已经上报了运行数据，这里补充 Hub 维度的使用统计）
+            self._report_hub_usage(agent_id, run)
 
             return {
                 "run_id": run.id,
@@ -167,6 +184,10 @@ class HubStore:
             self._reviews[agent_id] = []
         self._reviews[agent_id].append(review)
         self._save_reviews()
+
+        # 上报用户反馈到 Pulse（供 Evolve 做用户满意度分析）
+        self._report_feedback(agent_id, rating, comment)
+
         return True
 
     def get_reviews(self, agent_id: str, limit: int = 20) -> List[Dict[str, Any]]:
@@ -213,6 +234,43 @@ class HubStore:
             {"category": cat, "count": count}
             for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True)
         ]
+
+    # ── Pulse 上报 ──
+
+    def _report_hub_usage(self, agent_id: str, run) -> None:
+        """上报 Hub 使用数据到 Pulse。"""
+        if not self._pulse:
+            return
+        try:
+            # 运行数据 WorkflowRunner 已经上报了，这里补充 Hub 维度
+            # （Pulse 的 record_run 是幂等可重复调用的，只是累加计数）
+            self._pulse.record_run(agent_id, {
+                "source": "hub",
+                "use_count_hub": self._stats.get(agent_id, {}).get("use_count", 0),
+            })
+        except Exception as e:
+            logger.debug("Hub 使用上报 Pulse 失败: %s", e)
+
+    def _report_feedback(self, agent_id: str, rating: int, comment: str) -> None:
+        """上报用户评价到 Pulse。"""
+        if not self._pulse:
+            return
+        try:
+            # Pulse 如果有 record_feedback 就用，没有就存到事件里
+            if hasattr(self._pulse, "record_feedback"):
+                self._pulse.record_feedback(agent_id, {
+                    "rating": rating,
+                    "comment": comment,
+                })
+            else:
+                # 兜底：用 record_run 附带反馈数据
+                self._pulse.record_run(agent_id, {
+                    "type": "feedback",
+                    "rating": rating,
+                    "comment": comment,
+                })
+        except Exception as e:
+            logger.debug("反馈上报 Pulse 失败: %s", e)
 
     # ── 内部方法 ──
 

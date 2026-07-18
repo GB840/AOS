@@ -270,6 +270,20 @@ class ContentFlywheel:
         except Exception as e:
             logger.debug("Pulse 上报失败: %s", e)
 
+        # 内容飞轮自动反哺（双飞轮互相增强·内容侧闭环）：
+        # Echo 反馈已进 Pulse → Evolve 读反馈生成低风险提案 → 自动写回 ContentStrategyStore
+        # （中高风险进 /api/approvals 人工审批，不在此自动应用）
+        try:
+            from kernel.evolve.evolve_engine import get_evolve_engine
+            from kernel.plugins.content_strategy import get_content_strategy
+            evolve = get_evolve_engine()
+            strategy = get_content_strategy()
+            applied = evolve.auto_apply_content_proposals(self.topic, strategy)
+            if applied:
+                logger.info("内容飞轮自动反哺：应用 %d 条内容优化提案到策略存储", len(applied))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("内容飞轮自动反哺跳过: %s", e)
+
         logger.info("飞轮第 %d 轮结束: %s (%d/%d 阶段成功)",
                     cycle_num, cycle.status, ok_count, total)
 

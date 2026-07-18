@@ -286,6 +286,25 @@ class WorkflowStore:
         except Exception:
             return []
 
+    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """按 run_id 取一条运行记录（用于回放调试 / what-if 分析）。
+
+        扫描所有工作流的 runs 目录；run_id 全局唯一（uuid），命中即返回。
+        """
+        try:
+            base = self._base_dir
+            for wf_id in os.listdir(base):
+                runs_dir = os.path.join(base, wf_id, "runs")
+                if not os.path.isdir(runs_dir):
+                    continue
+                path = os.path.join(runs_dir, f"{run_id}.json")
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as fp:
+                        return json.load(fp)
+        except Exception:
+            return None
+        return None
+
     # ── 内部方法 ──
 
     def _save_workflow_file(self, wf: Workflow) -> None:

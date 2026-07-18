@@ -404,6 +404,122 @@ class AutoSkillEngine:
             logger.debug("注册技能失败: %s", e)
             return False
 
+    # ── FabricHub 集成 ──
+
+    def register_with_fabric_hub(self, hub) -> bool:
+        """把 AutoSkill 注册成 FabricHub 的能力缺失钩子。
+
+        当 FabricHub 找不到某个能力的 provider 时，会触发 AutoSkill 自动去
+        SkillHub 搜索并安装相关技能，实现「缺什么自动补什么」的闭环。
+
+        Args:
+            hub: FabricHub 实例
+
+        Returns:
+            True 表示注册成功
+        """
+        try:
+            # 用闭包捕获 hub 引用，这样钩子可以直接注册新适配器
+            def _hook(capability: str, payload: dict) -> bool:
+                return self._fabric_missing_capability_hook(hub, capability, payload)
+
+            hub.add_missing_capability_hook(_hook)
+            logger.info("AutoSkill 已注册为 FabricHub 能力缺失钩子")
+            return True
+        except Exception as e:
+            logger.warning("注册 AutoSkill 到 FabricHub 失败: %s", e)
+            return False
+
+    def _fabric_missing_capability_hook(self, hub, capability: str, payload: dict) -> bool:
+        """FabricHub 能力缺失钩子——缺能力时自动去 SkillHub 找技能并安装。
+
+        Args:
+            hub: FabricHub 实例（用于注册新适配器）
+            capability: 缺失的能力标识（如 "web.search"）
+            payload: 原始请求 payload
+
+        Returns:
+            True 表示成功补充了能力（可以重试路由），False 表示没找到
+        """
+        if not _AUTOSKILL_ENABLED:
+            return False
+
+        try:
+            logger.info("AutoSkill 钩子触发：能力缺失 %s，尝试自动发现技能", capability)
+
+            # 用能力名作为搜索关键词
+            search_query = f"{capability} skill"
+            candidates = self.discover_for_task(search_query)
+
+            if not candidates:
+                logger.info("AutoSkill 钩子：未找到相关技能 %s", capability)
+                return False
+
+            # 尝试安装第一个候选
+            first = candidates[0]
+            skill_id = first.get("id") or first.get("name")
+            if not skill_id:
+                return False
+
+            logger.info("AutoSkill 钩子：尝试安装技能 %s", skill_id)
+            result = self.install(skill_id)
+
+            if not result.get("ok"):
+                logger.warning("AutoSkill 钩子：技能安装失败 %s", result.get("error"))
+                return False
+
+            # 安装成功后，尝试注册到 FabricHub
+            installed = self._installed.get(skill_id)
+            if installed and self._try_register_with_fabric(hub, installed):
+                logger.info("AutoSkill 钩子：技能 %s 已注册到 FabricHub", skill_id)
+                return True
+
+            # 即使没注册成功，也返回 True —— 技能已经装好了，可能通过别的路径可用
+            logger.info("AutoSkill 钩子：技能 %s 已安装（未注册到 FabricHub）", skill_id)
+            return True
+
+        except Exception as e:
+            logger.warning("AutoSkill 钩子异常: %s", e)
+            return False
+
+    def _try_register_with_fabric(self, hub, installed: "InstalledSkill") -> bool:
+        """尝试把安装的技能注册为 FabricHub 的适配器。
+
+        检查技能是否提供了 fabric_adapter.py，如果有就动态加载并注册到 hub。
+        """
+        if not installed or not installed.install_path:
+            return False
+
+        try:
+            skill_path = Path(installed.install_path)
+            adapter_file = skill_path / "fabric_adapter.py"
+            if not adapter_file.is_file():
+                # 没有 fabric_adapter.py，不注册到 FabricHub
+                return False
+
+            # 动态加载适配器模块
+            import importlib.util
+            module_name = f"autoskill_{installed.id.replace('-', '_')}_adapter"
+            spec = importlib.util.spec_from_file_location(module_name, str(adapter_file))
+            if spec is None or spec.loader is None:
+                return False
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            # 找 register_adapter 函数，返回 BaseAgentAdapter 实例
+            if hasattr(module, "register_adapter") and callable(module.register_adapter):
+                adapter = module.register_adapter()
+                if adapter is not None:
+                    hub.register_adapter(adapter)
+                    logger.info("技能适配器已注册到 FabricHub: %s", installed.id)
+                    return True
+
+            return False
+        except Exception as e:
+            logger.debug("注册技能到 FabricHub 失败: %s", e)
+            return False
+
     # ── 持久化 ──
 
     def _load_installed(self) -> None:

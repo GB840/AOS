@@ -69,11 +69,16 @@ class EchoAdapter(BaseAgentAdapter):
 
     engine_id = "echo"
 
-    def __init__(self, route_fn=None) -> None:
+    def __init__(self, route_fn=None, pulse=None) -> None:
         self._route_fn = route_fn
+        self._pulse = pulse  # 可选：PulseCollector，用于上报内容反馈数据
 
     def set_route_fn(self, route_fn) -> None:
         self._route_fn = route_fn
+
+    def set_pulse(self, pulse) -> None:
+        """注入 PulseCollector（可选，不注入就不上报）。"""
+        self._pulse = pulse
 
     def advertise_capabilities(self) -> list:
         return ["content.feedback", "content.sentiment", "content.need_mining"]
@@ -111,6 +116,26 @@ class EchoAdapter(BaseAgentAdapter):
                 deep_analysis=deep_analysis,
                 use_llm=use_llm,
             )
+            # 可选：上报到 Pulse（内容飞轮数据 → Evolve 自动优化）
+            if self._pulse is not None and result.ok:
+                try:
+                    self._pulse.record_feedback(
+                        f"echo:{keyword}",
+                        {
+                            "type": "content_feedback",
+                            "keyword": keyword,
+                            "total_count": result.total_count,
+                            "positive_count": result.positive_count,
+                            "negative_count": result.negative_count,
+                            "neutral_count": result.neutral_count,
+                            "top_keywords": result.top_keywords,
+                            "needs": result.needs,
+                            "summary": result.summary,
+                            "task_id": result.task_id,
+                        }
+                    )
+                except Exception:  # noqa: BLE001 - Pulse 上报失败不影响主流程
+                    pass
             return InvokeResult(
                 ok=result.ok,
                 data={

@@ -43,11 +43,29 @@ class PulseCollector:
         self._metrics = self._load_metrics()
         self._buffer: List[Dict] = []
         self._max_buffer = 100
+        self._cost_tracker = None  # 懒加载，避免循环 import
+
+    def _get_cost_tracker(self):
+        """懒加载 CostTracker（避免循环 import）。"""
+        if self._cost_tracker is not None:
+            return self._cost_tracker
+        try:
+            from kernel.pulse.cost_tracker import get_cost_tracker
+            self._cost_tracker = get_cost_tracker()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("CostTracker 不可用: %s", e)
+            self._cost_tracker = False  # 标记不可用
+        return self._cost_tracker if self._cost_tracker is not False else None
 
     # ── 事件记录 ──
 
     def record_run(self, workflow_id: str, run_data: Dict[str, Any]) -> None:
-        """记录一次运行。"""
+        """记录一次运行。
+
+        如果 run_data 包含 token_usage 字段（dict），会自动转记到 CostTracker。
+        token_usage 字段格式：
+            {model, prompt_tokens, completion_tokens, user_id, agent_id, run_id, duration_ms}
+        """
         event = {
             "type": "workflow_run",
             "workflow_id": workflow_id,
@@ -56,6 +74,25 @@ class PulseCollector:
         }
         self._buffer.append(event)
         self._update_agent_metrics(workflow_id, run_data)
+
+        # Token 用量进 CostTracker
+        tu = run_data.get("token_usage")
+        if isinstance(tu, dict):
+            try:
+                tracker = self._get_cost_tracker()
+                if tracker is not None:
+                    tracker.record(
+                        workflow_id=workflow_id,
+                        user_id=tu.get("user_id", "anonymous"),
+                        agent_id=tu.get("agent_id", ""),
+                        model=tu.get("model", ""),
+                        prompt_tokens=int(tu.get("prompt_tokens", 0)),
+                        completion_tokens=int(tu.get("completion_tokens", 0)),
+                        duration_ms=float(tu.get("duration_ms", 0)),
+                        run_id=tu.get("run_id", run_data.get("run_id", "")),
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Token 用量记录失败: %s", e)
 
         if len(self._buffer) >= self._max_buffer:
             self._flush()
@@ -79,7 +116,7 @@ class PulseCollector:
             "type": "user_feedback",
             "workflow_id": workflow_id,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            **feedback,
+            "feedback": feedback,  # 嵌套保存，避免覆盖 type 等关键字段
         }
         self._buffer.append(event)
         self._flush()
@@ -126,6 +163,124 @@ class PulseCollector:
             "failure_reasons": dict(sorted(failure_reasons.items(), key=lambda x: x[1], reverse=True)[:10]),
         }
 
+    def get_feedbacks(self, *, feedback_type: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+        """获取反馈数据（含用户反馈、内容反馈等）。
+
+        从事件文件中读取所有 user_feedback 类型的事件，可选按类型过滤。
+
+        Args:
+            feedback_type: 反馈类型过滤（如 "content_feedback"），为空返回所有
+            limit: 最多返回条数
+
+        Returns:
+            反馈事件列表，按时间倒序
+        """
+        feedbacks = []
+        events_path = _events_path()
+
+        # 先读 buffer 里的（还没 flush 的）
+        for event in reversed(self._buffer):
+            if event.get("type") == "user_feedback":
+                fb = event.get("feedback", {})
+                if not feedback_type or fb.get("type") == feedback_type:
+                    feedbacks.append(event)
+                    if len(feedbacks) >= limit:
+                        return feedbacks
+
+        # 再读文件里的
+        if os.path.exists(events_path):
+            try:
+                with open(events_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                for line in reversed(lines):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        if event.get("type") == "user_feedback":
+                            fb = event.get("feedback", {})
+                            if not feedback_type or fb.get("type") == feedback_type:
+                                feedbacks.append(event)
+                                if len(feedbacks) >= limit:
+                                    break
+                    except json.JSONDecodeError:
+                        continue
+            except Exception as e:
+                logger.debug("读取反馈事件失败: %s", e)
+
+        return feedbacks[:limit]
+
+    # ── 成本可观测（Task 1: Cost Observability）──
+
+    def get_cost_breakdown(self, *, workflow_id: str = "", user_id: str = "",
+                           agent_id: str = "", since: str = "",
+                           until: str = "", limit: int = 10000) -> Dict[str, Any]:
+        """获取成本聚合（按 model/workflow/user/agent 维度）。"""
+        tracker = self._get_cost_tracker()
+        if tracker is None:
+            return {"ok": False, "error": "CostTracker 不可用"}
+        bd = tracker.get_breakdown(
+            workflow_id=workflow_id, user_id=user_id,
+            agent_id=agent_id, since=since, until=until, limit=limit,
+        )
+        return {
+            "ok": True,
+            "total_cost": bd.total_cost,
+            "total_tokens": bd.total_tokens,
+            "total_prompt_tokens": bd.total_prompt_tokens,
+            "total_completion_tokens": bd.total_completion_tokens,
+            "record_count": bd.record_count,
+            "by_model": bd.by_model,
+            "by_workflow": bd.by_workflow,
+            "by_user": bd.by_user,
+            "by_agent": bd.by_agent,
+        }
+
+    def get_cost_records(self, limit: int = 50,
+                         workflow_id: str = "") -> List[Dict[str, Any]]:
+        """获取最近 N 条成本事件。"""
+        tracker = self._get_cost_tracker()
+        if tracker is None:
+            return []
+        return tracker.get_recent_records(limit=limit, workflow_id=workflow_id)
+
+    def add_cost_alert(self, name: str, scope: str, scope_id: str,
+                       period: str, threshold_usd: float) -> Dict[str, Any]:
+        """添加一个成本告警。"""
+        tracker = self._get_cost_tracker()
+        if tracker is None:
+            return {"ok": False, "error": "CostTracker 不可用"}
+        from kernel.pulse.cost_tracker import CostAlert
+        alert = CostAlert(
+            name=name, scope=scope, scope_id=scope_id,
+            period=period, threshold_usd=threshold_usd,
+        )
+        tracker.add_alert(alert)
+        return {"ok": True, "alert_id": alert.id}
+
+    def list_cost_alerts(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """列出所有成本告警。"""
+        tracker = self._get_cost_tracker()
+        if tracker is None:
+            return []
+        from dataclasses import asdict
+        return [asdict(a) for a in tracker.list_alerts(enabled_only=enabled_only)]
+
+    def delete_cost_alert(self, alert_id: str) -> bool:
+        """删除一个成本告警。"""
+        tracker = self._get_cost_tracker()
+        if tracker is None:
+            return False
+        return tracker.delete_alert(alert_id)
+
+    def check_cost_alerts(self) -> List[Dict[str, Any]]:
+        """主动检查所有成本告警。"""
+        tracker = self._get_cost_tracker()
+        if tracker is None:
+            return []
+        return tracker.check_alerts()
+
     # ── 内部方法 ──
 
     def _update_agent_metrics(self, workflow_id: str, run_data: Dict) -> None:
@@ -138,6 +293,8 @@ class PulseCollector:
             "total_duration": 0.0,
             "step_stats": {},
             "last_run": "",
+            "total_tokens": 0,
+            "total_cost_usd": 0.0,
         })
 
         m["total_runs"] += 1
@@ -154,6 +311,23 @@ class PulseCollector:
         m["total_duration"] += duration
         m["avg_duration"] = round(m["total_duration"] / total, 2) if total > 0 else 0
         m["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+        # Token 成本累计
+        tu = run_data.get("token_usage")
+        if isinstance(tu, dict):
+            m["total_tokens"] = m.get("total_tokens", 0) + \
+                int(tu.get("prompt_tokens", 0)) + int(tu.get("completion_tokens", 0))
+            cost = 0.0
+            try:
+                from kernel.pulse.cost_tracker import estimate_cost
+                cost = estimate_cost(
+                    int(tu.get("prompt_tokens", 0)),
+                    int(tu.get("completion_tokens", 0)),
+                    tu.get("model", ""),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            m["total_cost_usd"] = round(m.get("total_cost_usd", 0.0) + cost, 6)
 
         self._metrics[workflow_id] = m
         self._save_metrics()

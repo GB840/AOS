@@ -29,6 +29,7 @@ class WorkflowStep:
     payload: Dict[str, Any] = field(default_factory=dict)  # 固定参数
     timeout: int = 120  # 超时时间（秒）
     retry: int = 0  # 重试次数
+    max_tokens: int = 0  # LLM 步骤的 token 上限（0=不限；Task 1: Cost Observability）
     description: str = ""
 
     def to_chiplet_step(self) -> Dict[str, Any]:
@@ -43,6 +44,10 @@ class WorkflowStep:
             step["payload"] = self.payload
         if self.name:
             step["name"] = self.name
+        # Cost Observability: max_tokens > 0 时传给 LLM 步骤的 payload
+        if self.max_tokens > 0:
+            step.setdefault("payload", {})
+            step["payload"]["max_tokens"] = self.max_tokens
         return step
 
 

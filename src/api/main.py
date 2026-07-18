@@ -162,6 +162,14 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.warning("AutoSkill API 挂载失败: %s", e)
 
+# Context Engineering API（Task 2）
+try:
+    from api.context_api import mount_context_api
+    mount_context_api(app)
+    logger.info("Context Engineering API 已挂载: /api/context")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Context Engineering API 挂载失败: %s", e)
+
 # 产品飞轮前端页面（/studio/）
 try:
     from fastapi.staticfiles import StaticFiles
@@ -366,6 +374,30 @@ async def startup_event():
         app.state.kernel = None
         app.state.bridge = None
         logger.warning("v1.0 kernel mount skipped: %s", e)
+
+    # AutoSkill 注册为 FabricHub 能力缺失钩子——缺什么技能自动去 SkillHub 找并安装
+    # best-effort，失败不阻断启动；AutoSkill 不可用时 FabricHub 照常工作
+    try:
+        hub = await _get_fabric_hub()
+        from skills.autoskill_engine import get_autoskill_engine
+        autoskill = get_autoskill_engine()
+        autoskill.register_with_fabric_hub(hub)
+        logger.info("AutoSkill 已注册为 FabricHub 能力缺失钩子")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AutoSkill-FabricHub 注册跳过: %s", e)
+
+    # Echo 适配器注入 Pulse——内容飞轮采集的数据自动进 Pulse
+    # 这样 Evolve 就能直接从 Pulse 读内容反馈做分析和优化提案
+    try:
+        hub = await _get_fabric_hub()
+        echo_adapter = hub._registry._adapters.get("echo")
+        if echo_adapter is not None and hasattr(echo_adapter, "set_pulse"):
+            from kernel.pulse.pulse_collector import get_pulse_collector
+            pulse = get_pulse_collector()
+            echo_adapter.set_pulse(pulse)
+            logger.info("Echo 适配器已注入 Pulse（内容飞轮数据闭环）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Echo Pulse 注入跳过: %s", e)
 
     # 统一网关上游可达性探测（仅日志，不阻断启动）
     try:
@@ -2198,11 +2230,15 @@ _fabric_hub_cache = None
 
 
 async def _get_fabric_hub():
-    """懒加载并缓存 FabricHub 单例（与 mcp/protocol._get_hub 同构，独立实例）。"""
+    """懒加载并缓存 FabricHub 单例——全局唯一实例，由 fabric_hub.get_fabric_hub() 管理。
+
+    所有模块（API / Studio / Hub / Evolve / AutoSkill / MCP）共享同一个实例，
+    确保能力路由、健康状态、记忆门面全链路一致。
+    """
     global _fabric_hub_cache
     if _fabric_hub_cache is None:
-        from kernel.plugins.fabric_hub import FabricHub
-        _fabric_hub_cache = await asyncio.to_thread(FabricHub)
+        from kernel.plugins.fabric_hub import get_fabric_hub
+        _fabric_hub_cache = await asyncio.to_thread(get_fabric_hub)
     return _fabric_hub_cache
 
 
