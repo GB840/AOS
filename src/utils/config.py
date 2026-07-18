@@ -59,8 +59,8 @@ class Config(BaseSettings):
     # ===== 团队级认证 (OAuth2/JWT, RS256 非对称) —— 与 API-Key 并存 =====
     # 私钥签名 / 公钥验签；密钥经 utils.keystore 解析 (env -> .secrets/jwt -> 开发期自动生成)。
     # 不再使用 HS256 对称密钥（已知密钥可离线伪造令牌）。
-    AUTH_JWT_PRIVATE_KEY: Optional[str] = Field(default=None, env="AOS_JWT_PRIVATE_KEY")
-    AUTH_JWT_PUBLIC_KEY: Optional[str] = Field(default=None, env="AOS_JWT_PUBLIC_KEY")
+    AUTH_JWT_PRIVATE_KEY: Optional[str] = Field(default=None, validation_alias=AliasChoices("AOS_JWT_PRIVATE_KEY", "AUTH_JWT_PRIVATE_KEY"))
+    AUTH_JWT_PUBLIC_KEY: Optional[str] = Field(default=None, validation_alias=AliasChoices("AOS_JWT_PUBLIC_KEY", "AUTH_JWT_PUBLIC_KEY"))
     AUTH_JWT_ALGORITHM: str = "RS256"
     AUTH_JWT_EXPIRE_MINUTES: int = 480  # 8h
     # 安全加固：移除admin用户默认值 
@@ -93,15 +93,14 @@ class Config(BaseSettings):
     )
 
     # ===== 状态后端 (团队级可插拔 seam: sqlite(个人) -> postgres(团队/公司)) =====
-    STATE_BACKEND: str = Field(default="sqlite", env="AOS_STATE_BACKEND")  # sqlite | postgres
-    POSTGRES_HOST: str = Field(default="localhost", env="AOS_POSTGRES_HOST")
-    POSTGRES_PORT: int = Field(default=5432, env="AOS_POSTGRES_PORT")
-    POSTGRES_USER: str = Field(default="aos", env="AOS_POSTGRES_USER")
+    STATE_BACKEND: str = Field(default="sqlite", validation_alias=AliasChoices("AOS_STATE_BACKEND", "STATE_BACKEND"))  # sqlite | postgres
+    POSTGRES_HOST: str = Field(default="localhost", validation_alias=AliasChoices("AOS_POSTGRES_HOST", "POSTGRES_HOST"))
+    POSTGRES_PORT: int = Field(default=5432, validation_alias=AliasChoices("AOS_POSTGRES_PORT", "POSTGRES_PORT"))
+    POSTGRES_USER: str = Field(default="aos", validation_alias=AliasChoices("AOS_POSTGRES_USER", "POSTGRES_USER"))
     POSTGRES_PASSWORD: Optional[str] = Field(default=None, validation_alias="AOS_POSTGRES_PASSWORD")  # 安全加固：移除默认空密码
-    POSTGRES_DB: str = Field(default="aos", env="AOS_POSTGRES_DB")
-
+    POSTGRES_DB: str = Field(default="aos", validation_alias=AliasChoices("AOS_POSTGRES_DB", "POSTGRES_DB"))
     # 统一API - 支持环境变量 AOS_UNIFIED_API_KEY
-    UNIFIED_API_KEY: str = Field(default="", env="AOS_UNIFIED_API_KEY")
+    UNIFIED_API_KEY: str = Field(default="", validation_alias=AliasChoices("AOS_UNIFIED_API_KEY", "UNIFIED_API_KEY"))
     UNIFIED_BASE_URL: str = "https://api.deeproute.com/v1"
     
     CHAT_MODEL_QWEN: str = "qwen-qwen3.6-27b"
@@ -116,7 +115,7 @@ class Config(BaseSettings):
     ASR_MODEL: str = "teleai-telespeechasr"
 
     # 智谱AI - 支持环境变量 AOS_ZHIPU_API_KEY
-    ZHIPU_API_KEY: str = Field(default="", env="AOS_ZHIPU_API_KEY")
+    ZHIPU_API_KEY: str = Field(default="", validation_alias=AliasChoices("AOS_ZHIPU_API_KEY", "ZHIPU_API_KEY"))
     ZHIPU_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
     ZHIPU_MODEL: str = "glm-4-flash"
     ZHIPU_ENABLED: bool = True
@@ -128,22 +127,22 @@ class Config(BaseSettings):
     LITELLM_API_BASE: str = "https://open.bigmodel.cn/api/paas/v4"  # 智谱 OpenAI 兼容地址
 
     # SiliconFlow - 支持环境变量 AOS_SILICONFLOW_API_KEY
-    SILICONFLOW_API_KEY: str = Field(default="", env="AOS_SILICONFLOW_API_KEY")
+    SILICONFLOW_API_KEY: str = Field(default="", validation_alias=AliasChoices("AOS_SILICONFLOW_API_KEY", "SILICONFLOW_API_KEY"))
     SILICONFLOW_BASE_URL: str = "https://api.siliconflow.cn/v1"
     SILICONFLOW_MODEL: str = "deepseek-ai/DeepSeek-V2.5"
     SILICONFLOW_ENABLED: bool = True
 
     # 百度文心 - 支持环境变量 AOS_BAIDU_API_KEY, AOS_BAIDU_SECRET_KEY
-    BAIDU_API_KEY: str = Field(default="", env="AOS_BAIDU_API_KEY")
-    BAIDU_SECRET_KEY: str = Field(default="", env="AOS_BAIDU_SECRET_KEY")
+    BAIDU_API_KEY: str = Field(default="", validation_alias=AliasChoices("AOS_BAIDU_API_KEY", "BAIDU_API_KEY"))
+    BAIDU_SECRET_KEY: str = Field(default="", validation_alias=AliasChoices("AOS_BAIDU_SECRET_KEY", "BAIDU_SECRET_KEY"))
     BAIDU_BASE_URL: str = "https://aip.baidubce.com"
     BAIDU_MODEL: str = "ernie-speed-128k"
     BAIDU_ENABLED: bool = True
 
     # 讯飞语音 - 支持环境变量 AOS_XFYUN_APP_ID, AOS_XFYUN_API_KEY, AOS_XFYUN_API_SECRET
-    XFYUN_APP_ID: str = Field(default="", env="AOS_XFYUN_APP_ID")
-    XFYUN_API_KEY: str = Field(default="", env="AOS_XFYUN_API_KEY")
-    XFYUN_API_SECRET: str = Field(default="", env="AOS_XFYUN_API_SECRET")
+    XFYUN_APP_ID: str = Field(default="", validation_alias=AliasChoices("AOS_XFYUN_APP_ID", "XFYUN_APP_ID"))
+    XFYUN_API_KEY: str = Field(default="", validation_alias=AliasChoices("AOS_XFYUN_API_KEY", "XFYUN_API_KEY"))
+    XFYUN_API_SECRET: str = Field(default="", validation_alias=AliasChoices("AOS_XFYUN_API_SECRET", "XFYUN_API_SECRET"))
     XFYUN_MODEL: str = "lite"
     XFYUN_ENABLED: bool = True
 
@@ -240,9 +239,8 @@ class Config(BaseSettings):
     DEERFLOW_HARNESS_PATH: str = str(_BASE_DIR / "external" / "deer-flow" / "backend" / "packages" / "harness")
     # DeerFlow 网关管理员凭证: 从环境变量读取。
     # 不再提供 "aos123456" 弱默认；生产环境必须设置，开发环境自动生成强随机口令。
-    DEERFLOW_ADMIN_USER: str = Field(default="admin", env="AOS_DEERFLOW_ADMIN_USER")
-    DEERFLOW_ADMIN_PASSWORD: Optional[str] = Field(default=None, env="AOS_DEERFLOW_ADMIN_PASSWORD")
-
+    DEERFLOW_ADMIN_USER: str = Field(default="admin", validation_alias=AliasChoices("AOS_DEERFLOW_ADMIN_USER", "DEERFLOW_ADMIN_USER"))
+    DEERFLOW_ADMIN_PASSWORD: Optional[str] = Field(default=None, validation_alias=AliasChoices("AOS_DEERFLOW_ADMIN_PASSWORD", "DEERFLOW_ADMIN_PASSWORD"))
     MAX_WORKERS: int = 4
     TASK_TIMEOUT: int = 300
     RETRY_ATTEMPTS: int = 2
