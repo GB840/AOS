@@ -160,8 +160,6 @@ class MemoryLifecycleManager:
                     continue
                 cat = _cat_of(it) or "fact"
                 mtype, tier = _CATEGORY_MAP.get(cat, ("fact", TIER_NORMAL))
-                if mtype == "preference":        # 偏好记忆走永生
-                    tier = TIER_ETERNAL
                 self._meta[mid] = LifecycleMeta(
                     id=mid, tier=tier, memory_type=mtype,
                     created_ts=now, last_accessed_ts=now,

@@ -248,8 +248,8 @@ class VoicePipeline:
     def _get_hub(cls):
         if cls._HUB is None:
             try:
-                from kernel.plugins.fabric_hub import FabricHub
-                cls._HUB = FabricHub()
+                from kernel.plugins.fabric_hub import get_fabric_hub
+                cls._HUB = get_fabric_hub()
             except Exception as e:  # 内核不可用则降级
                 logger.warning("VoicePipeline 无法获取 FabricHub: %s", e)
                 cls._HUB = False

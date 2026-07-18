@@ -14,7 +14,7 @@
 | # | 理念 | 评级 | 一句话 |
 |---|------|------|--------|
 | 1 | 不手配，自闭环 | 🟡 | 链路在，但冷启动 8–10min 重型 import + 部分能力需 env，非"秒级自闭环" |
-| 2 | 失败即训练数据，记忆有生有灭 | 🟡 | "失败→提炼"落地；**TTL/分层降级确认缺失** |
+| 2 | 失败即训练数据，记忆有生有灭 | ✅(侧车) | "失败→提炼"落地；TTL/热度/分层降级**已实现**（`memory_lifecycle.py`，收口 commit dcf598c），默认接入 `MemoryDistiller` 侧车 + `/api/memory/lifecycle`；**未**接入 legacy `memory.py` 主记忆通路（属双轨债收尾） |
 | 3 | 芯粒隔离 ≠ 多 Agent 分解 | ✅ | 故障熔断隔离清晰，单内核独占主权 |
 | 4 | 万物为我所用，无绑定 | ✅ | 六级检索源、本地/云端记忆、多后端，零付费必选项 |
 | 5 | 能力即路由，权限即边界 | ✅ | `advertise_capabilities` + `security.py` 三层入口鉴权真落地 |
@@ -29,11 +29,12 @@
 - **缺口**：重型模块首次冷导入实测 **8–10 分钟**（`pytest` 全量套件、verify 脚本均如此）；部分能力需 env（API key）才激活。
 - **置信**：高（冷导入耗时实测；`.env` 有真实 key 依赖）。
 
-### 2. 失败即训练数据，记忆有生有灭 — 🟡 部分（降级侧为缺口）
-- **证据（落地侧）**：`memory_distiller.py`（常驻从 trace 提炼失败模式/能力可靠性/延迟事实）；`autopilot.py` 的 Meta-Trace `reflection_memory.jsonl`；`tool_call_repair.py` 诊断修复 + `RepairReport` 量化。
-- **证据（缺口侧，全 src 广搜确认）**：`ttl`/`decay`/`heat`/`分层降级`/`expir` 命中**全部是** JWT 令牌过期（`security.py`）、健康检查缓存 TTL（`main.py`）、审批记录 `ttl_seconds`（`approval_api.py`）——**记忆生命周期/TTL/热度分层降级零实现**。
-- **结论**："失败即训练数据"成立；"记忆有生有灭（完整→摘要→删除）"**未落地**。
-- **置信**：高（grep 全 src 127 命中无一属记忆生命周期，强信号）。
+### 2. 失败即训练数据，记忆有生有灭 — ✅ 已落地（侧车默认启用，主通路待接）
+> **【更正 · 2026-07-19 收口后】** 本节原写"TTL/分层降级零实现"，**已过时**。收口阶段已实现 `src/kernel/memory_lifecycle.py`（`MemoryLifecycleManager`：TTL 过期 + 访问热度延缓 + 四档分层降级 ETERNAL/IMPORTANT/NORMAL/ARCHIVED + 偏好永生 + 量化报告），并接入 `MemoryDistiller` 常驻循环（`scan_once`→register+prune）与 `/api/memory/lifecycle` 端点；`get_distiller()` 默认推导生命周期路径**默认启用**。测试：`test_memory_lifecycle.py`（9 passed）+ `verify_memory_lifecycle.py`（32/32）。见收口 commit `dcf598c`。**残留缺口**：该循环目前只覆盖 `distilled_memory.jsonl` 蒸馏侧车，尚未接入 legacy `src/memory/memory.py` / `brain.py` 主记忆读写通路——记忆"有生有灭"在生产主路径上仍不生效，属双轨债收尾项。
+
+- **证据（落地侧）**：`memory_distiller.py` 常驻提炼；`memory_lifecycle.py` 完整生命周期；`autopilot.py` 的 Meta-Trace `reflection_memory.jsonl`（双层 TTL 淘汰）；`tool_call_repair.py` + `RepairReport`。
+- **证据（主通路缺口）**：`src/memory/memory.py` 自建 raw-SQLite 记忆库，不调用 `memory_lifecycle`；`grep memory_lifecycle` 在 `fabric_hub.py`/`main.py`/`memory.py` 全空——蒸馏侧车已闭环，主记忆通路未接。
+- **结论**："失败即训练数据"成立；"记忆有生有灭"**在蒸馏侧车已落地且默认启用**，主记忆通路待接（双轨债收尾）。
 
 ### 3. 芯粒隔离 ≠ 多 Agent 分解 — ✅ 已落地
 - **证据**：`ag2`/`agnes` 子进程隔离 = crash boundary；`FabricHub` 单例独占全局路由/记忆/上下文主权；memory 明确"隔离为容错不为拆分"。
@@ -141,7 +142,7 @@ chiplet = crash boundary，配 `subprocess_iso` 传输退避（Named Pipe→tcp�
 ### 4.2 残存风险清单（诚实，带置信+证据）
 1. **双轨并存** ❌ 高 — 单基座第一性被破坏风险（`main.py` 灰度 `brain.py` 证实）。
 2. **brain.py 仍兜底** ⚠️ 高 — `/api/chat` 未切 FabricHub，两套主权漂移。
-3. **概念2 降级缺失** ❌ 高 — 全 src 广搜确认记忆 TTL/分层降级零实现。
+3. **概念2 主通路未接** 🟡 中 — `memory_lifecycle` 已实现+默认启用（收口 dcf598c），但仅覆盖蒸馏侧车 `distilled_memory.jsonl`，未接入 legacy `memory.py` 主记忆通路（双轨债收尾项）。
 4. **legacy 测试失败** ⚠️ 中 — `test_database`/`test_memory` no such table（勿误修）。
 5. **agnes health 探测弱** 🟡 中 — 探配置 URL `<500` 即 live，未探真实能力。
 6. **vef 日志不完整** 🟡 中 — 本次 `verify_eval_framework.py` 未产出可读总结（但 eval 已被 89 套件 `test_eval_harness` 覆盖，**非盲区**，不谎称通过）。
@@ -150,7 +151,7 @@ chiplet = crash boundary，配 `subprocess_iso` 传输退避（Named Pipe→tcp�
 
 ### 4.3 优先级路线图
 - **P0（立即）**：提交 push 当前 28 条（已暂存、已验证）→ 启动清双轨（brain.py 灰度切 FabricHub）→ 单轨验证。
-- **P1**：补概念2 记忆 TTL/分层降级（落 `memory_distiller` 生命周期）；agnes health 真探测；vef 补可读输出。
+- **P1（部分已完成）**：概念2 记忆 TTL/分层降级**已实现**（dcf598c，侧车默认启用）；剩余=接入 legacy 主记忆通路 + agnes health 真探测 + vef 补可读输出。
 - **P2**：结构化交接信封接进 `OrchestrationChiplet`；千人千面样本积累；冷导入优化（懒加载/预编译）。
 
 ---
@@ -163,7 +164,7 @@ chiplet = crash boundary，配 `subprocess_iso` 传输退避（Named Pipe→tcp�
 - **逻辑**：单基座第一性守恒、故障隔离清晰、能力=权限闭环；但**双轨并存 + 记忆降级缺失**是两个自洽性破口。
 - **经验**：爬出过"四连虚假记忆"，已建立"先核实再落地 + 真跑证据链"的纪律，本次 206 用例全过。
 
-**最关键下一步**：先 commit + push 收口（避免工作丢），再清双轨统一运行时——否则理念再漂亮，两套主权也会持续漂移。概念2 的"记忆有生有灭"是当前最具体、最该补的代码缺口。
+**最关键下一步**：清双轨统一运行时（brain.py 灰度切 FabricHub、legacy `memory.py` 主通路接入 `memory_lifecycle`）——概念2 已在侧车落地（dcf598c），下一步是把它从"侧车"升到"主记忆通路"，消除两套记忆主权的漂移。
 
 ---
 

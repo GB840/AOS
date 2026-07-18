@@ -970,15 +970,6 @@ class FabricHub:
         except Exception as e:  # noqa: BLE001
             _LOG.warning("refine 引擎注册失败(将跳过): %s", e)
 
-        # Remotion 高质量数据可视化视频渲染（video.remotion）：Remotion CLI 胶水层。
-        # 与 VideoMakerAdapter（本地零成本）互补——前者质量高但需 Remotion 工具链，
-        # 后者零依赖。Remotion 未装时 health()=False，fabric 自动路由绕过。
-        try:
-            from core.fabric.adapters.remotion_adapter import RemotionAdapter
-            self._registry.register(RemotionAdapter(route_fn=self.route))
-        except Exception as e:  # noqa: BLE001
-            _LOG.warning("remotion 引擎注册失败(将跳过): %s", e)
-
     def _register_env_codebase_mcp(self) -> None:
         """环境驱动自动注册：让真实工具「装好即通电」，无需改代码。
 
