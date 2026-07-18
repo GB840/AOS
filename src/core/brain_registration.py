@@ -42,20 +42,6 @@ def register_subagents(brain, cfg) -> None:
         logger.warning("UI-TARS subagent unavailable: %s", e)
 
     try:
-        if getattr(cfg, "UITARS_ENABLED", False):
-            from subagents import UITarsSubAgent
-
-            ut = UITarsSubAgent(
-                use_mcp=getattr(cfg, "UITARS_USE_MCP", False),
-                mcp_port=getattr(cfg, "UITARS_MCP_PORT", 8090),
-            )
-            brain.subagents.register("uitars", ut.DESCRIPTION, ut.CAPABILITIES, ut.handle)
-            brain.deerflow.register_handler("gui_automation", ut.handle)
-            logger.info("UI-TARS subagent registered")
-    except Exception as e:
-        logger.warning("UI-TARS subagent unavailable: %s", e)
-
-    try:
         if getattr(cfg, "LOBSTER_ENABLED", False):
             from subagents import LobsterSubAgent
 

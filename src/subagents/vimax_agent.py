@@ -168,21 +168,41 @@ class ViMaxSubagent:
             return None
 
     def _handle_mock(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """SDK 未安装时的诚实降级 —— 修复 P0-4 假成功问题。
+
+        默认返回 success=False（诚实：SDK 没装就是没装，不伪装完成）。
+        如需演示/开发用途，显式设置环境变量 AOS_ALLOW_MOCK=1，此时返回
+        原 mock 结构但顶层强标 mock=True，绝不混入真实成功路径。
         """
-        模拟模式处理 — 当 ViMax SDK 未安装时返回模拟结果
-        
-        用于演示和开发目的，不实际调用视频生成 API。
-        """
-        task_id = str(uuid.uuid4())[:8]
         workflow = input_data.get("workflow", "idea2video")
         input_content = input_data.get("input", input_data.get("message", ""))
-        
+        workflow_name = self.WORKFLOWS.get(workflow, {}).get("name", workflow)
+
+        # 默认：诚实失败（修复 P0-4：禁止伪装成功）
+        if os.environ.get("AOS_ALLOW_MOCK", "0") != "1":
+            logger.warning(
+                "ViMax SDK 未初始化，拒绝伪装成功（AOS_ALLOW_MOCK!=1）。workflow=%s", workflow)
+            return {
+                "success": False,
+                "available": False,
+                "error": "ViMax SDK 未安装或未初始化",
+                "install_hint": "pip install vimax 或参考 tools/fetch-vimax.ps1；"
+                                "演示用途可设 AOS_ALLOW_MOCK=1",
+                "workflow": workflow,
+                "workflow_name": workflow_name,
+                "input_length": len(input_content),
+            }
+
+        # 显式演示模式：返回 mock 但顶层强标 mock=True（不污染真实成功路径）
+        task_id = str(uuid.uuid4())[:8]
         mock_result = {
             "success": True,
+            "mock": True,  # 顶层强标，调用方必须区分（修复 P0-4）
+            "available": False,
             "task_id": task_id,
             "workflow": workflow,
-            "workflow_name": self.WORKFLOWS.get(workflow, {}).get("name", workflow),
-            "status": "completed",
+            "workflow_name": workflow_name,
+            "status": "mock_completed",
             "started_at": datetime.now().isoformat(),
             "completed_at": datetime.now().isoformat(),
             "result": {
@@ -190,14 +210,14 @@ class ViMaxSubagent:
                 "workflow": workflow,
                 "input_length": len(input_content),
                 "params": input_data.get("params", {}),
-                "message": "ViMax SDK 未安装，返回模拟结果。实际使用请安装 vimax SDK 并配置 API 密钥。",
+                "message": "ViMax SDK 未安装，演示模式返回模拟结果（AOS_ALLOW_MOCK=1）。",
                 "video_url": f"https://vimax.example.com/video/{task_id}",
                 "preview_url": f"https://vimax.example.com/preview/{task_id}.jpg",
             },
             "video_url": f"https://vimax.example.com/video/{task_id}",
         }
-        
-        logger.info(f"ViMax 模拟模式: {workflow} -> {task_id}")
+
+        logger.info("ViMax 演示模式（mock）: %s -> %s", workflow, task_id)
         return mock_result
     
     def get_task_status(self, task_id: str) -> Dict[str, Any]:
@@ -263,7 +283,7 @@ def get_vimax_subagent() -> ViMaxSubagent:
 def register_vimax_subagent(registry=None):
     """注册 ViMax 子智能体到 SubAgentRegistry"""
     if registry is None:
-        from subagents.base import SubAgentRegistry
+        from subagents.registry import SubAgentRegistry
         registry = SubAgentRegistry()
     
     agent = ViMaxSubagent()

@@ -35,7 +35,11 @@ class LFMAdapter(BaseAgentAdapter):
     """LFM2 轻量 LLM 供给方（inference.llm）。"""
 
     # 高低搭配标记：本供给方是「边缘低功耗」一极（路由层可据此优先轻任务）。
-    tier = "edge"
+    # 修复 P1-1：原为类属性 tier = "edge"，会覆盖基类 BaseAgentAdapter.tier()
+    # 方法导致 adapter.tier() 抛 TypeError。改为方法覆盖，行为等价但可调用。
+    def tier(self) -> str:
+        """覆盖基类 tier() —— LFM2 是边缘低功耗档。"""
+        return "edge"
 
     def __init__(self, model: str | None = None) -> None:
         # 默认模型：LFM2.5-230M（最小、最快、最适合边缘）；可用 env 覆盖。

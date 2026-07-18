@@ -113,7 +113,12 @@ class AOSKernel:
     # ------------------------------------------------------------------
     def register_agent(self, spec: AgentSpec) -> AgentInstance:
         if spec.engine not in self._runtimes:
-            pass
+            # 修复 P1-3：原为静默 pass（只检测不处理），导致后续 dispatch 才报错
+            # 难定位。改为抛 ValueError，让调用方立即知道引擎未注册。
+            raise ValueError(
+                f"engine '{spec.engine}' not registered; "
+                f"available: {list(self._runtimes)}"
+            )
         instance = AgentInstance(agent_id=spec.agent_id, spec=spec,
                                  status=AgentStatus.PENDING)
         self._agents[spec.agent_id] = instance

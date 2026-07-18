@@ -268,12 +268,21 @@ class WorkflowStore:
             logger.warning("保存运行记录失败: %s", e)
 
     def list_runs(self, wf_id: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """列出运行记录。"""
+        """列出运行记录（按 mtime 倒序，取最近 limit 条）。
+
+        修复 P1-8：原为 sorted(os.listdir(...), reverse=True) 按文件名(uuid)
+        字母序排序——uuid 无时间序，返回的不是「最近 N 条」。改为按 mtime
+        排序，与「最近运行」语义对齐。
+        """
         runs_dir = os.path.join(self._base_dir, wf_id, "runs")
         if not os.path.exists(runs_dir):
             return []
         try:
-            files = sorted(os.listdir(runs_dir), reverse=True)
+            files = sorted(
+                os.listdir(runs_dir),
+                key=lambda f: os.path.getmtime(os.path.join(runs_dir, f)),
+                reverse=True,
+            )
             runs = []
             for f in files[:limit]:
                 if f.endswith(".json"):

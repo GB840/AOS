@@ -150,6 +150,7 @@ class PulseCollector:
         step_failures = defaultdict(int)
         failure_reasons = defaultdict(int)
 
+        # Hot path：内存 buffer 中尚未 flush 的事件
         for event in self._buffer:
             if event.get("type") == "step_run" and event.get("workflow_id") == workflow_id:
                 if not event.get("ok", True):
@@ -157,6 +158,28 @@ class PulseCollector:
                     step_failures[step] += 1
                     reason = event.get("error", "unknown")[:50]
                     failure_reasons[reason] += 1
+
+        # Cold path：从 events.jsonl 读取已持久化的事件（buffer 已满 flush 后）
+        events_path = _events_path()
+        if os.path.exists(events_path):
+            try:
+                with open(events_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if event.get("type") == "step_run" and event.get("workflow_id") == workflow_id:
+                            if not event.get("ok", True):
+                                step = event.get("step_name", "unknown")
+                                step_failures[step] += 1
+                                reason = event.get("error", "unknown")[:50]
+                                failure_reasons[reason] += 1
+            except Exception as e:
+                logger.warning("读取 events.jsonl 失败: %s", e)
 
         return {
             "step_failures": dict(sorted(step_failures.items(), key=lambda x: x[1], reverse=True)),

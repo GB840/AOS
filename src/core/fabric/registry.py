@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+from typing import Any, Dict  # 修复 P1-2：补 typing 导入，避免 get_type_hints() 触发 NameError
 
 logger = logging.getLogger(__name__)
 

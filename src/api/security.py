@@ -189,13 +189,8 @@ def decode_access_token(token: str) -> tuple[Optional[str], str]:
     except Exception as e:
         logger.error(f"JWT decode error: {e}")
         return None, "error"
-    except jwt.InvalidTokenError:
-        # Token无效（格式错误、签名错误等）
-        logger.warning("JWT token invalid")
-        return None
-    except Exception as e:
-        logger.error(f"JWT decode error: {e}")
-        return None
+    # 修复 P1-5：原此处有 6 行死代码（jwt.InvalidTokenError/Exception 已被上方
+    # 捕获且返回类型错误），是从旧版本复制粘贴残留，已删除。
 
 
 def authenticate_user(username: str, password: str) -> bool:

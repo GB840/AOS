@@ -1181,10 +1181,6 @@ async def invoke_subagent(name: str, request: SubAgentInvokeRequest):
 class SkillExecuteRequest(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
 
-@app.get("/api/skills")
-async def list_skills(category: str = ""):
-    return await asyncio.to_thread(brain.hermes.list_skills, category=category)
-
 @app.get("/api/skills/search")
 async def search_skills(q: str):
     return await asyncio.to_thread(brain.hermes.search_skills, query=q)
@@ -2335,21 +2331,27 @@ async def api_fabric_health():
 
 
 @app.get("/api/skills")
-async def api_skills(capability: str = ""):
+async def api_skills(capability: str = "", category: str = ""):
     """Skill 生态化对外接口：查询 AOS 所有技能或按能力发现技能。
 
-    - GET /api/skills → 全部 31 技能的摘要（id/name/category/capabilities）
+    - GET /api/skills → 全部技能的摘要（id/name/category/capabilities/status）
     - GET /api/skills?capability=web.search → 只返回声明 web.search 的能力技能
+    - GET /api/skills?category=xxx → capability 的兼容别名（旧客户端）
 
     数据源为 skills/manifest.json（单一真相），零导入开销（纯 json 读），
     不触发 skills/__init__.py 的急加载链。
+
+    注：旧版走 brain.hermes.list_skills 的实现已被本路由替代（修复 P0-3 重复注册），
+    旧 ?category= 参数作为 capability 的别名保留，行为等价。
     """
     try:
         from kernel.skill_registry import get_skill_registry
         reg = get_skill_registry()
-        if capability:
-            skills = reg.discover(capability)
-            return {"capability": capability, "skills": skills, "total": len(skills)}
+        # 兼容旧 ?category= 参数：作为 capability 的别名（修复 P0-3）
+        cap = capability or category
+        if cap:
+            skills = reg.discover(cap)
+            return {"capability": cap, "skills": skills, "total": len(skills)}
         return {"skills": [{"id": s["id"], "name": s["name"], "category": s["category"],
                              "capabilities": s["capabilities"], "status": s["status"]}
                            for s in reg.list_all()],
@@ -2523,20 +2525,6 @@ async def live_evolution_status():
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
-@app.post("/api/multimodal/analyze")
-async def analyze_image(image: UploadFile = File(...), prompt: str = "分析这张图片"):
-    try:
-        image_bytes = await image.read()
-        return {
-            "success": True,
-            "image_name": image.filename,
-            "image_size": len(image_bytes),
-            "prompt": prompt,
-            "analysis": "图片分析功能需要配置支持视觉的LLM模型",
-        }
-    except Exception as e:
-        logger.error(f"Image analysis error: {e}")
-        raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 @app.post("/api/multimodal/chat")
 async def multimodal_chat(

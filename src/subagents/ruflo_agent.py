@@ -132,25 +132,43 @@ class RuFloSubagent:
         return result
     
     def _handle_mock(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """SDK 未安装时的诚实降级 —— 修复 P0-4 假成功问题。
+
+        默认返回 success=False（诚实：CLI 没装就是没装，不伪装完成）。
+        如需演示/开发用途，显式设置环境变量 AOS_ALLOW_MOCK=1，此时返回
+        原 mock 结构但顶层强标 mock=True，绝不混入真实成功路径。
         """
-        模拟模式处理 — 当 RuFlo CLI 未安装时返回模拟结果
-        
-        使用 AOS 内置能力模拟 RuFlo 的多智能体协作效果。
-        """
-        task_id = str(uuid.uuid4())[:8]
         task_type = input_data.get("task", "code_gen")
         input_content = input_data.get("input", input_data.get("message", ""))
-        
         task_config = self.TASKS.get(task_type, {})
         agents = input_data.get("agents", task_config.get("agents", ["developer"]))
         agent_details = [self.AGENTS.get(a, {"name": a, "role": "unknown", "emoji": "🤖"}) for a in agents]
-        
+
+        # 默认：诚实失败（修复 P0-4：禁止伪装成功）
+        if os.environ.get("AOS_ALLOW_MOCK", "0") != "1":
+            logger.warning(
+                "RuFlo CLI 未初始化，拒绝伪装成功（AOS_ALLOW_MOCK!=1）。task_type=%s", task_type)
+            return {
+                "success": False,
+                "available": False,
+                "error": "RuFlo CLI 未安装或未初始化",
+                "install_hint": "npm install -g ruflo && export RUFLO_API_KEY=your-key；"
+                                "演示用途可设 AOS_ALLOW_MOCK=1",
+                "task_type": task_type,
+                "task_name": task_config.get("name", task_type),
+                "input_length": len(input_content),
+            }
+
+        # 显式演示模式：返回 mock 但顶层强标 mock=True（不污染真实成功路径）
+        task_id = str(uuid.uuid4())[:8]
         mock_result = {
             "success": True,
+            "mock": True,  # 顶层强标，调用方必须区分（修复 P0-4）
+            "available": False,
             "task_id": task_id,
             "task_type": task_type,
             "task_name": task_config.get("name", task_type),
-            "status": "completed",
+            "status": "mock_completed",
             "started_at": datetime.now().isoformat(),
             "completed_at": datetime.now().isoformat(),
             "result": {
@@ -160,14 +178,14 @@ class RuFloSubagent:
                 "agents": agent_details,
                 "options": input_data.get("params", {}),
                 "execution_steps": [
-                    {"agent": agent_details[0]["name"], "action": "分析需求", "status": "completed", "emoji": "📋"},
-                    {"agent": agent_details[0]["name"], "action": "制定方案", "status": "completed", "emoji": "📐"},
-                    {"agent": agent_details[1]["name"] if len(agent_details) > 1 else agent_details[0]["name"], 
-                     "action": "编写代码", "status": "completed", "emoji": "💻"},
-                    {"agent": "代码审查员", "action": "审查代码", "status": "completed", "emoji": "🔍"},
-                    {"agent": "测试工程师", "action": "编写测试", "status": "completed", "emoji": "🧪"},
+                    {"agent": agent_details[0]["name"], "action": "分析需求", "status": "mock", "emoji": "📋"},
+                    {"agent": agent_details[0]["name"], "action": "制定方案", "status": "mock", "emoji": "📐"},
+                    {"agent": agent_details[1]["name"] if len(agent_details) > 1 else agent_details[0]["name"],
+                     "action": "编写代码", "status": "mock", "emoji": "💻"},
+                    {"agent": "代码审查员", "action": "审查代码", "status": "mock", "emoji": "🔍"},
+                    {"agent": "测试工程师", "action": "编写测试", "status": "mock", "emoji": "🧪"},
                 ],
-                "message": "RuFlo CLI 未安装，使用 AOS 模拟模式。实际使用请安装: npm install -g ruflo",
+                "message": "RuFlo CLI 未安装，演示模式返回模拟结果（AOS_ALLOW_MOCK=1）。",
                 "features": [
                     "🧠 多智能体蜂群 (100+ 专业智能体)",
                     "🔄 智能三层路由 (低成本/高性能分层)",
@@ -182,8 +200,8 @@ class RuFloSubagent:
                 ],
             },
         }
-        
-        logger.info(f"RuFlo 模拟模式: {task_type} -> {task_id}")
+
+        logger.info("RuFlo 演示模式（mock）: %s -> %s", task_type, task_id)
         return mock_result
     
     def get_task_status(self, task_id: str) -> Dict[str, Any]:
@@ -251,7 +269,7 @@ def get_ruflo_subagent() -> RuFloSubagent:
 def register_ruflo_subagent(registry=None):
     """注册 RuFlo 子智能体到 SubAgentRegistry"""
     if registry is None:
-        from subagents.base import SubAgentRegistry
+        from subagents.registry import SubAgentRegistry
         registry = SubAgentRegistry()
     
     agent = RuFloSubagent()

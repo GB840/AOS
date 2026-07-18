@@ -196,32 +196,37 @@ class PixelleVideoSubagent:
             
             steps[-1]["status"] = "completed"
             
-            steps.append({"step": "audio", "name": "语音合成", "status": "completed"})
-            steps.append({"step": "bgm", "name": "背景音乐", "status": "completed"})
-            steps.append({"step": "merge", "name": "视频合成", "status": "completed"})
+            # 诚实降级：audio/bgm/merge 三步未真实执行（fallback 模式无 TTS/BGM/视频合成后端）→
+            # 标 skipped 而非 completed，避免假成功（修复 P0-4）
+            steps.append({"step": "audio", "name": "语音合成", "status": "skipped", "reason": "fallback 模式无 TTS 后端"})
+            steps.append({"step": "bgm", "name": "背景音乐", "status": "skipped", "reason": "fallback 模式无 BGM 库"})
+            steps.append({"step": "merge", "name": "视频合成", "status": "skipped", "reason": "fallback 模式无视频合成后端"})
             
             result = {
-                "success": True,
+                "success": True,           # 文案与配图提示词真实生成了
+                "partial": True,           # 但音频/BGM/合成未做（修复 P0-4：诚实标识）
+                "mock": True,              # 顶层强标 mock，调用方必须区分
                 "task_id": task_id,
                 "topic": topic,
                 "style": self.STYLES[style]["name"],
                 "duration": duration,
                 "voice": self.VOICES[voice]["name"],
-                "status": "completed",
+                "status": "partial",       # 修复 P0-4：原为 completed，实际未合成音视频
                 "started_at": datetime.now().isoformat(),
                 "completed_at": datetime.now().isoformat(),
                 "steps": steps,
                 "result": {
                     "script": {"full_text": script, "word_count": len(script), "scenes": scenes},
                     "images": images,
-                    "audio": {"voice": self.VOICES[voice]["name"], "segments": len(script.split('。'))},
-                    "video_url": f"https://pixelle-video.com/video/{task_id}",
-                    "preview_url": f"https://pixelle-video.com/preview/{task_id}.jpg",
+                    "audio": None,           # 修复 P0-4：原造假的 segments 数，现诚实为 None
+                    "video_url": None,       # 修复 P0-4：原造 example.com 假 URL，现诚实为 None
+                    "preview_url": None,
                 },
-                "message": "使用 AOS 内置能力完成短视频生成",
+                "message": "降级模式：文案与配图提示词已用 AOS 内置能力生成；"
+                           "语音/BGM/视频合成未执行（需安装 Pixelle-Video SDK 或接入真实 TTS/合成后端）",
             }
             
-            logger.info(f"Pixelle-Video 降级模式执行成功: {task_id}")
+            logger.info("Pixelle-Video 降级模式（partial，未合成音视频）: %s", task_id)
             return result
         
         except Exception as e:
@@ -265,7 +270,7 @@ def get_pixelle_subagent() -> PixelleVideoSubagent:
 def register_pixelle_subagent(registry=None):
     """注册 Pixelle-Video 子智能体到 SubAgentRegistry"""
     if registry is None:
-        from subagents.base import SubAgentRegistry
+        from subagents.registry import SubAgentRegistry
         registry = SubAgentRegistry()
     
     agent = PixelleVideoSubagent()

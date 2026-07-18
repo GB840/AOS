@@ -964,24 +964,6 @@ def _parse_choice(choice: str, max_idx: int) -> Optional[int]:
     except ValueError:
         return None
 
-    # Phase 4
-    _print_phase_header(4, "执行")
-    result = engine.phase4_execute(idx)
-    print(f"  {json.dumps(result, ensure_ascii=False, indent=2)}")
-
-    approval = input("\n  审核通过？(y/n): ").strip().lower()
-    if approval == "y":
-        engine.confirm(True)
-        # Phase 5
-        _print_phase_header(5, "多平台发布")
-        pub = engine.phase5_publish()
-        print(f"  {json.dumps(pub, ensure_ascii=False, indent=2)}")
-        print("\n✅ 工作流完成！")
-    else:
-        print("❌ 审核未通过，工作流暂停。状态已保存。")
-
-    print(f"\n状态文件: {engine.state_file}")
-
 
 if __name__ == "__main__":
     main()
