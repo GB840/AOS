@@ -26,7 +26,7 @@ import time
 import hashlib
 import threading
 from typing import Any, Dict, List, Optional
-from core.fabric.adapter import InvokeResult, extract_text
+from core.fabric.adapter import InvokeResult, InvokeRequest, extract_text
 from core.fabric.adapters.ag2_adapter import _dedup_text
 from kernel.run_state_store import (
     create_run, save_checkpoint, load_checkpoint, mark_done,
@@ -65,6 +65,53 @@ def _get_ag2():
         from core.fabric.adapters.ag2_adapter import AG2Adapter
         _ag2 = AG2Adapter()
     return _ag2
+
+
+# ---- ⑤ 融合 FabricHub 单一内核路由（opt-in）---------------------------
+# 默认关闭：autopilot 仍走自有惰性适配器单例，保留「零依赖 FabricHub 全量构造」
+# 的快启动设计（见模块 docstring）。设 AOS_AUTOPILOT_USE_FABRICHUB=1 时，所有
+# 真实适配器调用改经 FabricHub.route() 统一派发——统一能力路由 / 运行时故障转移
+# / 策略边界（理念5），消除「autopilot 绕开 FabricHub 自成一路」的双轨债。
+# 两种路径最终命中同一底层适配器，返回 InvokeResult(.data 同构)，故 autopilot
+# 的真实闸门 / 量化指标逻辑无需改动即可作用于两条路径。
+_AUTOPILOT_USE_HUB = os.environ.get("AOS_AUTOPILOT_USE_FABRICHUB", "0") == "1"
+_HUB = None
+
+
+def _get_hub():
+    """返回 FabricHub 单例（opt-in）；未启用时返回 None（走本地适配器）。"""
+    global _HUB
+    if not _AUTOPILOT_USE_HUB:
+        return None
+    if _HUB is None:
+        from kernel.plugins.fabric_hub import get_fabric_hub
+        _HUB = get_fabric_hub()
+    return _HUB
+
+
+def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
+    """真实适配器调用：opt-in 经 FabricHub 单一内核路由，否则走本地惰性适配器。
+
+    两种路径最终都命中同一底层适配器，返回 InvokeResult(.data 同构)；
+    autopilot 的真实闸门 / 量化指标逻辑因此无需改动即可作用于两条路径。
+    """
+    hub = _get_hub()
+    if hub is not None:
+        # cognition.* 在 hub 注册表里统一归到 inference.llm 派发
+        cap = "inference.llm" if capability in ("cognition.reasoning", "cognition.planning") else capability
+        return hub.route(cap, payload)
+    # 本地兜底（默认）：保持零依赖 FabricHub 全量构造的快启动设计
+    if capability == "web.search":
+        return _get_search().invoke(InvokeRequest(capability=capability, payload=payload))
+    if capability == "action.code_exec":
+        return _get_code_exec().invoke(InvokeRequest(capability=capability, payload=payload))
+    if capability in ("inference.llm", "cognition.reasoning", "cognition.planning"):
+        ag2 = _get_ag2()
+        material = payload.get("content") or payload.get("task") or ""
+        text = ag2.produce_text(material)
+        return InvokeResult(ok=bool(text and text.strip()),
+                            data={"content": text or "", "output": text or ""})
+    return InvokeResult(ok=False, error=f"autopilot: _dispatch 不支持的能力 {capability}")
 
 
 # ---- 推理超时守护（ag2 无内部超时，挂死会拖垮整条自主环）----
@@ -416,7 +463,6 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         )
 
     if capability == "web.search":
-        ad = _get_search()
         # 从各种可能的 payload 字段里提取搜索查询（兼容 ag2 规划的
         # instruction="search ..." / query / task / content 形态）
         query = (
@@ -428,10 +474,8 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         query = _clean_search_query(query)
         if not query:
             return InvokeResult(ok=False, error="autopilot: 搜索步缺少查询词")
-        result = ad.invoke(InvokeRequest(
-            capability="web.search",
-            payload={"type": "search", "query": query, "count": 5},
-        ))
+        # opt-in 经 FabricHub 路由；否则本地 SearchAdapter（见 _dispatch）
+        result = _dispatch("web.search", {"type": "search", "query": query, "count": 5})
         _capture_text(capability, result)
         rm = _search_real_metrics(result)
         # 真实闸门：搜索必须真返回结果才算这步成立（空结果=敷衍，判失败）
@@ -441,7 +485,6 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         )
 
     if capability == "action.code_exec":
-        ad = _get_code_exec()
         # 优先用 ag2 规划的干净指令（如 "winget install ffmpeg"）
         code = payload.get("instruction") or payload.get("code") or payload.get("task") or ""
         if not code and "content" in payload:
@@ -474,11 +517,11 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         _ensure_parent_dirs(code)
         # 自主安装：给 winget / choco 补非交互参数（不卡在许可确认）
         code = _make_noninteractive(code)
-        # 先按规划执行（winget / choco / pip 等）
-        res = ad.invoke(InvokeRequest(
-            capability="action.code_exec",
-            payload={"code": code, "language": forced_lang or _guess_language(code)},
-        ))
+        # 先按规划执行（winget / choco / pip 等）；opt-in 经 FabricHub 路由，
+        # 否则本地 CodeExecutionAdapter（见 _dispatch）
+        res = _dispatch("action.code_exec", {
+            "code": code, "language": forced_lang or _guess_language(code),
+        })
         # 安装器回填：winget/choco 不在 PATH / 没装 → 直接下载解压到用户目录
         # 并加 PATH，不依赖任何外部安装器，也不需要管理员权限。
         if not res.ok and "install" in code.lower():
@@ -519,7 +562,6 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         )
 
     if capability in ("inference.llm", "cognition.reasoning", "cognition.planning"):
-        ag2 = _get_ag2()
         material = payload.get("task") or payload.get("content") or payload.get("text") or "处理上游结果"
         instruction = payload.get("instruction") or ""
         original_task = payload.get("original_task") or ""
@@ -539,10 +581,12 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         topic = "\n\n".join(prompt_parts)
         if len(topic) > 2000:
             topic = topic[:2000]
-        text = ag2.produce_text(topic)
-        if not text:
-            return InvokeResult(ok=False, error="autopilot: 推理步未产出文本")
-        result = InvokeResult(ok=True, data={"content": text, "output": text})
+        # opt-in 经 FabricHub 路由；否则本地 ag2.produce_text（见 _dispatch）
+        res = _dispatch(capability, {"task": topic, "content": topic})
+        if not (isinstance(res, InvokeResult) and res.ok and extract_text(res.data)):
+            err = (res.error if isinstance(res, InvokeResult) else "") or "推理步未产出文本"
+            return InvokeResult(ok=False, error="autopilot: " + str(err))
+        result = res
         _capture_text(capability, result)
         rm = _inference_real_metrics(result)
         # 真实闸门：产出过短/像拒绝话术 → 视为敷衍，判失败（不谎报成功）
