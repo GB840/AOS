@@ -36,7 +36,11 @@ class WorkflowStep:
     approval_risk: str = "medium"  # low/medium/high —— 影响审批优先级
 
     def to_chiplet_step(self) -> Dict[str, Any]:
-        """转换成 OrchestrationChiplet 能识别的 step 格式。"""
+        """转换成 OrchestrationChiplet 能识别的 step 格式。
+
+        注意：requires_approval / approval_risk 是 WorkflowRunner 用的元数据，
+        OrchestrationChiplet 不认识但会忽略（不会传给下游引擎）。
+        """
         step = {
             "capability": self.capability,
             "in_from": self.in_from,
@@ -51,6 +55,10 @@ class WorkflowStep:
         if self.max_tokens > 0:
             step.setdefault("payload", {})
             step["payload"]["max_tokens"] = self.max_tokens
+        # Task 4: Human-in-the-Loop —— 把审批元数据带下去让 runner 看到
+        if self.requires_approval:
+            step["requires_approval"] = True
+            step["approval_risk"] = self.approval_risk
         return step
 
 
@@ -88,7 +96,11 @@ class Workflow:
         )
 
     def add_step(self, capability: str, name: str = "", in_from: str = "previous",
-                 prompt: str = "", payload: Dict = None) -> WorkflowStep:
+                 prompt: str = "", payload: Dict = None,
+                 requires_approval: bool = False,
+                 approval_risk: str = "medium",
+                 timeout: int = 120, retry: int = 0,
+                 max_tokens: int = 0, description: str = "") -> WorkflowStep:
         """添加一个步骤。"""
         step = WorkflowStep(
             id=uuid.uuid4().hex[:8],
@@ -97,6 +109,12 @@ class Workflow:
             in_from=in_from,
             prompt=prompt,
             payload=payload or {},
+            timeout=timeout,
+            retry=retry,
+            max_tokens=max_tokens,
+            description=description,
+            requires_approval=requires_approval,
+            approval_risk=approval_risk,
         )
         self.steps.append(step)
         self._touch()
