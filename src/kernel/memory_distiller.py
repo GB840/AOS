@@ -88,7 +88,8 @@ class MemoryDistiller:
                  interval_seconds: int = 300, user_id: str = "aos",
                  out_path: Optional[str] = None,
                  state_path: Optional[str] = None,
-                 mem0_store: Any = None, mem0_lazy: bool = False):
+                 mem0_store: Any = None, mem0_lazy: bool = False,
+                 lifecycle_path: Optional[str] = None):
         self.trace_dirs = (trace_dirs or _default_trace_dirs()
                            or [os.path.join(os.getcwd(), "_traces")])
         self.interval = interval_seconds
@@ -109,6 +110,16 @@ class MemoryDistiller:
         self._processed: Dict[str, str] = self._load_state()
         self._lock = threading.Lock()
         self.running = False
+        # 概念2 农耕层循环记忆：生命周期侧车（TTL/热度/分层降级/偏好区分）。
+        # 不传 lifecycle_path 时完全不启用，行为 100% 向后兼容。
+        self._lifecycle: Any = None
+        if lifecycle_path:
+            try:
+                from .memory_lifecycle import MemoryLifecycleManager
+                self._lifecycle = MemoryLifecycleManager(lifecycle_path)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("MemoryLifecycleManager 构造失败，禁用生命周期: %s", e)
+                self._lifecycle = None
         os.makedirs(os.path.dirname(self.out_path) or ".", exist_ok=True)
 
     # ---- 路径 ----
@@ -174,10 +185,20 @@ class MemoryDistiller:
                     logger.warning("distill file failed %s: %s", name, e)
         if collected:
             self._persist(collected)
+            if self._lifecycle is not None:
+                try:
+                    self._lifecycle.register(collected)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("lifecycle register failed: %s", e)
             report.new_items = len(collected)
             for it in collected:
                 report.by_category[it.category] = report.by_category.get(it.category, 0) + 1
         self._save_state()
+        if self._lifecycle is not None:
+            try:
+                self._lifecycle.prune()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("lifecycle prune failed: %s", e)
         return report
 
     # ---- 提炼：trace ----
@@ -313,6 +334,41 @@ class MemoryDistiller:
             self._mem0_disabled = True
             return False
 
+    # ---- 召回（取用即升温，概念2 活土肥力）----
+    def recall_memories(self, filter_fn: Optional[Callable[[Any], bool]] = None,
+                        limit: int = 20) -> List[Dict[str, Any]]:
+        """从已提炼记忆中按热度*置信召回存活（未归档）记忆。命中即升温。
+        无 lifecycle 时返回空列表（向后兼容）。"""
+        if self._lifecycle is None:
+            return []
+        items: List[Dict[str, Any]] = []
+        try:
+            with open(self.out_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        items.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            return []
+        return self._lifecycle.recall(items, filter_fn=filter_fn, limit=limit)
+
+    # ---- 生命周期查询/干预（概念2 暴露给 API）----
+    def lifecycle_report(self) -> Optional[Dict[str, Any]]:
+        """返回记忆生命周期量化报告（各 tier 计数/归档数）。未启用返回 None。"""
+        if self._lifecycle is None:
+            return None
+        return self._lifecycle.report()
+
+    def lifecycle_prune(self) -> Optional[Dict[str, Any]]:
+        """触发一次周期 prune，返回 PruneReport 字典。未启用返回 None。"""
+        if self._lifecycle is None:
+            return None
+        return self._lifecycle.prune().to_dict()
+
     # ---- 常驻循环 ----
     async def run_loop(self) -> None:
         self.running = True
@@ -334,13 +390,22 @@ _distiller_instance: Optional[MemoryDistiller] = None
 
 def get_distiller(trace_dirs: Optional[List[str]] = None,
                   interval_seconds: int = 300,
-                  mem0_store: Any = None) -> MemoryDistiller:
-    """返回常驻提炼 Agent 单例。mem0_store 不传时启用惰性通道（首次真正写记忆
-    时才构造 Mem0Store，尊重 AOS_MEM0_LOCAL；不可用时自动降级为仅 jsonl 落盘），
-    避免在进程启动/导入期触发重型 mem0/chroma import。"""
+                  mem0_store: Any = None,
+                  lifecycle_path: Optional[str] = None) -> MemoryDistiller:
+    """返回常驻提炼 Agent 单例。
+    - mem0_store 不传时启用惰性通道（首次真正写记忆时才构造 Mem0Store，
+      尊重 AOS_MEM0_LOCAL；不可用时自动降级为仅 jsonl 落盘）。
+    - lifecycle_path 不传时自动推导默认 trace 目录下的生命周期侧车并启用
+      概念2 农耕层循环记忆（TTL/热度/分层降级/偏好区分）；构造失败自动降级不启用。
+    两者均避免在进程启动/导入期触发重型 import。"""
     global _distiller_instance
     if _distiller_instance is None:
+        if lifecycle_path is None:
+            default_dirs = _default_trace_dirs()
+            if default_dirs:
+                lifecycle_path = os.path.join(default_dirs[0], "distilled_lifecycle.json")
         _distiller_instance = MemoryDistiller(
             trace_dirs=trace_dirs, interval_seconds=interval_seconds,
-            mem0_store=mem0_store, mem0_lazy=(mem0_store is None))
+            mem0_store=mem0_store, mem0_lazy=(mem0_store is None),
+            lifecycle_path=lifecycle_path)
     return _distiller_instance

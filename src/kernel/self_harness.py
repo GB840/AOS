@@ -50,7 +50,8 @@ class SelfHarness:
     """
 
     def __init__(self, probe_specs: Optional[List[Tuple[str, str, Any]]] = None) -> None:
-        self._probe_specs = probe_specs or self._default_probe_specs()
+        # 显式传 [] 表示「不要探活任何适配器」，必须尊重；只有 None 才走默认。
+        self._probe_specs = self._default_probe_specs() if probe_specs is None else probe_specs
 
     @staticmethod
     def _default_probe_specs() -> List[Tuple[str, str, Any]]:

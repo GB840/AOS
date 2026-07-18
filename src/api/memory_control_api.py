@@ -109,3 +109,23 @@ def mount_memory_control_api(app: FastAPI) -> None:
                 detail=f"记忆不存在/已删除/无该版本快照: {memory_id}",
             )
         return {"status": "ok", "memory": rec}
+
+    @app.get("/api/memory/lifecycle")
+    async def lifecycle_report():
+        """概念2 农耕层循环记忆量化报告（各 tier 计数/归档数）。"""
+        from kernel.memory_distiller import get_distiller
+        d = get_distiller()
+        rep = d.lifecycle_report()
+        if rep is None:
+            return {"status": "disabled", "reason": "lifecycle 未启用（无 lifecycle_path）"}
+        return {"status": "ok", "report": rep}
+
+    @app.post("/api/memory/lifecycle/prune")
+    async def lifecycle_prune():
+        """概念2 触发一次周期 prune（TTL 过期 + 分层降级 + 归档软删）。"""
+        from kernel.memory_distiller import get_distiller
+        d = get_distiller()
+        rep = d.lifecycle_prune()
+        if rep is None:
+            return {"status": "disabled", "reason": "lifecycle 未启用（无 lifecycle_path）"}
+        return {"status": "ok", "prune": rep}

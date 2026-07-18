@@ -46,6 +46,7 @@ from core.fabric.adapters import (
     MiniCPMOAdapter,
     VLMAdapter,
     VideoMakerAdapter,
+    RemotionAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -144,6 +145,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         MiniCPMOAdapter,       # 全双工全模态（VOICE_OMNI）：MiniCPM-o 4.5 推理后端
         VLMAdapter,            # 视觉理解（VISION_UNDERSTAND）：云端视觉 API / 本地 ollama MiniCPM-V-2
         VideoMakerAdapter,     # 本地视频生成（MEDIA_VIDEO）：edge-tts + PIL + ffmpeg，零成本
+        RemotionAdapter,       # 高质量数据可视化视频渲染（video.remotion）：Remotion CLI 胶水
     )
     if a is not None
 )
@@ -967,6 +969,15 @@ class FabricHub:
             self._registry.register(RefineAdapter(route_fn=self.route))
         except Exception as e:  # noqa: BLE001
             _LOG.warning("refine 引擎注册失败(将跳过): %s", e)
+
+        # Remotion 高质量数据可视化视频渲染（video.remotion）：Remotion CLI 胶水层。
+        # 与 VideoMakerAdapter（本地零成本）互补——前者质量高但需 Remotion 工具链，
+        # 后者零依赖。Remotion 未装时 health()=False，fabric 自动路由绕过。
+        try:
+            from core.fabric.adapters.remotion_adapter import RemotionAdapter
+            self._registry.register(RemotionAdapter(route_fn=self.route))
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("remotion 引擎注册失败(将跳过): %s", e)
 
     def _register_env_codebase_mcp(self) -> None:
         """环境驱动自动注册：让真实工具「装好即通电」，无需改代码。

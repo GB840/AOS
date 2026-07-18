@@ -756,6 +756,15 @@ class EvolveEngine:
 
         高风险提案经此入口确认后才真正改写工作流/内容策略；
         应用前自动保存回滚快照（apply_proposal 内部已做），可经 /proposals/{id}/rollback 回退。
+
+        防循环设计：
+        1. 第 1 次进入：先标记 approved=True，再 apply_proposal，
+           最后 _sync_proposal_status_to_approval 通知 ApprovalStore。
+        2. apply_proposal 成功时内部会设 applied=True；失败时 applied 保持 False。
+        3. ApprovalStore.approve 的钩子回调会再次进入本方法：
+           - 若 applied=True → 前置检查直接返回（apply 不重复执行）
+           - 若 applied=False 但 approved=True → 走"已批准未应用"分支返回，不重试 apply
+        4. 因此 apply_proposal 仅执行一次，无论成功失败都不会无限回调。
         """
         proposal = self._find_proposal(proposal_id)
         if proposal is None:
@@ -763,12 +772,25 @@ class EvolveEngine:
         if proposal.rejected:
             return {"ok": False, "error": "该提案已被拒绝，无法确认"}
         if proposal.applied:
-            return {"ok": False, "error": "该提案已应用"}
+            # 已应用（钩子回调时挡住二次 apply）—— 直接返回成功
+            return {"ok": True, "proposal_id": proposal_id, "applied": True,
+                    "approved_at": proposal.approved_at,
+                    "note": "已应用，跳过重复执行"}
+        if proposal.approved:
+            # 已批准但未 applied（apply 之前失败 / 钩子回调）——
+            # 不自动重试 apply，返回当前状态供调用方决策
+            return {"ok": False, "proposal_id": proposal_id,
+                    "applied": False, "approved": True,
+                    "approved_at": proposal.approved_at,
+                    "error": "已批准但应用未完成，请检查 apply_proposal 错误"}
+        # 第 1 次进入：标记 approved=True
         proposal.approved = True
         proposal.approved_at = time.strftime("%Y-%m-%dT%H:%M:%S")
         self._update_proposal(proposal)
-        # 应用（内部会再次 _update_proposal 写 applied=True）
+        # apply（成功时内部会设 applied=True；失败时 applied 保持 False）
         result = self.apply_proposal(proposal_id, workflow_store)
+        # 同步到 ApprovalStore（无论 apply 是否成功，都标记已批准，便于审计）
+        self._sync_proposal_status_to_approval(proposal, status="approved")
         result["approved_at"] = proposal.approved_at
         return result
 
@@ -779,9 +801,15 @@ class EvolveEngine:
             return {"ok": False, "error": f"提案不存在: {proposal_id}"}
         if proposal.applied:
             return {"ok": False, "error": "该提案已应用，无法拒绝"}
+        # 防循环：已被拒绝的提案直接返回（ApprovalStore 钩子回调时挡住）
+        if proposal.rejected:
+            return {"ok": True, "proposal_id": proposal_id, "rejected": True,
+                    "reject_reason": proposal.reject_reason}
         proposal.rejected = True
         proposal.reject_reason = reason
         self._update_proposal(proposal)
+        # 同步到 ApprovalStore
+        self._sync_proposal_status_to_approval(proposal, status="rejected", note=reason)
         return {"ok": True, "proposal_id": proposal_id, "rejected": True,
                 "reject_reason": reason}
 
@@ -794,7 +822,7 @@ class EvolveEngine:
         return os.path.join(base, "proposals_all.jsonl")
 
     def _save_proposal(self, workflow_id: str, proposals: List[OptimizationProposal]) -> None:
-        """保存提案到 JSONL。"""
+        """保存提案到 JSONL，并把中高风险提案同步到通用 ApprovalStore。"""
         path = self._proposals_path(workflow_id)
         try:
             with open(path, "a", encoding="utf-8") as f:
@@ -802,6 +830,78 @@ class EvolveEngine:
                     f.write(json.dumps(asdict(p), ensure_ascii=False) + "\n")
         except Exception as e:
             logger.debug("保存提案失败: %s", e)
+
+        # 同步中高风险提案到 ApprovalStore（统一审批入口）
+        self._sync_proposals_to_approval(proposals)
+
+    def _sync_proposals_to_approval(self, proposals: List[OptimizationProposal]) -> None:
+        """把 medium/high 风险的新提案同步到 ApprovalStore。
+
+        单向同步：只在提案首次创建时创建审批记录；后续状态变更由
+        approve_proposal / reject_proposal 里的 _update_approval_status 维护。
+        """
+        if not proposals:
+            return
+        try:
+            from kernel.approval.approval_store import get_approval_store
+            store = get_approval_store()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("ApprovalStore 不可用，跳过同步: %s", e)
+            return
+
+        for p in proposals:
+            if p.risk_level not in ("medium", "high"):
+                continue
+            # 防重复：如果已经有同 proposal_id 的审批记录就跳过
+            existing = store.get_by_proposal(p.id)
+            if existing is not None:
+                continue
+            try:
+                store.create_approval(
+                    source="evolve",
+                    title=p.title or f"优化提案 {p.id}",
+                    description=p.description,
+                    risk_level=p.risk_level,
+                    workflow_id=p.workflow_id,
+                    proposal_id=p.id,
+                    payload={
+                        "proposal_type": p.proposal_type,
+                        "expected_benefit": p.expected_benefit,
+                        "change": p.change,
+                    },
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("同步提案到 ApprovalStore 失败 [%s]: %s", p.id, e)
+
+    def _sync_proposal_status_to_approval(self, proposal: OptimizationProposal,
+                                          *, status: str, note: str = "") -> None:
+        """把提案状态同步回 ApprovalStore。
+
+        防循环：如果审批已经是目标状态就跳过，避免
+        store.approve → hook → engine.approve → store.approve 的多余往返。
+        """
+        try:
+            from kernel.approval.approval_store import get_approval_store
+            store = get_approval_store()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("ApprovalStore 不可用，跳过状态同步: %s", e)
+            return
+        try:
+            # 按 proposal_id 找审批记录
+            approval = store.get_by_proposal(proposal.id)
+            if approval is None:
+                return
+            # 防循环：已经是目标状态就不再触发
+            if status == "approved" and approval.status == "approved":
+                return
+            if status == "rejected" and approval.status == "rejected":
+                return
+            if status == "approved":
+                store.approve(approval.id, decided_by="evolve", note=note)
+            elif status == "rejected":
+                store.reject(approval.id, decided_by="evolve", note=note)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("同步提案状态到 ApprovalStore 失败 [%s]: %s", proposal.id, e)
 
     def _load_proposals(self, workflow_id: str = "") -> List[OptimizationProposal]:
         """加载提案。"""

@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List
 
@@ -70,7 +71,7 @@ async def list_datasets():
     """列出所有评估数据集。"""
     harness = _get_harness()
     try:
-        return {"status": "ok", "datasets": harness.list_datasets()}
+        return {"status": "ok", "datasets": await asyncio.to_thread(harness.list_datasets)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -97,7 +98,7 @@ async def create_dataset(body: CreateDatasetRequest):
             )
             for c in body.cases
         ]
-        path = harness.create_dataset(body.name, cases)
+        path = await asyncio.to_thread(harness.create_dataset, body.name, cases)
         return {"status": "ok", "name": body.name, "path": path, "case_count": len(cases)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -107,7 +108,7 @@ async def create_dataset(body: CreateDatasetRequest):
 async def get_dataset(name: str):
     """读取数据集详情。"""
     harness = _get_harness()
-    cases = harness.get_dataset(name)
+    cases = await asyncio.to_thread(harness.get_dataset, name)
     if cases is None:
         raise HTTPException(status_code=404, detail=f"数据集不存在: {name}")
     return {"status": "ok", "name": name, "cases": [c.to_dict() for c in cases]}
@@ -117,7 +118,7 @@ async def get_dataset(name: str):
 async def delete_dataset(name: str):
     """删除数据集。"""
     harness = _get_harness()
-    ok = harness.delete_dataset(name)
+    ok = await asyncio.to_thread(harness.delete_dataset, name)
     return {"status": "ok" if ok else "not_found", "name": name}
 
 
@@ -126,7 +127,9 @@ async def run_dataset(name: str, body: RunDatasetRequest):
     """跑一个数据集的所有用例。返回运行报告（含基线对比）。"""
     harness = _get_harness()
     try:
-        run = harness.run_dataset(name, context_session_prefix=body.context_session_prefix)
+        run = await asyncio.to_thread(
+            harness.run_dataset, name, context_session_prefix=body.context_session_prefix
+        )
         return {"status": "ok", "run": run.to_dict()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -149,7 +152,7 @@ async def list_baselines():
             for fn in sorted(os.listdir(d)):
                 if not fn.endswith(".json"):
                     continue
-                bl = harness.get_baseline(fn[:-5])
+                bl = await asyncio.to_thread(harness.get_baseline, fn[:-5])
                 if bl:
                     result.append(bl)
         return {"status": "ok", "baselines": result}
@@ -161,7 +164,7 @@ async def list_baselines():
 async def get_baseline(name: str):
     """获取指定数据集的基线。"""
     harness = _get_harness()
-    bl = harness.get_baseline(name)
+    bl = await asyncio.to_thread(harness.get_baseline, name)
     if bl is None:
         raise HTTPException(status_code=404, detail=f"基线不存在: {name}")
     return {"status": "ok", "baseline": bl}
@@ -171,7 +174,7 @@ async def get_baseline(name: str):
 async def delete_baseline(name: str):
     """删除基线。"""
     harness = _get_harness()
-    ok = harness.delete_baseline(name)
+    ok = await asyncio.to_thread(harness.delete_baseline, name)
     return {"status": "ok" if ok else "not_found", "name": name}
 
 
@@ -179,7 +182,7 @@ async def delete_baseline(name: str):
 async def set_baseline(name: str, run_id: str):
     """把某次运行设为基线。"""
     harness = _get_harness()
-    run_dict = harness.get_run(run_id)
+    run_dict = await asyncio.to_thread(harness.get_run, run_id)
     if run_dict is None:
         raise HTTPException(status_code=404, detail=f"运行不存在: {run_id}")
     try:
@@ -195,7 +198,7 @@ async def set_baseline(name: str, run_id: str):
             total_cases=run_dict.get("total_cases", 0),
             passed_cases=run_dict.get("passed_cases", 0),
         )
-        path = harness.set_baseline(name, run)
+        path = await asyncio.to_thread(harness.set_baseline, name, run)
         return {"status": "ok", "name": name, "run_id": run_id, "path": path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -210,7 +213,7 @@ async def list_runs(limit: int = Query(20, ge=1, le=200)):
     """列出最近的评估运行。"""
     harness = _get_harness()
     try:
-        return {"status": "ok", "runs": harness.list_runs(limit=limit)}
+        return {"status": "ok", "runs": await asyncio.to_thread(harness.list_runs, limit=limit)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -219,7 +222,7 @@ async def list_runs(limit: int = Query(20, ge=1, le=200)):
 async def get_run(run_id: str):
     """获取某次运行的完整报告。"""
     harness = _get_harness()
-    run = harness.get_run(run_id)
+    run = await asyncio.to_thread(harness.get_run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"运行不存在: {run_id}")
     return {"status": "ok", "run": run}

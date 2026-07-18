@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
@@ -522,14 +522,12 @@ EvalHarness._get_dataset = _get_dataset  # type: ignore[attr-defined]
 # ── 执行：任务 / 工作流 ──
 
 def _exec_task(self, case: EvalCase, prefix: str):
-    """通过 FabricHub 执行一个任务用例。best-effort：hub 不可用不阻塞。"""
+    """通过新栈 FabricHub 执行一个任务用例。best-effort：hub 不可用不阻塞。"""
     started = time.time()
     try:
-        from core.fabric.hub import FabricHub
-        from core.fabric.capability import Capability
-        hub = FabricHub.get_instance()
-        cap = getattr(Capability, "INFERENCE", None) or "inference.llm"
-        res = hub.route(cap, {"prompt": case.task, "task": case.task})
+        from kernel.plugins.fabric_hub import get_fabric_hub
+        hub = get_fabric_hub()
+        res = hub.route("inference.llm", {"prompt": case.task, "task": case.task})
         duration = time.time() - started
         ok = getattr(res, "ok", False)
         data = getattr(res, "data", {}) or {}

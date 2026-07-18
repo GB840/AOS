@@ -234,6 +234,14 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.warning("审核控制面 API 挂载失败: %s", e)
 
+# Remotion 质量视频渲染 API（/api/video/remotion/*，Tier1 缺口③）
+try:
+    from api.video_api import mount_video_api
+    mount_video_api(app)
+    logger.info("Remotion 视频 API 已挂载: /api/video/remotion")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Remotion 视频 API 挂载失败: %s", e)
+
 # 产品飞轮前端页面（/studio/）
 try:
     from fastapi.staticfiles import StaticFiles

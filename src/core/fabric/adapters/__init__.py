@@ -118,6 +118,11 @@ try:
 except Exception:  # noqa: BLE001
     VideoMakerAdapter = None
 
+try:
+    from .remotion_adapter import RemotionAdapter
+except Exception:  # noqa: BLE001
+    RemotionAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -142,6 +147,7 @@ __all__ = [
         "MiniCPMOAdapter",
         "VLMAdapter",
         "VideoMakerAdapter",
+        "RemotionAdapter",
     )
     if globals().get(n) is not None
 ]

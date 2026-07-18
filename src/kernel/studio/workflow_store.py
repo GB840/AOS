@@ -305,6 +305,58 @@ class WorkflowStore:
             return None
         return None
 
+    def list_traces(self, *, wf_id: str = "", limit: int = 50,
+                    status: str = "") -> List[Dict[str, Any]]:
+        """跨工作流列出运行记录（Task 5: Replay & Debug 用）。
+
+        扫描所有 workflows/*/runs/*.json，按 started_at 倒序返回摘要。
+        摘要字段：run_id / workflow_id / status / started_at / duration / step_count
+        （不含 steps 详细内容，避免大负载）
+
+        Args:
+            wf_id: 仅列出该工作流的运行（空=全部）
+            limit: 最多返回多少条
+            status: 仅返回该状态（success/failed/partial/running/awaiting_approval）
+        """
+        traces: List[Dict[str, Any]] = []
+        try:
+            base = self._base_dir
+            wf_ids = [wf_id] if wf_id else os.listdir(base)
+            for wid in wf_ids:
+                runs_dir = os.path.join(base, wid, "runs")
+                if not os.path.isdir(runs_dir):
+                    continue
+                for fname in os.listdir(runs_dir):
+                    if not fname.endswith(".json"):
+                        continue
+                    path = os.path.join(runs_dir, fname)
+                    try:
+                        with open(path, "r", encoding="utf-8") as fp:
+                            data = json.load(fp)
+                    except Exception:
+                        continue
+                    if status and data.get("status") != status:
+                        continue
+                    steps = data.get("steps") or []
+                    traces.append({
+                        "run_id": data.get("id", fname[:-5]),
+                        "workflow_id": data.get("workflow_id", wid),
+                        "status": data.get("status", ""),
+                        "started_at": data.get("started_at", ""),
+                        "ended_at": data.get("ended_at", ""),
+                        "duration": data.get("duration", 0.0),
+                        "step_count": len(steps),
+                        "ok_steps": sum(1 for s in steps if s.get("ok")),
+                        "error": data.get("error", ""),
+                    })
+        except Exception as e:
+            logger.warning("list_traces 失败: %s", e)
+            return []
+
+        # 按 started_at 倒序（最近的在前）
+        traces.sort(key=lambda x: x.get("started_at", ""), reverse=True)
+        return traces[:limit]
+
     # ── 内部方法 ──
 
     def _save_workflow_file(self, wf: Workflow) -> None:

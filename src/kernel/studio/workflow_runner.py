@@ -127,9 +127,17 @@ class WorkflowRunner:
 
         返回恢复后继续执行的 run（成功/失败/再次暂停都可能）。
         """
-        run = self._running.get(run_id) or self._store.get_run(run_id)
+        # 优先从内存中找（保存了完整 WorkflowRun 对象）
+        run = self._running.get(run_id)
         if run is None:
-            raise ValueError(f"运行不存在: {run_id}")
+            # 退而求其次从 store 读（dict），重建 WorkflowRun 对象
+            run_dict = self._store.get_run(run_id)
+            if run_dict is None:
+                raise ValueError(f"运行不存在: {run_id}")
+            run = WorkflowRun(**{k: v for k, v in run_dict.items()
+                                 if k in WorkflowRun.__dataclass_fields__})
+            self._running[run_id] = run
+
         if run.status != "awaiting_approval":
             raise ValueError(f"运行未处于待审批状态（当前: {run.status}）")
 
@@ -143,6 +151,8 @@ class WorkflowRunner:
                     raise ValueError(f"审批不存在: {ap_id}")
                 if ap.status != "approved":
                     raise ValueError(f"审批未通过（当前: {ap.status}）")
+            except ValueError:
+                raise
             except Exception as e:
                 # 校验失败也允许继续（best-effort）——调用方可能已在外部确认
                 logger.warning("审批校验失败，best-effort 继续: %s", e)
@@ -167,7 +177,8 @@ class WorkflowRunner:
         try:
             self._execute_steps(run, wf, steps, start_index=start,
                                 prev_output=run.prev_output,
-                                ctx_manager=ctx_manager)
+                                ctx_manager=ctx_manager,
+                                skip_approval_at=start)
             if run.status != "awaiting_approval":
                 self._finalize_run(run, wf, prev_output=run.prev_output)
                 self._finalize_context_session(ctx_manager, run)
@@ -191,11 +202,16 @@ class WorkflowRunner:
 
     def _execute_steps(self, run: WorkflowRun, wf, steps: List[Dict[str, Any]],
                        *, start_index: int, prev_output: Any,
-                       ctx_manager=None) -> None:
+                       ctx_manager=None,
+                       skip_approval_at: int = -1) -> None:
         """执行 steps[start_index:]，遇到 requires_approval 步骤暂停。
 
         暂停时设置 run.status='awaiting_approval'，run.paused_at_step=该步下标，
         run.prev_output=当前上游输出，run.approval_id=新创建的审批 ID。
+
+        Args:
+            skip_approval_at: 跳过该下标步骤的审批检查（用于 resume 时跳过
+                刚刚已审批通过的那一步）
         """
         results = list(run.steps or [])
         input_data = run.input or {}
@@ -204,8 +220,8 @@ class WorkflowRunner:
         for i in range(start_index, len(steps)):
             step = steps[i]
 
-            # Task 4: 检查是否需要人工审批
-            if step.get("requires_approval"):
+            # Task 4: 检查是否需要人工审批（resume 时跳过刚审批过的那一步）
+            if step.get("requires_approval") and i != skip_approval_at:
                 run.steps = results
                 run.prev_output = prev_output
                 run.paused_at_step = i
@@ -381,7 +397,8 @@ class WorkflowRunner:
     def replay_from_step(self, trace_id: str, step_index: int, *,
                         input_data: Dict = None,
                         override_engine: str = "",
-                        override_payload: Dict = None) -> Dict[str, Any]:
+                        override_payload: Dict = None,
+                        max_steps: int = 0) -> Dict[str, Any]:
         """从某个 trace 的步骤重新执行（回放调试）。
 
         用途（P1 Replay & Debug）：
@@ -401,6 +418,7 @@ class WorkflowRunner:
             input_data: 覆盖初始输入（默认沿用原 trace 的 input）
             override_engine: what-if——对该步换成此引擎（如 "ollama"）
             override_payload: what-if——对该步注入额外 payload 字段
+            max_steps: 最多重放多少步（0=不限，跑到末尾）。debug_step 用 1。
         """
         run = self._store.get_run(trace_id)
         if run is None:
@@ -425,8 +443,11 @@ class WorkflowRunner:
             else:
                 prev_output = out
 
+        # 计算实际跑到哪一步（max_steps 限制）
+        end_index = len(steps) if max_steps <= 0 else min(step_index + max_steps, len(steps))
+
         results = []
-        for i in range(step_index, len(steps)):
+        for i in range(step_index, end_index):
             step = steps[i]
             cap = step.get("capability", "")
             step_name = step.get("name", cap)
@@ -504,6 +525,149 @@ class WorkflowRunner:
             "all_ok": all(r.get("ok") for r in results),
             "results": results,
         }
+
+    def debug_step(self, trace_id: str, step_index: int, *,
+                   override_engine: str = "",
+                   override_payload: Dict = None) -> Dict[str, Any]:
+        """单步调试：只重放指定步骤，不往后链式执行（Task 5: Replay & Debug）。
+
+        用途：
+        - 怀疑某步出错，想快速换引擎/换 payload 验证假设
+        - what-if：对比同一步在不同引擎下的输出
+
+        与 replay_from_step 的区别：
+        - replay_from_step 跑 step_index 及之后所有步
+        - debug_step 只跑 step_index 这一步（max_steps=1）
+
+        Args:
+            trace_id: 原运行记录 run_id
+            step_index: 要调试的步骤下标
+            override_engine: 换引擎
+            override_payload: 注入额外 payload 字段
+        """
+        result = self.replay_from_step(
+            trace_id, step_index,
+            override_engine=override_engine,
+            override_payload=override_payload,
+            max_steps=1,  # 只跑一步
+        )
+        if not result.get("ok"):
+            return result
+        # max_steps=1 时 results 必然只有 1 条
+        results = result.get("results") or []
+        return {
+            "ok": True,
+            "trace_id": trace_id,
+            "workflow_id": result.get("workflow_id"),
+            "step_index": step_index,
+            "result": results[0] if results else None,
+            "single_step": True,
+        }
+
+    def compare_traces(self, trace_id_a: str, trace_id_b: str) -> Dict[str, Any]:
+        """对比两条 trace 的差异（Task 5: Replay & Debug）。
+
+        用途：
+        - 对比原 trace 与 replay 后的 trace，看 what-if 影响
+        - 对比同一工作流两次运行的步骤差异
+
+        不重跑任何步骤，只读 trace 文件做静态对比。
+
+        Args:
+            trace_id_a: trace A 的 run_id
+            trace_id_b: trace B 的 run_id
+        """
+        run_a = self._store.get_run(trace_id_a)
+        run_b = self._store.get_run(trace_id_b)
+        if run_a is None:
+            return {"ok": False, "error": f"trace A 不存在: {trace_id_a}"}
+        if run_b is None:
+            return {"ok": False, "error": f"trace B 不存在: {trace_id_b}"}
+
+        steps_a = run_a.get("steps") or []
+        steps_b = run_b.get("steps") or []
+        max_len = max(len(steps_a), len(steps_b))
+
+        diffs = []
+        for i in range(max_len):
+            sa = steps_a[i] if i < len(steps_a) else None
+            sb = steps_b[i] if i < len(steps_b) else None
+            if sa is None:
+                diffs.append({
+                    "step_index": i,
+                    "status": "only_in_b",
+                    "b_step_name": (sb or {}).get("step_name", ""),
+                })
+                continue
+            if sb is None:
+                diffs.append({
+                    "step_index": i,
+                    "status": "only_in_a",
+                    "a_step_name": sa.get("step_name", ""),
+                })
+                continue
+
+            a_ok = sa.get("ok")
+            b_ok = sb.get("ok")
+            a_eng = sa.get("engine", "")
+            b_eng = sb.get("engine", "")
+            a_dur = sa.get("duration", 0.0)
+            b_dur = sb.get("duration", 0.0)
+
+            entry: Dict[str, Any] = {
+                "step_index": i,
+                "step_name": sa.get("step_name", ""),
+                "a_ok": a_ok,
+                "b_ok": b_ok,
+                "a_engine": a_eng,
+                "b_engine": b_eng,
+                "a_duration": a_dur,
+                "b_duration": b_dur,
+                "duration_delta": round(b_dur - a_dur, 2),
+            }
+            if a_ok != b_ok:
+                entry["status_diff"] = f"{a_ok} -> {b_ok}"
+            if a_eng and b_eng and a_eng != b_eng:
+                entry["engine_diff"] = f"{a_eng} -> {b_eng}"
+            diffs.append(entry)
+
+        a_total = sum(1 for s in steps_a if s.get("ok"))
+        b_total = sum(1 for s in steps_b if s.get("ok"))
+
+        return {
+            "ok": True,
+            "trace_a": trace_id_a,
+            "trace_b": trace_id_b,
+            "workflow_a": run_a.get("workflow_id", ""),
+            "workflow_b": run_b.get("workflow_id", ""),
+            "same_workflow": run_a.get("workflow_id", "") == run_b.get("workflow_id", ""),
+            "a_step_count": len(steps_a),
+            "b_step_count": len(steps_b),
+            "a_ok_steps": a_total,
+            "b_ok_steps": b_total,
+            "a_status": run_a.get("status", ""),
+            "b_status": run_b.get("status", ""),
+            "a_duration": run_a.get("duration", 0.0),
+            "b_duration": run_b.get("duration", 0.0),
+            "duration_delta": round(
+                (run_b.get("duration", 0.0) or 0.0) - (run_a.get("duration", 0.0) or 0.0), 2),
+            "diffs": diffs,
+        }
+
+    def list_traces(self, *, wf_id: str = "", limit: int = 50,
+                    status: str = "") -> List[Dict[str, Any]]:
+        """列出 trace 摘要（Task 5: Replay & Debug 用）。
+
+        代理给 WorkflowStore.list_traces。
+        """
+        return self._store.list_traces(wf_id=wf_id, limit=limit, status=status)
+
+    def get_trace(self, trace_id: str) -> Optional[Dict[str, Any]]:
+        """取 trace 详情（Task 5: Replay & Debug 用）。
+
+        代理给 WorkflowStore.get_run。
+        """
+        return self._store.get_run(trace_id)
 
     # ── Pulse 上报 ──
 
