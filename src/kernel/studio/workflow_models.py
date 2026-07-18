@@ -10,12 +10,10 @@
 """
 from __future__ import annotations
 
-import json
-import os
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -31,6 +29,11 @@ class WorkflowStep:
     retry: int = 0  # 重试次数
     max_tokens: int = 0  # LLM 步骤的 token 上限（0=不限；Task 1: Cost Observability）
     description: str = ""
+    # Task 4: Human-in-the-Loop —— 此步执行前需要人工审批
+    # True 时 workflow_runner 会暂停在该步，创建 pending approval，
+    # 等 approve 后调 resume(run_id) 从此步继续执行。
+    requires_approval: bool = False
+    approval_risk: str = "medium"  # low/medium/high —— 影响审批优先级
 
     def to_chiplet_step(self) -> Dict[str, Any]:
         """转换成 OrchestrationChiplet 能识别的 step 格式。"""
@@ -145,7 +148,9 @@ class WorkflowRun:
     id: str = ""
     workflow_id: str = ""
     workflow_version: str = ""
-    status: str = "pending"  # pending / running / success / failed
+    # pending / running / success / failed / partial
+    # / awaiting_approval（Task 4：暂停等审批）
+    status: str = "pending"
     started_at: str = ""
     ended_at: str = ""
     duration: float = 0.0
@@ -153,6 +158,11 @@ class WorkflowRun:
     output: Dict[str, Any] = field(default_factory=dict)
     steps: List[Dict[str, Any]] = field(default_factory=list)
     error: str = ""
+    # Task 4: Human-in-the-Loop
+    # 暂停等待审批时记录的信息，approve 后用这些信息从此处恢复执行
+    paused_at_step: int = -1        # 暂停时的步骤下标（下一步要执行这个）
+    approval_id: str = ""           # 关联的审批请求 ID
+    prev_output: Any = None         # 暂停时的上游输出（恢复时用）
 
     @classmethod
     def create(cls, workflow_id: str, workflow_version: str = "") -> "WorkflowRun":

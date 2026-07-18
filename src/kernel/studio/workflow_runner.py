@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .workflow_models import WorkflowRun
 from .workflow_store import WorkflowStore, get_workflow_store
@@ -71,6 +71,9 @@ class WorkflowRunner:
                 - 超过 max_tokens 时按优先级压缩（保最新 N 步 + 失败步）
                 - 运行结束时持久化到 JSONL，可用 session_id 断点续跑
                 - 不指定则不启用（保持原行为）
+
+        Task 4: 若任一 step.requires_approval=True，跑到该步会暂停（status=awaiting_approval），
+        创建 pending approval，等 /api/approvals/{id}/approve 后调 resume(run_id) 从此步继续。
         """
         wf = self._store.get(wf_id)
         if not wf:
@@ -78,117 +81,268 @@ class WorkflowRunner:
 
         run = WorkflowRun.create(wf_id, wf.version)
         run.input = input_data or {}
+        run.status = "running"
         self._running[run.id] = run
+        self._store.save_run(run)
 
         # Task 2: Context Engineering —— 按需创建/复用会话上下文
         ctx_manager = self._get_context_session(context_session_id, run.id)
 
         try:
             steps = wf.to_chiplet_steps()
-            results = []
-            prev_output = None
+            self._execute_steps(run, wf, steps, start_index=0,
+                                prev_output=None, ctx_manager=ctx_manager)
 
-            for i, step in enumerate(steps):
-                step_start = time.time()
-                cap = step.get("capability", "")
-                step_name = step.get("name", cap)
-
-                logger.info("执行步骤 %d/%d: %s", i + 1, len(steps), step_name)
-
-                # 准备 payload
-                payload = step.get("payload", {}) or {}
-                in_from = step.get("in_from", "previous")
-
-                if in_from == "initial":
-                    payload = {**(input_data or {}), **payload}
-                elif in_from == "previous" and prev_output:
-                    if isinstance(prev_output, dict):
-                        payload = {**prev_output, **payload}
-                    else:
-                        payload["previous_output"] = prev_output
-
-                # 如果有 prompt，加进去
-                if step.get("prompt"):
-                    payload["prompt"] = step["prompt"]
-                    if prev_output and isinstance(prev_output, str):
-                        payload["prompt"] = f"{step['prompt']}\n\n上游输出:\n{prev_output}"
-
-                step_result = {
-                    "step_index": i,
-                    "step_name": step_name,
-                    "capability": cap,
-                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "run_id": run.id,
-                    "workflow_id": wf_id,
-                }
-
-                try:
-                    if self._route_fn:
-                        res = self._route_fn(cap, payload)
-                        if hasattr(res, "ok") and res.ok:
-                            step_result["ok"] = True
-                            step_result["output"] = res.data if hasattr(res, "data") else {}
-                            step_result["error"] = ""
-                            if hasattr(res, "engine_id"):
-                                step_result["engine"] = res.engine_id
-                        else:
-                            step_result["ok"] = False
-                            step_result["output"] = {}
-                            step_result["error"] = res.error if hasattr(res, "error") else "失败"
-                    else:
-                        # FabricHub 不可用时的优雅降级：模拟成功但标记 simulated
-                        step_result["ok"] = True
-                        step_result["output"] = {"simulated": True, "capability": cap}
-                        step_result["simulated"] = True
-
-                except Exception as e:
-                    step_result["ok"] = False
-                    step_result["output"] = {}
-                    step_result["error"] = str(e)
-                    logger.error("步骤 %s 失败: %s", step_name, e)
-
-                step_result["duration"] = round(time.time() - step_start, 2)
-                results.append(step_result)
-
-                # Task 2: 把步骤结果灌入 ContextManager（best-effort）
-                self._ctx_add_step(ctx_manager, step_result)
-
-                # 上报单步到 Pulse
-                self._report_step(wf_id, step_result)
-
-                # 更新 prev_output
-                if step_result.get("ok") and step_result.get("output"):
-                    out = step_result["output"]
-                    if isinstance(out, dict):
-                        prev_output = out.get("content") or out.get("output") or out
-                    else:
-                        prev_output = out
-                else:
-                    # 失败了，不中断，继续下一步（OrchestrationChiplet 有更复杂的故障转移，这里简化）
-                    pass
-
-            # 总结
-            ok_count = sum(1 for r in results if r.get("ok"))
-            run.steps = results
-            run.duration = round(time.time() - time.mktime(time.strptime(run.started_at[:19], "%Y-%m-%dT%H:%M:%S")), 2)
-            run.status = "success" if ok_count == len(results) else "partial"
-            run.output = {
-                "success_steps": ok_count,
-                "total_steps": len(results),
-                "final_output": prev_output,
-            }
-
-            # Task 2: 收尾——把运行摘要灌入会话上下文 + 持久化
-            self._finalize_context_session(ctx_manager, run)
+            # 如果中途因审批暂停了，不进入收尾统计
+            if run.status != "awaiting_approval":
+                self._finalize_run(run, wf, prev_output=run.prev_output)
+                self._finalize_context_session(ctx_manager, run)
 
         except Exception as e:
             run.status = "failed"
             run.error = str(e)
-            run.duration = round(time.time() - time.mktime(time.strptime(run.started_at[:19], "%Y-%m-%dT%H:%M:%S")), 2)
+            run.duration = self._elapsed(run)
             logger.error("工作流运行失败: %s", e)
 
-        run.ended_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        run.ended_at = (time.strftime("%Y-%m-%dT%H:%M:%S")
+                        if run.status != "awaiting_approval" else "")
+        self._store.save_run(run)
 
+        # 仅在非暂停时做收尾上报（暂停状态等 resume 后再做）
+        if run.status != "awaiting_approval":
+            self._post_run(run, wf)
+
+        # 暂停状态保留在 _running 中，让 resume 能找到
+        if run.status != "awaiting_approval":
+            self._running.pop(run.id, None)
+
+        return run
+
+    def resume(self, run_id: str, approval_id: str = "") -> WorkflowRun:
+        """从暂停处恢复执行（Task 4: Human-in-the-Loop）。
+
+        Args:
+            run_id: 暂停时返回的 run.id
+            approval_id: 可选——若提供则校验该审批已 approved；不提供则用 run.approval_id
+
+        返回恢复后继续执行的 run（成功/失败/再次暂停都可能）。
+        """
+        run = self._running.get(run_id) or self._store.get_run(run_id)
+        if run is None:
+            raise ValueError(f"运行不存在: {run_id}")
+        if run.status != "awaiting_approval":
+            raise ValueError(f"运行未处于待审批状态（当前: {run.status}）")
+
+        # 校验审批已通过
+        ap_id = approval_id or run.approval_id
+        if ap_id:
+            try:
+                from kernel.approval import get_approval_store
+                ap = get_approval_store().get(ap_id)
+                if ap is None:
+                    raise ValueError(f"审批不存在: {ap_id}")
+                if ap.status != "approved":
+                    raise ValueError(f"审批未通过（当前: {ap.status}）")
+            except Exception as e:
+                # 校验失败也允许继续（best-effort）——调用方可能已在外部确认
+                logger.warning("审批校验失败，best-effort 继续: %s", e)
+
+        wf = self._store.get(run.workflow_id)
+        if not wf:
+            run.status = "failed"
+            run.error = f"工作流已删除: {run.workflow_id}"
+            return run
+
+        run.status = "running"
+        steps = wf.to_chiplet_steps()
+        start = run.paused_at_step
+        run.paused_at_step = -1
+        run.approval_id = ""
+
+        # 重新建 ctx_manager（如果原来指定了 session_id，应持久化在 run 里）
+        ctx_manager = self._get_context_session(
+            getattr(run, "context_session_id", "") or "", run.id
+        )
+
+        try:
+            self._execute_steps(run, wf, steps, start_index=start,
+                                prev_output=run.prev_output,
+                                ctx_manager=ctx_manager)
+            if run.status != "awaiting_approval":
+                self._finalize_run(run, wf, prev_output=run.prev_output)
+                self._finalize_context_session(ctx_manager, run)
+        except Exception as e:
+            run.status = "failed"
+            run.error = str(e)
+            run.duration = self._elapsed(run)
+            logger.error("工作流恢复执行失败: %s", e)
+
+        run.ended_at = (time.strftime("%Y-%m-%dT%H:%M:%S")
+                        if run.status != "awaiting_approval" else "")
+        self._store.save_run(run)
+
+        if run.status != "awaiting_approval":
+            self._post_run(run, wf)
+            self._running.pop(run.id, None)
+
+        return run
+
+    # ── 内部：步骤执行循环（支持暂停）──
+
+    def _execute_steps(self, run: WorkflowRun, wf, steps: List[Dict[str, Any]],
+                       *, start_index: int, prev_output: Any,
+                       ctx_manager=None) -> None:
+        """执行 steps[start_index:]，遇到 requires_approval 步骤暂停。
+
+        暂停时设置 run.status='awaiting_approval'，run.paused_at_step=该步下标，
+        run.prev_output=当前上游输出，run.approval_id=新创建的审批 ID。
+        """
+        results = list(run.steps or [])
+        input_data = run.input or {}
+        wf_id = wf.id
+
+        for i in range(start_index, len(steps)):
+            step = steps[i]
+
+            # Task 4: 检查是否需要人工审批
+            if step.get("requires_approval"):
+                run.steps = results
+                run.prev_output = prev_output
+                run.paused_at_step = i
+                run.status = "awaiting_approval"
+                run.approval_id = self._create_step_approval(
+                    run=run, wf=wf, step=step, step_index=i,
+                )
+                logger.info("工作流暂停等待审批 [run=%s step=%d approval=%s]",
+                            run.id, i, run.approval_id)
+                return
+
+            step_start = time.time()
+            cap = step.get("capability", "")
+            step_name = step.get("name", cap)
+            logger.info("执行步骤 %d/%d: %s", i + 1, len(steps), step_name)
+
+            # 准备 payload
+            payload = step.get("payload", {}) or {}
+            in_from = step.get("in_from", "previous")
+
+            if in_from == "initial":
+                payload = {**(input_data or {}), **payload}
+            elif in_from == "previous" and prev_output:
+                if isinstance(prev_output, dict):
+                    payload = {**prev_output, **payload}
+                else:
+                    payload["previous_output"] = prev_output
+
+            if step.get("prompt"):
+                payload["prompt"] = step["prompt"]
+                if prev_output and isinstance(prev_output, str):
+                    payload["prompt"] = f"{step['prompt']}\n\n上游输出:\n{prev_output}"
+
+            step_result = {
+                "step_index": i,
+                "step_name": step_name,
+                "capability": cap,
+                "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "run_id": run.id,
+                "workflow_id": wf_id,
+            }
+
+            try:
+                if self._route_fn:
+                    res = self._route_fn(cap, payload)
+                    if hasattr(res, "ok") and res.ok:
+                        step_result["ok"] = True
+                        step_result["output"] = res.data if hasattr(res, "data") else {}
+                        step_result["error"] = ""
+                        if hasattr(res, "engine_id"):
+                            step_result["engine"] = res.engine_id
+                    else:
+                        step_result["ok"] = False
+                        step_result["output"] = {}
+                        step_result["error"] = res.error if hasattr(res, "error") else "失败"
+                else:
+                    step_result["ok"] = True
+                    step_result["output"] = {"simulated": True, "capability": cap}
+                    step_result["simulated"] = True
+            except Exception as e:
+                step_result["ok"] = False
+                step_result["output"] = {}
+                step_result["error"] = str(e)
+                logger.error("步骤 %s 失败: %s", step_name, e)
+
+            step_result["duration"] = round(time.time() - step_start, 2)
+            results.append(step_result)
+            run.steps = results
+
+            # Task 2: 把步骤结果灌入 ContextManager（best-effort）
+            self._ctx_add_step(ctx_manager, step_result)
+            # 上报单步到 Pulse
+            self._report_step(wf_id, step_result)
+
+            # 更新 prev_output
+            if step_result.get("ok") and step_result.get("output"):
+                out = step_result["output"]
+                if isinstance(out, dict):
+                    prev_output = out.get("content") or out.get("output") or out
+                else:
+                    prev_output = out
+
+        run.prev_output = prev_output
+        run.steps = results
+
+    @staticmethod
+    def _create_step_approval(*, run, wf, step: Dict[str, Any],
+                              step_index: int) -> str:
+        """为需要审批的步骤创建 pending approval，返回审批 ID。"""
+        try:
+            from kernel.approval import get_approval_store
+            risk = step.get("approval_risk", "medium")
+            title = f"工作流步骤审批: {step.get('name', step.get('capability', ''))}"
+            desc = (
+                f"工作流: {wf.name} ({wf.id})\n"
+                f"运行: {run.id}\n"
+                f"步骤 {step_index + 1}: {step.get('name', '')}\n"
+                f"能力: {step.get('capability', '')}\n"
+                f"提示: {step.get('prompt', '')}\n"
+                f"风险等级: {risk}"
+            )
+            ap = get_approval_store().create_approval(
+                source="workflow_runner",
+                title=title,
+                description=desc,
+                risk_level=risk,
+                payload={"step": step, "step_index": step_index},
+                workflow_id=wf.id,
+                run_id=run.id,
+            )
+            return ap.id
+        except Exception as e:
+            logger.warning("创建审批请求失败（best-effort 跳过）: %s", e)
+            return ""
+
+    @staticmethod
+    def _elapsed(run: WorkflowRun) -> float:
+        try:
+            return round(time.time() - time.mktime(
+                time.strptime(run.started_at[:19], "%Y-%m-%dT%H:%M:%S")), 2)
+        except Exception:
+            return 0.0
+
+    def _finalize_run(self, run: WorkflowRun, wf, *, prev_output: Any) -> None:
+        """收尾：统计成功步数、设置 status 与 output。"""
+        results = run.steps or []
+        ok_count = sum(1 for r in results if r.get("ok"))
+        run.duration = self._elapsed(run)
+        run.status = "success" if ok_count == len(results) else "partial"
+        run.output = {
+            "success_steps": ok_count,
+            "total_steps": len(results),
+            "final_output": prev_output,
+        }
+
+    def _post_run(self, run: WorkflowRun, wf) -> None:
+        """跑完后的副作用：统计、Pulse 上报、Evolve 检查。"""
         # 更新工作流统计
         try:
             wf.run_count += 1
@@ -203,22 +357,13 @@ class WorkflowRunner:
 
         # 保存运行记录
         self._store.save_run(run)
-
-        # 上报到 Pulse（数据供 Evolve 优化用）
-        self._report_run(wf_id, run)
-
-        # 产品飞轮闭环：跑完自动触发 Evolve 检查
-        # 低风险优化（如加 retry、调 timeout）自动应用，高风险待人工确认
-        # best-effort，失败不影响主流程
+        # 上报到 Pulse
+        self._report_run(wf.id, run)
+        # 触发自动进化（低风险自动应用，高风险进审批队列）
         try:
-            self._maybe_auto_evolve(wf_id)
+            self._maybe_auto_evolve(wf.id)
         except Exception as e:  # noqa: BLE001
             logger.debug("自动进化检查跳过: %s", e)
-
-        # 从运行中移除
-        self._running.pop(run.id, None)
-
-        return run
 
     def run_by_name(self, wf_name: str, *, input_data: Dict = None) -> Optional[WorkflowRun]:
         """按名字找工作流并运行。"""

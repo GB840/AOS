@@ -170,6 +170,38 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.warning("Context Engineering API 挂载失败: %s", e)
 
+# Eval Framework API（Task 3: P0-b）
+try:
+    from api.eval_api import mount_eval_api
+    mount_eval_api(app)
+    logger.info("Eval Framework API 已挂载: /api/eval")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Eval Framework API 挂载失败: %s", e)
+
+# Human-in-the-Loop 审批 API（Task 4）
+try:
+    from api.approval_api import mount_approval_api
+    mount_approval_api(app)
+    logger.info("Approval API 已挂载: /api/approvals")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Approval API 挂载失败: %s", e)
+
+# Self-Harness API（自测闭环：/api/self-harness/run）
+try:
+    from api.self_harness_api import mount_self_harness_api
+    mount_self_harness_api(app)
+    logger.info("Self-Harness API 已挂载: /api/self-harness")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Self-Harness API 挂载失败: %s", e)
+
+# 多模态（视觉理解）API（/api/multimodal/*，底层 VLMAdapter 诚实降级）
+try:
+    from api.vlm_api import mount_vlm_api
+    mount_vlm_api(app)
+    logger.info("多模态 API 已挂载: /api/multimodal")
+except Exception as e:  # noqa: BLE001
+    logger.warning("多模态 API 挂载失败: %s", e)
+
 # 产品飞轮前端页面（/studio/）
 try:
     from fastapi.staticfiles import StaticFiles

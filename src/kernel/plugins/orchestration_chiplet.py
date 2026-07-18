@@ -39,6 +39,7 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -53,11 +54,15 @@ def _as_str(cap) -> str:
     return cap.value if hasattr(cap, "value") else str(cap)
 
 
+logger = logging.getLogger(__name__)
+
+
 class _RunState:
     """顺序/并发共享的执行状态；所有写操作加锁，保证线程安全。"""
 
     def __init__(self, initial: Dict[str, Any], task_id: Optional[str] = None,
-                 auto_handoff: bool = False, seed_context: Optional[Dict[str, Any]] = None) -> None:
+                 auto_handoff: bool = False, seed_context: Optional[Dict[str, Any]] = None,
+                 context_cm: Any = None, context_auto_persist: bool = True) -> None:
         self.lock = threading.Lock()
         self.initial = initial
         self.task_id = task_id or str(uuid.uuid4())[:8]
@@ -70,6 +75,9 @@ class _RunState:
         self.ok_steps = 0
         self.failed_steps = 0
         self.trace: List[Dict[str, Any]] = []
+        # Context Engineering 集成（Task 2）：上下文会话管理器（None = 不记录）
+        self.context_cm: Any = context_cm
+        self.context_auto_persist: bool = context_auto_persist
 
 
 class OrchestrationChiplet(BaseAgentAdapter):
@@ -98,22 +106,41 @@ class OrchestrationChiplet(BaseAgentAdapter):
         if not isinstance(steps, list) or not steps:
             return InvokeResult(ok=False, error="orchestrator: 缺少 steps[] 流水线定义")
 
+        # —— Context Engineering 集成（Task 2）——
+        # 命中 context_session_id 且未显式关闭时，建/取会话并在每步记录上下文；
+        # 任何异常都降级为「不记录」，绝不影响主流程（理念6 诚实 + 理念1 自闭环）。
+        ctx_cm = None
+        ctx_auto_persist = bool(spec.get("context_auto_persist", True))
+        if spec.get("context_session_id") and spec.get("context_enabled", True):
+            try:
+                from kernel.context.context_manager import get_session
+                ctx_cm = get_session(
+                    spec["context_session_id"],
+                    max_tokens=int(spec.get("context_max_tokens", 10000)),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Context 会话创建失败，跳过上下文记录: %s", e)
+                ctx_cm = None
+
         parallel_groups = spec.get("parallel_groups")
         if parallel_groups:
-            return self._invoke_parallel(steps, spec, parallel_groups)
+            return self._invoke_parallel(steps, spec, parallel_groups, ctx_cm, ctx_auto_persist)
 
         # —— 顺序路径（既有行为，保持不变）——
         state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
                           auto_handoff=spec.get("auto_handoff", False),
-                          seed_context=spec.get("seed_context"))
+                          seed_context=spec.get("seed_context"),
+                          context_cm=ctx_cm, context_auto_persist=ctx_auto_persist)
         for idx, step in enumerate(steps):
             self._run_step(idx, step, state)
         return self._finalize(state)
 
-    def _invoke_parallel(self, steps, spec, parallel_groups) -> InvokeResult:
+    def _invoke_parallel(self, steps, spec, parallel_groups,
+                         ctx_cm=None, ctx_auto_persist=True) -> InvokeResult:
         state = _RunState(spec.get("initial") or {}, task_id=spec.get("task_id"),
                           auto_handoff=spec.get("auto_handoff", False),
-                          seed_context=spec.get("seed_context"))
+                          seed_context=spec.get("seed_context"),
+                          context_cm=ctx_cm, context_auto_persist=ctx_auto_persist)
         covered: set[int] = set()
         for group in parallel_groups:
             idxs = self._resolve_group(group, steps)
@@ -147,6 +174,26 @@ class OrchestrationChiplet(BaseAgentAdapter):
                         break
         return idxs
 
+    @staticmethod
+    def _record_step_context(state: "_RunState", idx: int, cap: Any,
+                             ok: bool, error: str, out_ctx: Any) -> None:
+        """把单步结果记录进 Context 会话（若已启用）。失败静默降级。"""
+        cm = state.context_cm
+        if cm is None:
+            return
+        try:
+            cm.add_step({
+                "step_index": idx,
+                "step_name": _as_str(cap) if cap else "(缺失 capability)",
+                "capability": _as_str(cap) if cap else "",
+                "output": out_ctx if isinstance(out_ctx, dict) else (
+                    {"result": out_ctx} if out_ctx is not None else {}),
+                "ok": ok,
+                "error": error or "",
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.debug("上下文单步记录失败: %s", e)
+
     def _run_step(self, idx: int, step: Dict[str, Any], state: _RunState) -> None:
         """执行单步并就地更新 state（线程安全）。无返回值。"""
         cap = step.get("capability")
@@ -156,6 +203,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
                 state.trace.append({"step": idx, "capability": None,
                                     "engine": None, "ok": False,
                                     "error": "缺 capability"})
+            self._record_step_context(state, idx, cap, False, "缺 capability", None)
             return
         # 解析本步入参
         if "in" in step:
@@ -168,6 +216,9 @@ class OrchestrationChiplet(BaseAgentAdapter):
                     state.trace.append({"step": idx, "capability": _as_str(cap),
                                         "engine": None, "ok": False,
                                         "error": "依赖的上游步骤尚未成功产出，本步无法获取输入（语义空转已阻止）"})
+                    self._record_step_context(
+                        state, idx, cap, False,
+                        "依赖的上游步骤尚未成功产出，本步无法获取输入（语义空转已阻止）", None)
                     return
                 payload = state.last_success_out
             # 投影：把上游产出里可读的文本喂给「文本消费型」下游
@@ -212,6 +263,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
                 state.failed_steps += 1
                 state.trace.append({"step": idx, "capability": _as_str(cap),
                                     "engine": _eng, "ok": False, "error": res.error})
+            self._record_step_context(state, idx, cap, False, res.error or "", None)
             return
         step_out = res.data if isinstance(res, InvokeResult) else res
         out_ctx = step_out if isinstance(step_out, dict) else {"result": step_out}
@@ -223,9 +275,25 @@ class OrchestrationChiplet(BaseAgentAdapter):
             state.trace.append({"step": idx, "capability": _as_str(cap),
                                 "engine": _eng, "ok": True, "out": _brief(step_out),
                                 **({"real_metrics": _rm} if _rm is not None else {})})
+        self._record_step_context(state, idx, cap, True, "", out_ctx)
 
     @staticmethod
     def _finalize(state: _RunState, parallel: bool = False) -> InvokeResult:
+        # Context Engineering 收尾：追加 summary 条目并按需持久化（失败静默降级）
+        cm = state.context_cm
+        if cm is not None:
+            try:
+                cm.add_step({
+                    "step_index": len(cm._entries),
+                    "step_name": "orchestration_summary",
+                    "capability": "orchestration",
+                    "output": {"ok_steps": state.ok_steps, "failed_steps": state.failed_steps},
+                    "ok": state.ok_steps > 0,
+                })
+                if state.context_auto_persist:
+                    cm.persist()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("上下文收尾失败: %s", e)
         if state.ok_steps == 0:
             _flush_trace(state)  # 白盒 trace 落盘（即便全失败也保留失败上下文）
             return InvokeResult(
