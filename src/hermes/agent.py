@@ -28,11 +28,12 @@ _fabric_hub_singleton = None
 
 
 def _get_fabric_hub():
-    """惰性缓存 FabricHub 单例（首次调用构造较重，后续复用）。"""
+    """惰性缓存 FabricHub 单例——复用 fabric_hub.get_fabric_hub() 全局单例，
+    确保与内核 / API / AutoSkill 共用同一完整装配实例（消除多实例不一致）。"""
     global _fabric_hub_singleton
     if _fabric_hub_singleton is None:
-        from kernel.plugins.fabric_hub import FabricHub
-        _fabric_hub_singleton = FabricHub()
+        from kernel.plugins.fabric_hub import get_fabric_hub
+        _fabric_hub_singleton = get_fabric_hub()
     return _fabric_hub_singleton
 
 _HERMES_SRC = None

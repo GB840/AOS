@@ -209,6 +209,7 @@ class FabricHub:
         self._registry = FabricRegistry(**build_route_runtime())
         self._failure_monitor: Optional[Any] = None  # MAST 失败监控器，下方 try 链 best-effort 接入
         self._errors: Dict[str, str] = {}
+        self._missing_capability_hooks: List[Callable] = []  # 能力缺失时触发的钩子（AutoSkill 等）
         # 已隔离进子进程的引擎：engine_id -> IsolatedEngineHost。
         # 被隔离引擎同时以 IsolatedAdapterProxy 注册进 _registry（参与路由），
         # 但 invoke/health 全部走子进程。recover() 对它们直接 respawn 子进程。
@@ -336,6 +337,37 @@ class FabricHub:
                 return eid
         return None
 
+    def register_adapter(self, adapter) -> None:
+        """向 FabricHub 注册一个适配器。
+
+        用于动态注册新能力（如 AutoSkill 安装的技能、运行时发现的新引擎）。
+        """
+        self._registry.register(adapter)
+        _LOG.info("FabricHub 动态注册适配器: %s", getattr(adapter, "engine_id", "unknown"))
+
+    def add_missing_capability_hook(self, hook: Callable) -> None:
+        """注册能力缺失钩子——当某个能力没有 live provider 时触发。
+
+        钩子签名：hook(capability: str, payload: dict) -> bool
+        返回 True 表示钩子成功补充了能力（注册了新 adapter），可以重试路由。
+
+        典型用例：AutoSkill 引擎——缺什么技能自动去 SkillHub 找并安装注册。
+        """
+        self._missing_capability_hooks.append(hook)
+
+    def _run_missing_capability_hooks(self, capability: str, payload: Dict[str, Any]) -> bool:
+        """运行所有能力缺失钩子，任意一个返回 True 就认为成功补充了能力。"""
+        if not self._missing_capability_hooks:
+            return False
+        for hook in self._missing_capability_hooks:
+            try:
+                if hook(capability, payload):
+                    _LOG.info("能力缺失钩子成功补充: %s", capability)
+                    return True
+            except Exception as e:  # noqa: BLE001 - 钩子失败不影响主流程
+                _LOG.warning("能力缺失钩子异常: %s", e)
+        return False
+
     def route(self, capability: str, payload: Dict[str, Any],
               trace_id: Optional[str] = None) -> Any:
         """经能力路由把请求委派给 live 引擎，并在供给方之间做**运行时故障转移**：
@@ -367,6 +399,11 @@ class FabricHub:
         cap_str = self._registry.capability_to_str(capability)
         eff_tier = req.tier or self._registry.tier
         providers = self._registry.providers_for(req.capability, req.tier)
+        if not providers:
+            # 能力缺失钩子：AutoSkill 等模块可以在这里自动发现并安装技能
+            if self._run_missing_capability_hooks(capability, payload):
+                # 钩子成功补充了能力，重新获取 providers
+                providers = self._registry.providers_for(req.capability, req.tier)
         if not providers:
             return InvokeResult(ok=False, error=f"no live provider for {capability}")
         last_res: InvokeResult | None = None
@@ -913,7 +950,15 @@ class FabricHub:
 
         try:
             from core.fabric.adapters.echo_adapter import EchoAdapter
-            self._registry.register(EchoAdapter(route_fn=self.route))
+            echo = EchoAdapter(route_fn=self.route)
+            # 可选：注入 PulseCollector，让内容飞轮的反馈数据也进 Pulse，
+            # 供 Evolve 做内容优化分析（best-effort，失败不影响主流程）
+            try:
+                from kernel.pulse.pulse_collector import get_pulse_collector
+                echo.set_pulse(get_pulse_collector())
+            except Exception:  # noqa: BLE001
+                pass
+            self._registry.register(echo)
         except Exception as e:  # noqa: BLE001
             _LOG.warning("echo 引擎注册失败(将跳过): %s", e)
 
@@ -1501,3 +1546,43 @@ class FabricHub:
                        "stored": stored},
             "session": {"id": session_id, "turns": session_turns} if session_id else None,
         }
+
+
+# ── 单例工厂 ──
+
+_hub_instance: Optional[FabricHub] = None
+
+
+def get_fabric_hub() -> FabricHub:
+    """获取 FabricHub 单例（完整装配实例）。
+
+    与 build_default_kernel / mcp.protocol 使用的实例一致——统一走 build_fabric_hub
+    的全局装配（含编排芯粒 + 隔离引擎），消除此前「裸 FabricHub()」与「完整装配 hub」
+    并存导致的多实例不一致（AutoSkill 缺失能力钩子挂在一份、/api/chat 走另一份）。
+
+    首次调用若单例为空则构造完整装配实例；装配失败兜底回裸实例，保证不崩溃。
+    """
+    global _hub_instance
+    if _hub_instance is None:
+        try:
+            from kernel.wiring import build_fabric_hub
+            _hub_instance = build_fabric_hub()
+        except Exception:  # noqa: BLE001 - 装配失败兜底，不阻断调用方
+            _hub_instance = FabricHub()
+    return _hub_instance
+
+
+def set_fabric_hub(hub: "FabricHub") -> None:
+    """注入/替换 FabricHub 单例（内核装配或测试时调用）。
+
+    内核在 build_default_kernel 中构造完整装配实例后调用本函数，
+    使 get_fabric_hub() 与内核共用同一实例引用（精确一致，不依赖 lru_cache 参数）。
+    """
+    global _hub_instance
+    _hub_instance = hub
+
+
+def reset_fabric_hub() -> None:
+    """重置 FabricHub 单例（仅用于测试）。"""
+    global _hub_instance
+    _hub_instance = None

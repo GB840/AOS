@@ -163,6 +163,10 @@ def build_default_kernel(default_grant: bool = False,
     try:
         hub = build_fabric_hub(isolate_heavy=isolate_heavy)
         kernel.set_fabric_hub(hub)
+        # 同步安装为模块级单例，确保 fabric_hub.get_fabric_hub() 与内核共用同一实例，
+        # 消除此前「裸 FabricHub() 单例」与「完整装配 hub」并存的多实例不一致。
+        from .plugins.fabric_hub import set_fabric_hub
+        set_fabric_hub(hub)
     except Exception as e:  # noqa: BLE001
         print(f"[wiring] fabric 能力枢纽构建失败: {e}")
 
@@ -188,14 +192,6 @@ def build_default_kernel(default_grant: bool = False,
     #    使其 LLM 调用走统一三级回退链而非自建 LLM 逻辑。
     #    非物理删除 brain.py，而是向内核让渡模型调用权。
     _inject_kernel_into_brain(kernel)
-
-    # 6) 挂载 FabricHub：让所有 /api/v1/run_task 及 chat 自动检测走 fabric
-    #    能力枢纽，真正实现端云合作 + 编排闭环。v5_bridge.py 委托 self.kernel.fabric_hub。
-    try:
-        hub = build_fabric_hub(isolate_heavy=isolate_heavy)
-        kernel.set_fabric_hub(hub)
-    except Exception as e:
-        print(f"[wiring] fabric_hub 挂载失败（不影响内核构建）: {e}")
 
     return kernel
 
