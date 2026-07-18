@@ -31,6 +31,7 @@
           <a href="#/hub" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="hub">商店</a>
           <a href="#/studio" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="studio">工作室</a>
           <a href="#/pulse" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="pulse">数据</a>
+          <a href="#/trace" class="nav-link py-5 text-gray-700 hover:text-blue-600 font-medium" data-route="trace">追踪</a>
         </div>
       </div>
       <div class="flex items-center space-x-4">
@@ -72,6 +73,7 @@ function render() {
     case 'hub': renderHub(app); break;
     case 'studio': renderStudio(app); break;
     case 'pulse': renderPulse(app); break;
+    case 'trace': renderTrace(app); break;
     case 'agent': renderAgentDetail(app); break;
     default: renderHub(app);
   }
@@ -813,6 +815,94 @@ async function loadPulseData() {
   } catch(e) {
     document.getElementById('abTestCount').textContent = 0;
   }
+}
+
+// ── 编排运行追踪（复用 /api/kanban） ──
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function statusBadge(status) {
+  const map = {
+    success: ['bg-green-100 text-green-700', '✅ 全部成功'],
+    partial: ['bg-yellow-100 text-yellow-700', '⚠️ 部分成功'],
+    failed:  ['bg-red-100 text-red-700', '❌ 全部失败'],
+    empty:   ['bg-gray-100 text-gray-500', '○ 空运行']
+  };
+  const pair = map[status] || map.empty;
+  return `<span class="px-2 py-1 rounded-full text-xs font-medium ${pair[0]}">${pair[1]}</span>`;
+}
+
+async function renderTrace(container) {
+  container.innerHTML = `
+    <div class="mb-8">
+      <h1 class="text-3xl font-bold text-gray-900 mb-2">编排运行追踪</h1>
+      <p class="text-gray-600">逐 step 查看 OrchestrationChiplet 调度轨迹（能力 → 引擎 → 成败 → 延迟）</p>
+    </div>
+    <div id="traceList" class="space-y-4">
+      <div class="skeleton h-24 rounded-xl"></div>
+      <div class="skeleton h-24 rounded-xl"></div>
+    </div>
+  `;
+
+  try {
+    const res = await fetch(`${API_BASE}/kanban/runs`);
+    const data = await res.json();
+    const items = data.items || [];
+    const list = document.getElementById('traceList');
+
+    if (!items.length) {
+      list.innerHTML = `
+        <div class="text-center py-16 text-gray-500">
+          <p class="text-lg mb-2">暂无编排运行轨迹</p>
+          <p class="text-sm">运行任务后，OrchestrationChiplet 会把 trace 落盘到 src/_traces/，这里自动出现。</p>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = items.map((run, idx) => `
+      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="p-5 cursor-pointer hover:bg-gray-50 flex items-center justify-between" onclick="toggleTrace(${idx})">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-3 mb-1">
+              ${statusBadge(run.status)}
+              <span class="font-semibold text-gray-900 truncate">${escapeHtml(run.goal || run.run_id)}</span>
+            </div>
+            <div class="text-xs text-gray-500">
+              ${escapeHtml(run.run_id)} · ${run.step_count} 步 · ✅${run.ok_steps} ❌${run.failed_steps} · ${run.total_latency_ms}ms · ${escapeHtml(run.ts)}
+            </div>
+          </div>
+          <svg id="chev-${idx}" class="w-5 h-5 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </div>
+        <div id="trace-detail-${idx}" class="hidden border-t border-gray-100 bg-gray-50 p-5 space-y-2">
+          ${(run.steps || []).map((s, i) => `
+            <div class="flex items-center gap-3 p-3 bg-white rounded-lg">
+              <div class="w-7 h-7 ${s.ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">${i + 1}</div>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-gray-900 text-sm">${escapeHtml(s.capability || '?')}</div>
+                <div class="text-xs text-gray-500">引擎: ${escapeHtml(s.engine || '—')} · 延迟: ${s.latency_ms ?? '—'}ms</div>
+                ${s.ok ? '' : `<div class="text-xs text-red-600 mt-1">错误: ${escapeHtml(s.error || '未知')}</div>`}
+              </div>
+              <span class="text-xs font-medium ${s.ok ? 'text-green-600' : 'text-red-600'}">${s.ok ? '✅' : '❌'}</span>
+            </div>
+          `).join('') || '<p class="text-sm text-gray-500">无 step 记录</p>'}
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    console.error('加载追踪失败', e);
+    const list = document.getElementById('traceList');
+    if (list) list.innerHTML = '<p class="text-red-600 text-sm">加载失败：' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+function toggleTrace(idx) {
+  const el = document.getElementById('trace-detail-' + idx);
+  const chev = document.getElementById('chev-' + idx);
+  if (!el) return;
+  el.classList.toggle('hidden');
+  if (chev) chev.style.transform = el.classList.contains('hidden') ? '' : 'rotate(180deg)';
 }
 
 // ── 工具函数 ──
