@@ -79,7 +79,7 @@ AOS 不只是"又一个 agent 框架"。它的真正差异化是：**把"失败�
 | 抗复合失败基准测试 | ✅ 已落地 | `examples/resilience_benchmark.py` + `tests/test_resilience_gate.py` |
 | 防御型本地漏洞自查（security.audit） | ✅ 已落地（含自愈） | `core/fabric/adapters/security_audit_adapter.py` + 能力 `security.audit` 接入路由 + `tests/test_security_audit_adapter.py`；把公开 CVE 情报转译成**对自家环境的只读巡检**（不含/不运行任何 exploit，外部目标拒绝）。**自愈**：opt-in(`AOS_SELF_HEAL=1`+调用方`self_heal`) 对白名单内升级命令自动执行并复验，复验仍受影响则诚实 `healed=False`（绝不谎报）；`tests/test_security_audit_selfheal.py` |
 | 本机逆向工程（re.ida / ida-pro-mcp） | ✅ 已落地（opt-in） | `core/fabric/adapters/ida_pro_mcp_adapter.py` + 能力 `re.ida`；把 mrexodia/ida-pro-mcp（真实开源逆向 MCP）经本机 MCP server 接入供给面，**localhost-only 红线**（非本机 URL 拒绝注册/调用），仅静态只读分析。FabricHub 在 `IDA_PRO_MCP_URL` 为 localhost 时自动注册；`tests/test_ida_pro_mcp_adapter.py` |
-| 因果世界模型推理层 | ✅ 已落地 | `kernel/causal.py`：把珀尔三层因果阶梯落地为可单测经验因果模型——`effect_of`(干预认知)、`counterfactual`(反事实认知)、样本不足诚实 `unknown`(事前可验证)；`from_distiller` 复用白盒蒸馏统计。映射中数睿智 WAIC2026 蓝皮书，详见 `docs/AOS_CAUSAL_WORLD_MODEL.md`；`tests/test_causal.py` |
+| 因果世界模型推理层 | ✅ 已落地（深化） | `kernel/causal.py`：把珀尔三层因果阶梯落地为可单测经验因果模型——`effect_of`(干预认知，输出 **Wilson 95% 置信区间 + 因果性标注**`observational_association`而非已证因果，样本不足诚实 `unknown`)、`counterfactual`(反事实认知，附**效用差**)、`best_action`(**决策论层**：成功率×成本×时延带权，默认退化为比成功率)；`from_distiller` 复用白盒蒸馏统计。映射中数睿智 WAIC2026 蓝皮书，详见 `docs/AOS_CAUSAL_WORLD_MODEL.md`；`tests/test_causal.py`（含置信区间/决策论测试） |
 
 ---
 
@@ -140,3 +140,8 @@ AOS 不只是"又一个 agent 框架"。它的真正差异化是：**把"失败�
 - 全部 **opt-in**、**故障隔离**、**零足迹**、**不伪造**（理念 6 / 9）。
 - 每个 MVP 必须**真跑验证 + 测试守护 + 提交 + push**，不以"设计文档"冒充"已完成"。
 - 诚实标注每一项的真实状态（第 4 节），区分"已落地资产"与"待做 MVP"，绝不把蓝图当落地。
+- **原因与影响驱动（Why + What-Changes-After）是系统本能**（已刻入 `AGENTS.md` §1.10）：
+  任何产出须显式回答"为什么"与"改变之后会怎样"，交付前必过**五缺陷自检**
+  （只验表面 / 无副作用审计 / 红线不复核 / 相关当因果 / 缺决策论层）。本范式三大 MVP
+  的深化（自愈置信与审计轨迹、ida 调用时红线复核与只读默认、因果置信区间与决策论层）
+  即该本能的落地样板。

@@ -55,14 +55,21 @@ LLM（神经侧）发散提候选，动态本体（符号侧）刚性校验、�
 - `Intervention(context, action, outcome)`：白盒 Trace 的最小因果单元，每样本都是
   一次**真实闸门**的成败判定（非模型臆测），保证因果估计可复核。
 - `CausalModel.effect_of(ctx, action)`：干预认知——估计「在 ctx 下采取 action 的
-  预期成功率」，样本不足（`MIN_SAMPLES=5`）诚实返回 `unknown`（事前不可验证）。
-- `CausalModel.counterfactual(ctx, actual, alt)`：反事实认知——估计「若当初换 alt
-  是否更优」，直接喂给 autopilot 反思做「换做法」决策。
+  预期成功率」。**D4 深化**：显式标注 `inference_type=observational_association`
+  （这是珀尔之梯**第一层关联**，不是 do-intervention 已证因果——路由成败吸收了大量
+  未控混淆变量）；输出 **Wilson 95% 置信区间**与置信级别 `low/medium/high`，
+  样本不足（`MIN_SAMPLES=5`）诚实返回 `unknown`（事前不可验证）。绝不 5 样本就报确定比率。
+- `CausalModel.counterfactual(ctx, actual, alt, costs)`：反事实认知——估计「若当初换
+  alt 是否更优」。**D5 深化**：除成功率差 `delta` 外，额外给出**效用差** `utility_delta`
+  （注入各动作成本后，「成功率更高」未必「更值」），直接喂给 autopilot 反思做「换做法」决策。
+- `CausalModel.best_action(ctx, actions, weights, costs, latencies)`：**D5 决策论层**——
+  默认退化为「比成功率」，支持带权决策 `utility = 成功率·rate − 成本·cost − 时延·latency`，
+  在约束下挑真最优（而非单指标次优）。
 - `CausalModel.from_distiller(distiller)`：复用 `EvolutionDistiller` 已在路由热路径
   收集的 (能力,引擎)→成败，把**白盒蒸馏直接上升为因果干预效应**，零重复采集。
 
-测试：`tests/test_causal.py`（6 passed）——覆盖 unknown 下限、reliable/unreliable、
-反事实择优、best_action、`from_distiller` 复用蒸馏统计。
+测试：`tests/test_causal.py`（10 passed）——覆盖 unknown 下限、Wilson 区间边界、
+观测相关标注、反事实效用反转、带权 best_action 选更便宜动作、`from_distiller` 复用蒸馏统计。
 
 ## 五、与中数睿智的差异化（诚实定位）
 
