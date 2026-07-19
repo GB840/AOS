@@ -33,6 +33,66 @@ def _state_dir() -> str:
     return _STATE_DIR
 
 
+_LESSONS_PATH = os.path.join(_STATE_DIR, "flywheel_lessons.jsonl")
+_LESSONS_MAX = 100  # 有界轮转上限
+_LESSONS_LOCK = threading.Lock()
+
+
+def _load_lessons(topic: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """载入与当前主题相关的历史教训（按关键词重叠打分）。"""
+    if not os.path.exists(_LESSONS_PATH):
+        return []
+    try:
+        q_tokens = set(topic.lower())
+        scored: List[tuple] = []
+        with open(_LESSONS_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                rec_tokens = set(rec.get("topic", "").lower())
+                overlap = len(q_tokens & rec_tokens)
+                if overlap:
+                    scored.append((overlap, rec))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in scored[:limit]]
+    except Exception:
+        logger.debug("载入飞轮教训失败", exc_info=True)
+        return []
+
+
+def _save_lesson(topic: str, cycle_num: int, stage: str, lesson: str) -> None:
+    """追加一条飞轮教训（有锁 + 有界轮转）。"""
+    if not lesson or len(lesson.strip()) < 8:
+        return
+    rec = {
+        "ts": datetime.now().isoformat(),
+        "topic": topic,
+        "cycle_num": cycle_num,
+        "stage": stage,
+        "lesson": lesson.strip()[:300],
+    }
+    with _LESSONS_LOCK:
+        try:
+            os.makedirs(os.path.dirname(_LESSONS_PATH), exist_ok=True)
+            # 有界轮转：超上限删最旧 20%
+            if os.path.exists(_LESSONS_PATH):
+                with open(_LESSONS_PATH, encoding="utf-8") as f:
+                    lines = [l for l in f if l.strip()]
+                if len(lines) >= _LESSONS_MAX:
+                    lines = lines[_LESSONS_MAX // 5:]
+                    with open(_LESSONS_PATH, "w", encoding="utf-8") as f:
+                        f.writelines(lines)
+            with open(_LESSONS_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.debug("保存飞轮教训失败", exc_info=True)
+
+
 @dataclass
 class FlywheelCycle:
     """一轮循环的记录。"""
@@ -284,20 +344,28 @@ class ContentFlywheel:
         except Exception as e:  # noqa: BLE001
             logger.debug("内容飞轮自动反哺跳过: %s", e)
 
+        # 反思闭环：从本轮结果提炼教训，持久化供后续轮次注入
+        self._reflect_and_persist(cycle)
+
         logger.info("飞轮第 %d 轮结束: %s (%d/%d 阶段成功)",
                     cycle_num, cycle.status, ok_count, total)
 
         return asdict(cycle)
 
     def _stage_forge(self) -> Dict:
-        """Forge 阶段：内容生产。"""
+        """Forge 阶段：内容生产（注入历史教训，让生产引擎不重复踩坑）。"""
         if not self._route_fn:
             return {"ok": False, "error": "无 route_fn"}
+
+        # 反思闭环：注入与当前主题相关的历史教训
+        lessons = _load_lessons(self.topic, limit=3)
+        lesson_hints = [l.get("lesson", "") for l in lessons if l.get("lesson")]
 
         res = self._route_fn("content.marketing_video", {
             "topic": self.topic,
             "style": self.config.get("style", "douyin"),
             "duration": self.config.get("duration", 60),
+            "lessons": lesson_hints,  # 历史教训注入，生产引擎可据此规避已知问题
         })
         data = res.data if hasattr(res, "data") and res.ok else {}
 
@@ -371,6 +439,39 @@ class ContentFlywheel:
             "suggestion_count": len(data.get("suggestions", [])),
             "next_plan": data.get("next_content_plan", {}),
         }
+
+    def _reflect_and_persist(self, cycle: FlywheelCycle) -> None:
+        """反思闭环：从本轮结果提炼教训并持久化。
+
+        只在有失败或低效时写入，全成功不写（避免教训库膨胀无意义条目）。
+        """
+        stages = cycle.stages
+        for stage_name, stage_data in stages.items():
+            if not isinstance(stage_data, dict):
+                continue
+            # 阶段失败 → 记录根因
+            if not stage_data.get("ok", True):
+                error = stage_data.get("error", "未知错误")[:150]
+                _save_lesson(
+                    self.topic, cycle.cycle_num, stage_name,
+                    f"{stage_name} 阶段失败（{error}），下次应检查前置条件或切换备选引擎",
+                )
+            # Echo 阶段特殊：成功但无反馈也是问题
+            elif stage_name == "echo" and stage_data.get("total_count", -1) == 0:
+                _save_lesson(
+                    self.topic, cycle.cycle_num, "echo",
+                    "Echo 采集到 0 条反馈，可能是分发渠道未生效或关键词与平台不匹配",
+                )
+
+        # 部分成功（partial）→ 记录瓶颈
+        if cycle.status == "partial":
+            failed = [k for k, v in stages.items()
+                      if isinstance(v, dict) and not v.get("ok", True)]
+            if failed:
+                _save_lesson(
+                    self.topic, cycle.cycle_num, "cycle",
+                    f"第 {cycle.cycle_num} 轮瓶颈在 {', '.join(failed)}，其余阶段正常",
+                )
 
     def _save_state(self) -> None:
         """持久化状态到磁盘。"""

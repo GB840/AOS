@@ -1,243 +1,243 @@
-"""内容飞轮技能测试 — 覆盖模拟执行、反思提炼、教训持久化、trace 完整性。"""
+"""内容飞轮引擎反思闭环测试 — 直接测 kernel.plugins.content_flywheel 的 lesson 能力。
+
+不测 Skill 包装层（那只是委托），测引擎本身的：
+- _save_lesson / _load_lessons 持久化
+- _reflect_and_persist 提炼逻辑
+- _stage_forge 教训注入
+- 有界轮转 + 线程安全
+"""
 import json
-import sys
 import os
-import tempfile
-from pathlib import Path
+import sys
+import threading
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from skills.content_flywheel_skill import (
-    ContentFlywheelSkill,
-    REFLECTION_RULES,
-)
+
+@pytest.fixture(autouse=True)
+def isolate_lessons(tmp_path, monkeypatch):
+    """每轮测试隔离教训文件，不污染真实数据。"""
+    lessons_file = tmp_path / "flywheel_lessons.jsonl"
+    state_dir = str(tmp_path / "flywheel_state")
+    os.makedirs(state_dir, exist_ok=True)
+    monkeypatch.setenv("AOS_FLYWHEEL_STATE_DIR", state_dir)
+    import kernel.plugins.content_flywheel as mod
+    monkeypatch.setattr(mod, "_LESSONS_PATH", str(lessons_file))
+    monkeypatch.setattr(mod, "_STATE_DIR", state_dir)
+    return mod
 
 
 @pytest.fixture
-def skill(tmp_path):
-    """创建使用临时目录的 skill 实例。"""
-    os.environ["AOS_FLYWHEEL_LESSONS_DIR"] = str(tmp_path / "lessons")
-    # 重新 import 以刷新模块级路径
-    import importlib
-    import skills.content_flywheel_skill as mod
-    importlib.reload(mod)
-    s = mod.ContentFlywheelSkill()
-    s._lessons_path = tmp_path / "lessons" / "flywheel_lessons.jsonl"
-    return s
+def flywheel(isolate_lessons):
+    """构建无 route_fn 的飞轮实例（测试反思逻辑不需要真实路由）。"""
+    return isolate_lessons.ContentFlywheel(topic="AI 智能体", route_fn=None)
 
 
-class TestExecute:
-    """execute() 主入口测试。"""
+class TestLessonPersistence:
+    """_save_lesson / _load_lessons 持久化。"""
 
-    def test_missing_topic(self, skill):
+    def test_save_and_load(self, isolate_lessons):
+        mod = isolate_lessons
+        mod._save_lesson("AI 智能体", 1, "forge", "forge 阶段超时，应降低视频时长")
+        mod._save_lesson("AI 智能体", 2, "echo", "Echo 采集 0 条，关键词不匹配")
+        lessons = mod._load_lessons("AI 智能体")
+        assert len(lessons) == 2
+
+    def test_topic_relevance_filtering(self, isolate_lessons):
+        mod = isolate_lessons
+        mod._save_lesson("AI 智能体", 1, "forge", "AI 相关教训记录")
+        mod._save_lesson("跨境电商", 1, "cast", "跨境相关教训记录")
+        lessons = mod._load_lessons("AI 智能体")
+        assert any("AI" in l.get("topic", "") for l in lessons)
+
+    def test_empty_lesson_skipped(self, isolate_lessons):
+        mod = isolate_lessons
+        mod._save_lesson("test", 1, "forge", "")
+        mod._save_lesson("test", 1, "forge", "短")  # < 8 字符
+        lessons = mod._load_lessons("test")
+        assert len(lessons) == 0
+
+    def test_lesson_length_capped(self, isolate_lessons):
+        mod = isolate_lessons
+        mod._save_lesson("test", 1, "forge", "x" * 500)
+        lessons = mod._load_lessons("test")
+        assert len(lessons[0]["lesson"]) <= 300
+
+    def test_bounded_rotation(self, isolate_lessons):
+        mod = isolate_lessons
+        for i in range(120):
+            mod._save_lesson(f"topic{i}", i, "forge", f"教训编号 {i} 需要足够长度才能通过")
+        with open(mod._LESSONS_PATH, encoding="utf-8") as f:
+            lines = [l for l in f if l.strip()]
+        assert len(lines) <= mod._LESSONS_MAX
+
+    def test_thread_safety(self, isolate_lessons):
+        mod = isolate_lessons
+        errors = []
+
+        def writer(n):
+            try:
+                for i in range(10):
+                    mod._save_lesson(f"thread{n}", i, "forge", f"线程 {n} 第 {i} 条教训记录")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(n,)) for n in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(errors) == 0
+        with open(mod._LESSONS_PATH, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    json.loads(line)
+
+
+class TestReflectAndPersist:
+    """_reflect_and_persist 提炼逻辑。"""
+
+    def test_stage_failure_generates_lesson(self, flywheel, isolate_lessons):
+        mod = isolate_lessons
+        from kernel.plugins.content_flywheel import FlywheelCycle
+        cycle = FlywheelCycle(
+            cycle_id="t1", cycle_num=1, topic="AI 智能体",
+            started_at="2026-01-01T00:00:00", ended_at="2026-01-01T00:01:00",
+            status="partial",
+            stages={
+                "forge": {"ok": False, "error": "route_fn 返回 ok=False"},
+                "cast": {"ok": True},
+                "echo": {"ok": True, "total_count": 10},
+                "refine": {"ok": True},
+            },
+        )
+        flywheel._reflect_and_persist(cycle)
+        lessons = mod._load_lessons("AI 智能体")
+        assert any("forge" in l.get("lesson", "") for l in lessons)
+
+    def test_echo_zero_feedback_generates_lesson(self, flywheel, isolate_lessons):
+        mod = isolate_lessons
+        from kernel.plugins.content_flywheel import FlywheelCycle
+        cycle = FlywheelCycle(
+            cycle_id="t2", cycle_num=2, topic="AI 智能体",
+            started_at="2026-01-01T00:00:00", ended_at="2026-01-01T00:01:00",
+            status="completed",
+            stages={
+                "forge": {"ok": True},
+                "cast": {"ok": True},
+                "echo": {"ok": True, "total_count": 0},
+                "refine": {"ok": True},
+            },
+        )
+        flywheel._reflect_and_persist(cycle)
+        lessons = mod._load_lessons("AI 智能体")
+        assert any("0 条反馈" in l.get("lesson", "") for l in lessons)
+
+    def test_all_success_no_lesson(self, flywheel, isolate_lessons):
+        mod = isolate_lessons
+        from kernel.plugins.content_flywheel import FlywheelCycle
+        cycle = FlywheelCycle(
+            cycle_id="t3", cycle_num=3, topic="AI 智能体",
+            started_at="2026-01-01T00:00:00", ended_at="2026-01-01T00:01:00",
+            status="completed",
+            stages={
+                "forge": {"ok": True},
+                "cast": {"ok": True},
+                "echo": {"ok": True, "total_count": 50},
+                "refine": {"ok": True},
+            },
+        )
+        flywheel._reflect_and_persist(cycle)
+        lessons = mod._load_lessons("AI 智能体")
+        assert len(lessons) == 0
+
+    def test_partial_cycle_records_bottleneck(self, flywheel, isolate_lessons):
+        mod = isolate_lessons
+        from kernel.plugins.content_flywheel import FlywheelCycle
+        cycle = FlywheelCycle(
+            cycle_id="t4", cycle_num=4, topic="AI 智能体",
+            started_at="2026-01-01T00:00:00", ended_at="2026-01-01T00:01:00",
+            status="partial",
+            stages={
+                "forge": {"ok": True},
+                "cast": {"ok": False, "error": "platform timeout"},
+                "echo": {"ok": False, "error": "no data"},
+                "refine": {"ok": True},
+            },
+        )
+        flywheel._reflect_and_persist(cycle)
+        lessons = mod._load_lessons("AI 智能体")
+        assert any("瓶颈" in l.get("lesson", "") for l in lessons)
+
+
+class TestForgeLessonInjection:
+    """_stage_forge 教训注入。"""
+
+    def test_lessons_injected_into_payload(self, isolate_lessons):
+        mod = isolate_lessons
+        mod._save_lesson("AI 智能体", 1, "forge", "视频时长 60s 太长，建议 30s")
+
+        captured = []
+
+        def mock_route(cap, payload):
+            captured.append((cap, payload))
+            r = MagicMock()
+            r.ok = True
+            r.data = {"video_path": "test.mp4", "script": "test"}
+            r.error = ""
+            return r
+
+        fw = mod.ContentFlywheel(topic="AI 智能体", route_fn=mock_route)
+        fw._stage_forge()
+
+        assert len(captured) == 1
+        _, payload = captured[0]
+        assert "lessons" in payload
+        assert any("30s" in l for l in payload["lessons"])
+
+    def test_no_lessons_empty_list(self, isolate_lessons):
+        mod = isolate_lessons
+        captured = []
+
+        def mock_route(cap, payload):
+            captured.append((cap, payload))
+            r = MagicMock()
+            r.ok = True
+            r.data = {}
+            r.error = ""
+            return r
+
+        fw = mod.ContentFlywheel(topic="全新主题无历史", route_fn=mock_route)
+        fw._stage_forge()
+
+        _, payload = captured[0]
+        assert payload["lessons"] == []
+
+
+class TestSkillThinWrapper:
+    """Skill 包装层只做委托。"""
+
+    def test_missing_topic(self):
+        from skills.content_flywheel_skill import ContentFlywheelSkill
+        skill = ContentFlywheelSkill()
         result = skill.execute({})
         assert result["success"] is False
         assert "topic" in result["error"]
 
-    def test_empty_topic(self, skill):
-        result = skill.execute({"topic": "   "})
-        assert result["success"] is False
-
-    def test_simulated_mode(self, skill):
-        result = skill.execute({"topic": "AI 智能体", "max_cycles": 2})
+    def test_delegates_to_engine(self, isolate_lessons):
+        from skills.content_flywheel_skill import ContentFlywheelSkill
+        skill = ContentFlywheelSkill(route_fn=None)
+        result = skill.execute({"topic": "测试委托", "max_cycles": 1})
         assert result["success"] is True
-        assert result["mode"] == "simulated"
-        assert result["total_cycles"] == 2
-        assert result["completed_cycles"] == 2
-        assert len(result["cycles"]) == 2
+        assert result["total_cycles"] == 1
+        assert result["trace"]["engine"] == "kernel.plugins.content_flywheel.ContentFlywheel"
 
-    def test_max_cycles_capped(self, skill):
-        result = skill.execute({"topic": "test", "max_cycles": 100})
-        assert result["total_cycles"] <= 20
-
-    def test_platforms_config(self, skill):
-        result = skill.execute({
-            "topic": "test",
-            "max_cycles": 1,
-            "platforms": ["douyin", "bilibili", "xiaohongshu"],
-        })
-        forge = result["cycles"][0]["stages"]["cast"]
-        assert forge["package_count"] == 3
-
-    def test_trace_present(self, skill):
-        result = skill.execute({"topic": "trace test", "max_cycles": 1})
-        trace = result.get("trace")
-        assert trace is not None
-        assert trace["skill"] == "content-flywheel"
-        assert trace["topic"] == "trace test"
-        assert "ts" in trace
-        assert "elapsed_seconds" in trace
-
-    def test_lessons_injected_flag(self, skill):
-        # 先写入一条教训
-        skill.save_lesson("测试教训：开头不要太长", context="topic=test")
-        result = skill.execute({"topic": "test", "max_cycles": 1, "inject_lessons": True})
-        assert result["lessons_injected"] >= 1
-
-    def test_lessons_not_injected(self, skill):
-        skill.save_lesson("测试教训", context="")
-        result = skill.execute({"topic": "test", "max_cycles": 1, "inject_lessons": False})
-        assert result["lessons_injected"] == 0
-
-
-class TestReflection:
-    """反思提炼测试。"""
-
-    def test_stage_failure_lesson(self, skill):
-        result = {
-            "cycles": [{
-                "cycle_num": 1,
-                "status": "partial",
-                "stages": {
-                    "forge": {"ok": True},
-                    "cast": {"ok": False, "error": "platform API timeout"},
-                    "echo": {"ok": True, "total_count": 10},
-                    "refine": {"ok": True},
-                },
-            }],
-        }
-        lessons = skill._reflect(result, "test topic")
-        assert any("cast" in l for l in lessons)
-
-    def test_no_feedback_lesson(self, skill):
-        result = {
-            "cycles": [{
-                "cycle_num": 1,
-                "status": "completed",
-                "stages": {
-                    "forge": {"ok": True},
-                    "cast": {"ok": True},
-                    "echo": {"ok": True, "total_count": 0},
-                    "refine": {"ok": True},
-                },
-            }],
-        }
-        lessons = skill._reflect(result, "test")
-        assert any("Echo" in l or "反馈" in l for l in lessons)
-
-    def test_topic_drift_lesson(self, skill):
-        result = {
-            "final_topic": "完全不同的主题",
-            "cycles": [{"cycle_num": 1, "status": "completed", "stages": {
-                "forge": {"ok": True}, "cast": {"ok": True},
-                "echo": {"ok": True, "total_count": 20}, "refine": {"ok": True},
-            }}],
-        }
-        lessons = skill._reflect(result, "原始主题")
-        assert any("漂移" in l for l in lessons)
-
-    def test_repeated_failure_lesson(self, skill):
-        result = {
-            "cycles": [
-                {"cycle_num": 1, "status": "partial", "stages": {
-                    "forge": {"ok": False, "error": "OOM"}, "cast": {"ok": True},
-                    "echo": {"ok": True, "total_count": 5}, "refine": {"ok": True},
-                }},
-                {"cycle_num": 2, "status": "partial", "stages": {
-                    "forge": {"ok": False, "error": "OOM again"}, "cast": {"ok": True},
-                    "echo": {"ok": True, "total_count": 5}, "refine": {"ok": True},
-                }},
-            ],
-        }
-        lessons = skill._reflect(result, "test")
-        assert any("连续" in l for l in lessons)
-
-    def test_no_lessons_on_success(self, skill):
-        result = {
-            "cycles": [{
-                "cycle_num": 1,
-                "status": "completed",
-                "stages": {
-                    "forge": {"ok": True},
-                    "cast": {"ok": True},
-                    "echo": {"ok": True, "total_count": 50},
-                    "refine": {"ok": True},
-                },
-            }],
-        }
-        lessons = skill._reflect(result, "test")
-        # 全成功 + 高互动 → 无教训
-        assert len(lessons) == 0
-
-    def test_dedup_lessons(self, skill):
-        # 两轮相同失败 → 只出一条 stage_failed + 一条 repeated_failure
-        result = {
-            "cycles": [
-                {"cycle_num": i, "status": "partial", "stages": {
-                    "forge": {"ok": False, "error": "same error"},
-                    "cast": {"ok": True},
-                    "echo": {"ok": True, "total_count": 10},
-                    "refine": {"ok": True},
-                }}
-                for i in range(1, 3)
-            ],
-        }
-        lessons = skill._reflect(result, "test")
-        # 不应有完全重复的条目
-        assert len(lessons) == len(set(lessons))
-
-
-class TestLessons:
-    """教训持久化测试。"""
-
-    def test_save_and_load(self, skill):
-        skill.save_lesson("第一条教训", context="topic=A")
-        skill.save_lesson("第二条教训", context="topic=B")
-        lessons = skill._load_lessons()
-        assert len(lessons) == 2
-        assert lessons[0]["lesson"] == "第一条教训"
-        assert lessons[1]["lesson"] == "第二条教训"
-
-    def test_bounded_rotation(self, skill):
-        for i in range(60):
-            skill.save_lesson(f"教训 {i}", context="")
-        lessons = skill._load_lessons()
-        assert len(lessons) <= 50
-
-    def test_empty_lesson_skipped(self, skill):
-        skill.save_lesson("", context="")
-        skill.save_lesson("ab", context="")  # < 5 chars
-        lessons = skill._load_lessons()
-        assert len(lessons) == 0
-
-    def test_lesson_length_capped(self, skill):
-        long_lesson = "x" * 1000
-        skill.save_lesson(long_lesson, context="")
-        lessons = skill._load_lessons()
-        assert len(lessons[0]["lesson"]) <= 500
-
-
-class TestReport:
-    """报告格式化测试。"""
-
-    def test_format_report_basic(self, skill):
-        result = skill.execute({"topic": "报告测试", "max_cycles": 2})
+    def test_format_report(self, isolate_lessons):
+        from skills.content_flywheel_skill import ContentFlywheelSkill
+        skill = ContentFlywheelSkill(route_fn=None)
+        result = skill.execute({"topic": "报告测试", "max_cycles": 1})
         report = skill.format_report(result)
         assert "内容飞轮执行报告" in report
-        assert "报告测试" in report
-        assert "模拟演示" in report
-
-    def test_format_report_contains_stages(self, skill):
-        result = skill.execute({"topic": "stages", "max_cycles": 1})
-        report = skill.format_report(result)
-        assert "forge" in report
-        assert "cast" in report
-        assert "echo" in report
-        assert "refine" in report
-
-
-class TestReflectionRules:
-    """反思规则定义完整性。"""
-
-    def test_rules_have_required_fields(self):
-        for rule in REFLECTION_RULES:
-            assert rule.rule_id
-            assert rule.condition
-            assert rule.lesson_template
-            assert rule.severity in ("high", "medium", "low")
-
-    def test_rule_ids_unique(self):
-        ids = [r.rule_id for r in REFLECTION_RULES]
-        assert len(ids) == len(set(ids))
