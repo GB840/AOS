@@ -149,19 +149,30 @@ _ANGLE_RE = re.compile(r"<[^>]*>")
 _ANGLE_INNER_RE = re.compile(r"<(.*?)>", re.S)
 
 
-def _pick_capability(step_text: str, available: List[str]) -> str:
+def _pick_capability_explicit(step_text: str, available: List[str]) -> Tuple[str, bool]:
+    """选能力并返回 (cap, matched)。
+
+    matched=True 表示由 [标签] 或关键词**显式命中**；False 表示落到兜底
+    （_FALLBACK_CAP 或 available[0]）。并行规划的「列举继承」需要区分这两种情况：
+    "搜索A、B、C" 里 "B"/"C" 无动词会落兜底，应继承前一段的 web.search 而非当真。
+    """
     # 优先认 AG2 明确给出的能力标签（如 [web.search]），最贴合规划意图。
     m = _TAG_RE.search(step_text)
     if m and m.group(1) in available:
-        return m.group(1)
+        return m.group(1), True
     low = step_text.lower()
     for kw, cap in _KEYWORD_CAP_MAP:
         if kw in low and cap in available:
-            return cap
+            return cap, True
     if _FALLBACK_CAP in available:
-        return _FALLBACK_CAP
+        return _FALLBACK_CAP, False
     # 关键词都不在可用能力里 → 取可用能力的第一个，至少不让流水线空转。
-    return available[0] if available else _FALLBACK_CAP
+    return (available[0] if available else _FALLBACK_CAP), False
+
+
+def _pick_capability(step_text: str, available: List[str]) -> str:
+    """选能力（薄封装，保持既有调用方行为完全不变）。"""
+    return _pick_capability_explicit(step_text, available)[0]
 
 
 def _extract_steps(plan_text: str) -> List[str]:
@@ -314,3 +325,201 @@ def heuristic_plan(task: str, available_caps: List[str]) -> List[Dict[str, Any]]
                 })
             steps.append({"capability": cap, "in_from": "previous"})
     return steps
+
+
+# ————————————————————————————————————————————————————————————————
+# 依赖感知并行规划（opt-in，对齐九大理念之「不手配自闭环」+ 铁律「拿不准就串行」）
+# ————————————————————————————————————————————————————————————————
+#
+# 背景：OrchestrationChiplet 早已内置并发引擎（_invoke_parallel + ThreadPoolExecutor），
+# 但既有规划器（heuristic_plan / parse_plan_to_steps）永远产出 in_from:previous 线性链、
+# 从不产出 parallel_groups → 并发引擎 100% 闲置、系统只会串行干活。本模块补上「规划→分组」
+# 这一段，让独立子任务能被识别成 parallel_groups 真正并发。
+#
+# 引擎约束（决定检测策略，必须遵守，否则会打乱执行顺序或引发竞态）：
+#   1. 并发组内步骤共享 state，若用 in_from:previous 会在 state.last_success_out 上竞态
+#      → 并行步必须自带独立 in:{task}（无上游依赖才能安全并发）。
+#   2. 引擎「先跑所有并行组、再顺序补跑未覆盖步」→ 并行组必须覆盖【从0起的连续前缀】，
+#      否则前缀里的顺序步会被挪到并行组之后执行，破坏先后语义。
+#
+# 保守纪律（宁串勿并）：仅当能从任务里拆出 ≥2 个「同能力、相邻、以并列/列举连词分隔
+# （非顺序连词）、且能力属并行安全类」的独立子任务时才并行；拿不准一律 parallel_groups=None
+# 完全退回既有串行语义（零回归）。
+
+# 并行安全能力白名单：无副作用、可独立并发的只读/生成类能力。
+# 有副作用或强顺序性的能力（代码执行/文件写/消息发送/浏览器动作）一律不并行。
+_PARALLEL_SAFE_CAPS = {
+    "web.search", "web.fetch", "inference.llm",
+    "memory.semantic", "memory.knowledge",
+    "cognition.reasoning", "media.image", "media.video",
+}
+
+# 顺序连词（表示步骤间有先后依赖，绝不并行）。用于分类边界。
+_SEQ_CONNECTIVES = {
+    "然后", "接着", "之后再", "随后", "之后",
+    "and then", "after that", "afterwards", "then", "next", "finally",
+}
+
+# 边界分词：捕获顺序 + 并列两类连词。**长词在前**（"之后再">"之后"、
+# "and then">"and"、"并行地">"并行">"并且">"并"），避免被短词抢先匹配。
+_BOUNDARY_RE = re.compile(
+    r"("
+    # —— 顺序连词（先后依赖）——
+    r"然后|接着|之后再|随后|之后"
+    r"|\band then\b|\bafter that\b|\bafterwards\b|\bthen\b|\bnext\b|\bfinally\b"
+    # —— 并列/列举连词（相互独立）——
+    r"|同时|分别|并行地|并行|并且"
+    r"|、|，|,"
+    r"|\bin parallel\b|\bsimultaneously\b|\bconcurrently\b|\bas well as\b"
+    r"|\band\b|并"
+    r")",
+    re.I,
+)
+
+# ag2 规划器可选追加一行 `PARALLEL: 1,3` 声明可并发步号（1-based）。
+_PARALLEL_LINE_RE = re.compile(r"^\s*PARALLEL\s*[:：]\s*(.+)$", re.I | re.M)
+
+
+def _boundary_kind(sep: str) -> str:
+    """把捕获到的连词分类为 'seq'（顺序依赖）或 'par'（并列独立）。"""
+    return "seq" if sep.strip().lower() in _SEQ_CONNECTIVES else "par"
+
+
+def _split_with_boundaries(task: str) -> List[Dict[str, Any]]:
+    """按连词切分任务，保留每段之前的边界类型。
+
+    返回 [{"text": 段文本, "kind": None/'seq'/'par'}, ...]（首段 kind=None）。
+    跨越被丢弃的极短段合并边界时，seq 优先（更保守：只要有先后语义就当依赖）。
+    """
+    raw = _BOUNDARY_RE.split(task)
+    parts: List[Dict[str, Any]] = []
+    pending_kind: Any = None
+    for i, tok in enumerate(raw):
+        if i % 2 == 1:  # 分隔符
+            k = _boundary_kind(tok)
+            pending_kind = "seq" if (pending_kind == "seq" or k == "seq") else "par"
+            continue
+        text = (tok or "").strip(" .;，。、\t")
+        if not text:
+            # 仅跳过空/纯标点碎片；单字列举项（如 "搜索A、B、C" 里的 B/C）是合法步骤
+            continue
+        parts.append({"text": text, "kind": pending_kind})
+        pending_kind = None
+    return parts
+
+
+def _assign_caps(parts: List[Dict[str, Any]], available: List[str]) -> List[str]:
+    """给每段分配能力，支持「列举继承」：并列连词后、本段无显式动词（落兜底）
+    且上一段是并行安全能力时，继承上一段能力（如 搜索A、B、C → 三段都 web.search）。
+    """
+    caps: List[str] = []
+    for i, p in enumerate(parts):
+        cap, matched = _pick_capability_explicit(p["text"], available)
+        if (i > 0 and p["kind"] == "par" and not matched
+                and caps[i - 1] in _PARALLEL_SAFE_CAPS):
+            cap = caps[i - 1]
+        caps.append(cap)
+    return caps
+
+
+def plan_with_parallelism(
+    task: str, available_caps: List[str]
+) -> Tuple[List[Dict[str, Any]], Any]:
+    """本地并行规划（无 LLM）：返回 (steps, parallel_groups)。
+
+    parallel_groups=None 表示完全串行（退回 heuristic_plan 既有语义，零回归）。
+    仅识别「从第0段起、以并列连词相连、同能力、并行安全」的最长前缀游程作为一个
+    并行组；其余段保持顺序（in_from:previous + 可选桥接推理步）。
+    """
+    parts = _split_with_boundaries(task)
+    if len(parts) < 2:
+        return heuristic_plan(task, available_caps), None
+
+    caps = _assign_caps(parts, available_caps)
+    base_cap = caps[0]
+
+    # 找从第0段起的最长「并列 + 同能力 + 并行安全」前缀游程
+    run_len = 1
+    if base_cap in _PARALLEL_SAFE_CAPS:
+        for i in range(1, len(parts)):
+            if parts[i]["kind"] == "par" and caps[i] == base_cap:
+                run_len += 1
+            else:
+                break
+
+    if run_len < 2:
+        # 拆不出 ≥2 个独立同能力步 → 完全退回既有串行规划（零回归）
+        return heuristic_plan(task, available_caps), None
+
+    steps: List[Dict[str, Any]] = []
+    # 前 run_len 段：独立并行步，各自带 in:{task}（无 in_from 依赖，杜绝并发竞态）
+    for i in range(run_len):
+        steps.append({"capability": caps[i], "in": {"task": parts[i]["text"]}})
+    # 余部：与既有串行语义一致（in_from:previous + 可选桥接）
+    has_llm = "inference.llm" in available_caps
+    for i in range(run_len, len(parts)):
+        cap = caps[i]
+        prev_cap = caps[i - 1]
+        skip_bridge = (cap == "action.code_exec" and prev_cap == "inference.llm")
+        if prev_cap != cap and has_llm and not skip_bridge:
+            steps.append({
+                "capability": "inference.llm",
+                "in_from": "previous",
+                "prompt": _bridge_prompt(prev_cap, cap, parts[i]["text"]),
+            })
+        steps.append({"capability": cap, "in_from": "previous"})
+
+    return steps, [list(range(run_len))]
+
+
+def _extract_parallel_line(plan_text: str, n_steps: int) -> Any:
+    """从 ag2 计划文本解析 `PARALLEL: 1,3` 声明为 0-based 并行组。
+
+    严格校验：步号在范围内、每组 ≥2 步、且所有并行步合起来必须构成【从0起的
+    连续前缀】（引擎约束）。任一不满足 → 返回 None（保守退回串行）。
+    """
+    groups: List[List[int]] = []
+    for m in _PARALLEL_LINE_RE.finditer(plan_text):
+        idxs: List[int] = []
+        for tok in re.split(r"[,\s、，]+", m.group(1).strip()):
+            tok = tok.strip()
+            if tok.isdigit():
+                v = int(tok) - 1  # ag2 用 1-based 步号
+                if 0 <= v < n_steps:
+                    idxs.append(v)
+        seen: set = set()
+        clean: List[int] = []
+        for v in idxs:
+            if v not in seen:
+                seen.add(v)
+                clean.append(v)
+        if len(clean) >= 2:
+            groups.append(clean)
+    if not groups:
+        return None
+    covered = sorted({i for g in groups for i in g})
+    if covered != list(range(len(covered))):
+        # 非「从0起连续前缀」→ 引擎会把前缀顺序步挪到并行组之后，破坏语义 → 弃用
+        return None
+    return groups
+
+
+def parse_plan_with_parallelism(
+    plan_text: str, available_caps: List[str]
+) -> Tuple[List[Dict[str, Any]], Any]:
+    """解析 ag2 计划文本为 (steps, parallel_groups)，支持 `PARALLEL:` 声明。
+
+    parallel_groups=None 表示串行（无 PARALLEL 行或声明不合法时，零回归）。
+    被并行组覆盖的步会把 in_from:previous 改成独立 in:{task}（消除并发竞态）。
+    """
+    steps = parse_plan_to_steps(plan_text, available_caps)
+    groups = _extract_parallel_line(plan_text, len(steps))
+    if not groups:
+        return steps, None
+    covered = {i for g in groups for i in g}
+    for i in covered:
+        st = steps[i]
+        if "in_from" in st:
+            instr = st.get("instruction") or st.get("prompt") or ""
+            steps[i] = {"capability": st["capability"], "in": {"task": instr}}
+    return steps, groups

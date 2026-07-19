@@ -970,14 +970,58 @@ _CAPS = [
 ]
 
 
+def _parallel_enabled() -> bool:
+    """多线程并行执行总开关（opt-in，默认关，保证零回归）。
+
+    AOS_AUTOPILOT_PARALLEL=1/true/yes/on 时，规划阶段尝试识别独立子任务产出
+    parallel_groups，交给 OrchestrationChiplet 并发执行；否则永远串行（既有行为）。
+    """
+    return os.environ.get("AOS_AUTOPILOT_PARALLEL", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _max_parallel() -> int:
+    """单个并行组的最大并发步数上限（默认 3，防线程/资源打满）。"""
+    try:
+        return max(1, int(os.environ.get("AOS_MAX_PARALLEL", "3")))
+    except ValueError:
+        return 3
+
+
+def _cap_parallel_groups(groups, max_workers: int):
+    """把超过上限的并行组切成 ≤max_workers 的连续子组（子组间顺序、组内并发）。
+
+    切分保持「从0起连续前缀」不变（引擎约束），是安全的并发节流，不改变覆盖范围。
+    """
+    if not groups:
+        return groups
+    out = []
+    for g in groups:
+        if len(g) <= max_workers:
+            out.append(g)
+        else:
+            for k in range(0, len(g), max_workers):
+                out.append(g[k:k + max_workers])
+    return out
+
+
 def _plan(task: str, planner: str):
-    """规划一次：返回 (plan_text, steps, used_planner)。ag2 不可用透明降级 heuristic。"""
+    """规划一次：返回 (plan_text, steps, parallel_groups, used_planner)。
+
+    ag2 不可用透明降级 heuristic。parallel_groups 仅在 AOS_AUTOPILOT_PARALLEL 开启
+    且识别出独立子任务时非 None，否则为 None（完全串行，零回归）。
+    """
     from core.fabric.adapter import InvokeRequest, InvokeResult
     from core.fabric.capability import Capability
-    from kernel.plugins.plan_bridge import parse_plan_to_steps, heuristic_plan
+    from kernel.plugins.plan_bridge import (
+        parse_plan_to_steps, heuristic_plan,
+        plan_with_parallelism, parse_plan_with_parallelism,
+    )
 
+    parallel_on = _parallel_enabled()
     plan_text: Optional[str] = None
     steps: List[Dict[str, Any]] = []
+    parallel_groups = None
     used_planner = planner
 
     if planner == "ag2":
@@ -997,24 +1041,39 @@ def _plan(task: str, planner: str):
                 elif isinstance(res, InvokeResult) and res.ok and res.data:
                     plan_text = (res.data.get("plan") or "").strip() or None
                     if plan_text:
-                        steps = parse_plan_to_steps(plan_text, _CAPS)
+                        if parallel_on:
+                            steps, parallel_groups = parse_plan_with_parallelism(plan_text, _CAPS)
+                        else:
+                            steps = parse_plan_to_steps(plan_text, _CAPS)
         except Exception:
             logger.warning("ag2 规划失败，降级 heuristic", exc_info=True)
 
     if not steps:
-        steps = heuristic_plan(task, _CAPS)
+        if parallel_on:
+            steps, parallel_groups = plan_with_parallelism(task, _CAPS)
+        else:
+            steps = heuristic_plan(task, _CAPS)
         used_planner = "heuristic"
         plan_text = None
-    return plan_text, steps, used_planner
+
+    if parallel_groups:
+        parallel_groups = _cap_parallel_groups(parallel_groups, _max_parallel())
+        if parallel_groups:
+            logger.info("并行规划已激活：%d 组 %s（首轮并发执行）",
+                        len(parallel_groups), parallel_groups)
+    return plan_text, steps, parallel_groups, used_planner
 
 
-def _execute(task: str, steps: List[Dict[str, Any]], seed_context: Optional[Dict[str, Any]] = None):
+def _execute(task: str, steps: List[Dict[str, Any]], seed_context: Optional[Dict[str, Any]] = None,
+             parallel_groups=None):
     """执行一轮步骤（每轮新建 OrchestrationChiplet，保证上下文干净）。
 
     返回 (exe_res, recorded)：recorded 是本轮回所有「成功步」的真实产出
     （capability + 完整 out），供跨轮上下文续接与反思记忆使用。
     seed_context：上轮已成功步的真实产出，作为本轮首步的 in_from:previous 起点
     （求是引擎式反思：保留成功经验、只重设计失败处之后的下一步，不重跑、不回归）。
+    parallel_groups：非 None 时透传给编排芯粒，触发组内并发执行（仅首轮用，
+    反思重设计后的轮次保持串行以保安全）。
     """
     from core.fabric.adapter import InvokeRequest
     from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
@@ -1035,6 +1094,8 @@ def _execute(task: str, steps: List[Dict[str, Any]], seed_context: Optional[Dict
     payload = {"initial": {"task": task}, "steps": steps}
     if seed_context:
         payload["seed_context"] = seed_context
+    if parallel_groups:
+        payload["parallel_groups"] = parallel_groups
     exe_res = oc.invoke(InvokeRequest(capability="workflow.execute", payload=payload))
     return exe_res, recorded
 
@@ -1467,11 +1528,14 @@ class _RunState:
     收拢成一个对象，使其能被 sqlite 持久化并在 resume_run 时完整还原。
     """
 
-    def __init__(self, task: str, planner: str, plan_text: str, steps, max_reflect: int = None, per_run_id: str = ""):
+    def __init__(self, task: str, planner: str, plan_text: str, steps, max_reflect: int = None,
+                 per_run_id: str = "", parallel_groups=None):
         self.task = task
         self.planner = planner
         self.plan_text = plan_text
         self.steps = steps
+        # 首轮并发分组（opt-in）；反思重设计后置 None 保持串行（见 _advance_cycle）
+        self.parallel_groups = parallel_groups
         self.prior_success: list = []
         self.reflection_log: list = []
         self.last: dict = {}
@@ -1488,6 +1552,7 @@ class _RunState:
             "planner": self.planner,
             "plan_text": self.plan_text,
             "steps": self.steps,
+            "parallel_groups": self.parallel_groups,
             "prior_success": self.prior_success,
             "reflection_log": self.reflection_log,
             "last": self.last,
@@ -1499,7 +1564,8 @@ class _RunState:
 
     @classmethod
     def from_dict(cls, d: dict) -> "_RunState":
-        s = cls(d["task"], d["planner"], d["plan_text"], d["steps"], max_reflect=d.get("max_reflect"), per_run_id=d.get("per_run_id", ""))
+        s = cls(d["task"], d["planner"], d["plan_text"], d["steps"], max_reflect=d.get("max_reflect"),
+                per_run_id=d.get("per_run_id", ""), parallel_groups=d.get("parallel_groups"))
         s.prior_success = d.get("prior_success", [])
         s.reflection_log = d.get("reflection_log", [])
         s.last = d.get("last", {})
@@ -1527,7 +1593,9 @@ def _advance_cycle(s: _RunState) -> bool:
         seed_text = extract_text(last_out) if isinstance(last_out, dict) else ""
         if seed_text and "text" not in seed:
             seed["text"] = seed_text
-    exe_res, recorded = _execute(s.task, s.steps, seed_context=seed)
+    # 仅首轮（主执行轮）透传并行分组；反思重设计后的轮次保持串行以保安全
+    pg = s.parallel_groups if s.cycle == 0 else None
+    exe_res, recorded = _execute(s.task, s.steps, seed_context=seed, parallel_groups=pg)
     r = _assemble(s.task, s.planner, s.plan_text, s.steps, exe_res, s.cycle, s.start)
     s.last = r
     if recorded:
@@ -1571,7 +1639,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
     Returns: 顶层含 reflection 字段（轮次/是否达上限）+ run_id。
     """
     start = time.time()
-    plan_text, steps, used_planner = _plan(task, planner)
+    plan_text, steps, parallel_groups, used_planner = _plan(task, planner)
     if not steps:
         return {
             "task": task, "planner": used_planner,
@@ -1579,7 +1647,8 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
             "duration_s": round(time.time() - start, 1),
         }
 
-    s = _RunState(task, used_planner, plan_text, steps, max_reflect=_max_reflect_for(task), per_run_id=run_id)
+    s = _RunState(task, used_planner, plan_text, steps, max_reflect=_max_reflect_for(task),
+                  per_run_id=run_id, parallel_groups=parallel_groups)
     if run_id:
         s.run_id = run_id
     create_run(s.run_id, task, used_planner)
@@ -1596,6 +1665,8 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
     }
     s.last["run_id"] = s.run_id
     s.last["duration_s"] = round(time.time() - s.start, 1)
+    if s.parallel_groups:
+        s.last["parallel_groups"] = s.parallel_groups  # 供上层观测「本轮并发了哪些步」
     return s.last
 
 

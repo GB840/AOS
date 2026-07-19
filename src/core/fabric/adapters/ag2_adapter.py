@@ -280,6 +280,16 @@ class AG2Adapter(BaseAgentAdapter):
                     "FULL content), 3) action.code_exec (write <CONTENT> to the file), "
                     "optionally 4) memory.semantic. Do not describe a human team; "
                     "describe tool calls the system will execute.\n"
+                    "7. OPTIONAL PARALLELISM: if (and only if) the FIRST steps are "
+                    "mutually INDEPENDENT read-only steps of the SAME tool that need no "
+                    "input from each other (e.g. searching several distinct topics), you "
+                    "MAY add ONE extra last line 'PARALLEL: 1,2' listing those leading "
+                    "step numbers so the system runs them concurrently. Rules: only the "
+                    "LEADING steps starting at 1 (contiguous, e.g. 1,2 or 1,2,3), at "
+                    "least two of them, all web.search/web.fetch/inference.llm "
+                    "(NEVER action.code_exec / file writes / sends), and each must carry "
+                    "its own full instruction (no 'the previous result'). If unsure, omit "
+                    "the PARALLEL line entirely — sequential is the safe default.\n"
                     f"Task: {topic}"
                 )
                 reply = self._run_single_agent(
