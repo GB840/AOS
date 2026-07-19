@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'd49bad1f-3eee-453e-a720-95c809672e51'
-  PropagateID: 'd49bad1f-3eee-453e-a720-95c809672e51'
-  ReservedCode1: 'b4193372-29b4-45b1-b7d8-99ff7b58cb91'
-  ReservedCode2: 'b4193372-29b4-45b1-b7d8-99ff7b58cb91'
+  ProduceID: 'ec69a627-3f02-41d2-90cf-09646f762a45'
+  PropagateID: 'ec69a627-3f02-41d2-90cf-09646f762a45'
+  ReservedCode1: '720f3e5c-2e37-4613-b2c6-6bab5a810948'
+  ReservedCode2: '720f3e5c-2e37-4613-b2c6-6bab5a810948'
 ---
 
 # AOS 项目状态总地图（STATUS）
@@ -162,7 +162,7 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 |---|---|---|
 | `AGENTS.md` | **项目宪法**（九大核心理念 + 七级决策阶梯 + 基线快照真实规模） | 任何改动前先读 |
 | `docs/` | 各专项文档（CAPABILITY_AUDIT / OPEN_FABRIC / GLOBAL_REVIEW / WAIC2026_AOS_MAPPING 等） | 想看专项论证 |
-| `AOS_CURRENT_STATE_SNAPSHOT.md` / `AOS_V5_COMPLETION_SUMMARY.md` | 旧时代（v5）文档，**已失实，待清理** | 不建议参考 |
+| ~~`AOS_CURRENT_STATE_SNAPSHOT.md` / `AOS_V5_COMPLETION_SUMMARY.md`~~ | v5 时代旧文档，已于 **2026-07-19 删除** | 不复存在 |
 
 ---
 
@@ -206,23 +206,22 @@ C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe -m py_
 
 ---
 
-## 10. 工作区未提交项（5 个，刻意不进库）
+## 10. 工作区状态（2026-07-19 真机核验）
 
-以下 5 个根目录调试/草稿脚本**未提交**（纯开发垃圾，留在工作区不丢，不污染正式历史）：
-- `debug_pulse.py` / `debug_templates.py`（子包调试）
-- `honest_check.py`（495 行诚实自检）
-- `test_autoskill.py` / `test_autoskill_e2e.py`（AutoSkill 验证草稿）
+工作区 clean，分支与 `origin/feature/infra-setup` 已同步至 `3dafee2`（远端已 push）。仅 3 项 untracked：
+- `RETRO-2026-07-19_audit-p0p1p2.md`（10 KB，上轮 P0/P1/P2 修复的反思复盘草稿，待归档）
+- `AOS_VS_WAIC2026_对比分析报告.docx`（23 KB，外部对比研究产物）
+- `.scratch/`（空目录，无内容）
 
-> 若日后要保留，建议挪进 `scripts/` 或单独归档，再从根目录删除。
+> 上一轮提到的 5 个根目录开发垃圾（`debug_pulse.py` / `debug_templates.py` / `honest_check.py` / `test_autoskill.py` / `test_autoskill_e2e.py`）均已从工作区清理。
 
 ---
 
 ## 11. 风险与下一步
 
 1. **双轨未合流**：FabricHub 与 brain.py legacy 并存；`/api/chat` 灰度兜底，目标 FabricHub 唯一运行时。
-2. **文档滞后**：`AOS_CURRENT_STATE_SNAPSHOT.md` / `AOS_V5_COMPLETION_SUMMARY.md` 仍 v5 时代，建议整体重写或删除（本次已重写 STATUS.md 与 AGENTS.md）。
-3. **未 push**：`a13c489`/`5e889c3` 需 `git push origin feature/infra-setup`（沙箱已同步主机仓库，但远端要你手动推）。
-4. **QQ 脱敏不一致**：`ContentGuard.check()` 能检测 QQ 号但 `_redact()` 替换表不含 QQ（phone/id_card/bank_card/email/api_key 才遮），属设计缺口非 bug，留待后续补。
-5. **2026-07-19 全量审计跟进**：P0/P1/P2/P3 + TD-3/TD-7/TD-8/TD-9/TD-10 已在 `feature/infra-setup` 分支完成（审计报告 `AOS_CODE_AUDIT_REPORT.docx`）。TD-1（brain.py 2091 行单体）/ TD-2（web/app.py 4299 行）属大工程，未在本轮处理；TD-5（导入风格不统一，≥12 文件用绝对导入）改可能触发 import 紊乱，暂跳过；TD-6（system.py 占位）核实后仅 `_heal_isolate` 返 True 算 stub，不阻塞。
+2. **QQ 脱敏不一致**：`ContentGuard.check()` 能检测 QQ 号但 `_redact()` 替换表不含 QQ（phone/id_card/bank_card/email/api_key 才遮），属设计缺口非 bug，留待后续补。
+3. **2026-07-19 全量审计跟进**：P0/P1/P2/P3 + TD-3/TD-7/TD-8/TD-9/TD-10 已在 `feature/infra-setup` 分支完成（审计报告 `AOS_CODE_AUDIT_REPORT.docx`）。TD-1（brain.py 2091 行单体）/ TD-2（web/app.py 4299 行）属大工程，未在本轮处理；TD-5（导入风格不统一，≥12 文件用绝对导入）改可能触发 import 紊乱，暂跳过；TD-6（system.py 占位）核实后仅 `_heal_isolate` 返 True 算 stub，不阻塞。
+4. **全量 pytest 从未单轮跑完**（新增）：`tests/` 955 个 test_ 函数从未在本会话做过单轮全绿验证（沙箱 120s 超时不足以跑全量），需在主机以 `pytest tests/ -q --timeout=60` 首次诚实确认全盘绿/红。
 
 > AI生成
