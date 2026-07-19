@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '8c4ca953-2f96-4bca-b77c-5437746053b9'
-  PropagateID: '8c4ca953-2f96-4bca-b77c-5437746053b9'
-  ReservedCode1: '2b90e402-7f07-4961-b5b5-0d2aeea1156f'
-  ReservedCode2: '2b90e402-7f07-4961-b5b5-0d2aeea1156f'
+  ProduceID: 'a58cdff1-ac33-4b62-afa4-8dcf27bcd48e'
+  PropagateID: 'a58cdff1-ac33-4b62-afa4-8dcf27bcd48e'
+  ReservedCode1: 'e4a64989-c774-4aa5-aedb-8d6cf5194cef'
+  ReservedCode2: 'e4a64989-c774-4aa5-aedb-8d6cf5194cef'
 ---
 
 # AGENTS.md — AOS 宪法（Single Source of Truth）
@@ -41,7 +41,7 @@ AIGC:
 ---
 
 <!-- BASELINE_START -->
-## 0.5 基线快照（2026-07-18 更新，手动生成(轻量)）
+## 0.5 基线快照（2026-07-19 同步，人工同步至 STATUS.md 真值；HEAVY 模式重跑待恢复）
 
 > 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
 > 本表由 `tools/baseline_snapshot.py` 真实测算后写入；轻量模式测适配器/测试数，
@@ -49,15 +49,15 @@ AIGC:
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 26 类 / 27 文件 | `core.fabric.adapters.__all__`（缺依赖自动跳过；含数字类名 AG2Adapter/Mem0Adapter） |
+| 适配器总数 | 29 类 / 30 文件 | `core.fabric.adapters.__all__`（缺依赖自动跳过；含数字类名 AG2Adapter/Mem0Adapter）——2026-07-19 explore 真机 grep 同步 |
 | live | ? | 重跑需 `AOS_BASELINE_HEAVY=1` |
 | dead | ? | 典型无 key 环境见 §7（openclaw/ag2/litellm/mem0/lfm2） |
-| 测试 | 702 函数 / 109 文件 | `pytest --co -q`（含 flywheel/sandbox/security/compliance 等新增测试） |
+| 测试 | 955 函数 / 139 文件 | `pytest --co -q`（含 flywheel/sandbox/security/compliance 等新增测试）——2026-07-19 全量从未单轮跑完过（沙箱 120s 超时不足以跑全），需主机 `pytest tests/ -q --timeout=60` 实证 |
 | 覆盖率 | ?% | 轻量模式未测；HEAVY 模式实测见 §5 质量门下限 |
 | brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric` 空适配器跳过 + 注册壳保护（2026-07-18 修） |
 | 技能 | 33 | `skills/manifest.json`（单一真相） |
 | 死代码清理 | ~300 文件/2100行 | 删 persistence/cache/db_pool/core.platform/_migrate_backup（2026-07-18） |
-| 生成时间 | 2026-07-18 18:25 UTC | 手动验证（轻量） |
+| 生成时间 | 2026-07-19 | 人工同步至 STATUS.md 真值；待 baseline_snapshot.py HEAVY 重跑 |
 <!-- BASELINE_END -->
 
 ### 0.6 双轨融合进度（2026-07-18 更新）

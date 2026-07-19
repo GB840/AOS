@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'ec69a627-3f02-41d2-90cf-09646f762a45'
-  PropagateID: 'ec69a627-3f02-41d2-90cf-09646f762a45'
-  ReservedCode1: '720f3e5c-2e37-4613-b2c6-6bab5a810948'
-  ReservedCode2: '720f3e5c-2e37-4613-b2c6-6bab5a810948'
+  ProduceID: '4ae19e71-8559-4e4b-ad31-4b1cc140fc36'
+  PropagateID: '4ae19e71-8559-4e4b-ad31-4b1cc140fc36'
+  ReservedCode1: '2c04d457-117f-4996-9d79-025b7efed67d'
+  ReservedCode2: '2c04d457-117f-4996-9d79-025b7efed67d'
 ---
 
 # AOS 项目状态总地图（STATUS）
@@ -162,7 +162,7 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 |---|---|---|
 | `AGENTS.md` | **项目宪法**（九大核心理念 + 七级决策阶梯 + 基线快照真实规模） | 任何改动前先读 |
 | `docs/` | 各专项文档（CAPABILITY_AUDIT / OPEN_FABRIC / GLOBAL_REVIEW / WAIC2026_AOS_MAPPING 等） | 想看专项论证 |
-| ~~`AOS_CURRENT_STATE_SNAPSHOT.md` / `AOS_V5_COMPLETION_SUMMARY.md`~~ | v5 时代旧文档，已于 **2026-07-19 删除** | 不复存在 |
+| `AOS_CURRENT_STATE_SNAPSHOT.md` / `AOS_V5_COMPLETION_SUMMARY.md` | v5 时代旧文档，**仍在根目录（18.3KB / 18.9KB，mtime 07-15/07-11，未被真删）**——STATUS.md 此前误报"已删"，2026-07-19 explore 真机核验纠偏 | 待删除（破坏性，需用户点头） |
 
 ---
 

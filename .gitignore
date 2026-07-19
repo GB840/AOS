@@ -245,6 +245,8 @@ _content_work/
 reality_check.py
 verify_output.py
 tools/verify_*.py
+# Agent 临时工作目录（沙箱/桌面客户端运行时产生的草稿、缓存）。
+.scratch/
 
 # ViMax 是自带 .git 的独立子仓库（577M），作为子模块/独立仓库管理，不混入 AOS。
 ViMax/
