@@ -310,6 +310,16 @@ def heuristic_plan(task: str, available_caps: List[str]) -> List[Dict[str, Any]]
     part_caps = [(p, _pick_capability(p, available_caps)) for p in parts]
     has_llm = "inference.llm" in available_caps
 
+    # 若所有段都映射到同一能力（如研报类任务被逗号过度拆成多段 inference.llm），
+    # 不拆分，作为单步执行完整任务——避免第1步丢业务描述、后续步空转。
+    # 修真机验证暴露的 bug：heuristic_plan 把"针对...研报，输出...要点：调研..."
+    # 拆成两段，第1步 in.task 只取了"针对...研报"丢了"：调研..."，LLM 不知道调研啥。
+    if len(part_caps) >= 2 and len(set(c for _, c in part_caps)) == 1:
+        unified_cap = part_caps[0][1]
+        # 仅对生成类能力（inference.llm）合并；web.search 等仍按多步拆分（各搜各的）
+        if unified_cap in ("inference.llm", "cognition.reasoning"):
+            return [{"capability": unified_cap, "in": {"task": task}}]
+
     steps: List[Dict[str, Any]] = []
     for i, (p, cap) in enumerate(part_caps):
         if i == 0:

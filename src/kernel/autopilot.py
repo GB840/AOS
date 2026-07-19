@@ -823,8 +823,38 @@ def _extract_cmd_from_text(text: str) -> str:
         return start_match
     if inline_match:
         return inline_match
+    # 没找到命令前缀 → 检查文本是否像 Markdown 文档而非代码
+    # 防反思重设计把 LLM 产出的研报/文档文本当 code_exec 代码丢给 sandbox
+    # （真机验证暴露：反思产 code_exec 步把研报 Markdown 当 Bash 执行→死循环）
+    if _looks_like_markdown_text(text):
+        return ""  # 返回空 → 触发"缺少可执行命令"错误，不把文档丢给 sandbox
     # 没找到 → 返回原文本（让 code_exec 自己试）
     return text
+
+
+def _looks_like_markdown_text(text: str) -> bool:
+    """检测文本是否像 Markdown 文档而非可执行代码。
+
+    防反思重设计把 LLM 产出的研报/文档文本当 code_exec 代码丢给 sandbox。
+    判据：以 Markdown 标题（#/##/###）开头，且不含任何代码语法特征。
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return False
+    first_line = stripped.split("\n", 1)[0].lstrip()
+    if not first_line.startswith(("# ", "## ", "### ")):
+        return False
+    # 含代码语法特征 → 可能是带注释的代码块，不拦
+    code_hints = (
+        "def ", "import ", "from ", "print(", "pip ", "winget ", "npm ",
+        "python ", "py ", "echo ", "git ", "curl ", "wget ", "bash ", "sh ",
+        "mkdir ", "cp ", "mv ", "rm ", "cat ", "ls ", "cd ", "= ", "()",
+        "func ", "var ", "let ", "const ", "return ",
+    )
+    text_low = stripped.lower()
+    return not any(h in text_low for h in code_hints)
 
 
 def _guess_language(code: str) -> str:
@@ -1971,6 +2001,24 @@ def _verdict(task: str, data: dict, trace: list, confidence: dict) -> dict:
                               f"（关键词重叠 {rel_score}），可能方向偏了"}
         return {"status": "完成 ✅", "deliverable": deliverable, "reason": ""}
     if real_steps > 0:
+        # 文本型交付物判定：若推理步已产出足够长（>=200字）且与目标相关的实质文本，
+        # 即使有其他步空转/失败，也判"完成"——文本型任务（研报/分析/总结）的交付物
+        # 就是文本本身，已产出即达成，不应触发不必要的反思循环把文本当代码执行。
+        # 修真机验证暴露的 bug：研报任务 LLM 已产出高质量研报，但因第2步空转被判
+        # "部分完成"→触发反思→反思产 code_exec 把研报文本当 Bash 执行→死循环。
+        has_substantial_text = any(
+            (t.get("real_metrics") or {}).get("char_count", 0) >= 200
+            and (t.get("real_metrics") or {}).get("is_real")
+            and t.get("ok")
+            and "inference" in (t.get("capability") or "")
+            for t in trace
+        )
+        if has_substantial_text:
+            relevant, rel_score = _check_goal_relevance(task, trace)
+            if relevant:
+                return {"status": "完成 ✅", "deliverable": deliverable,
+                        "reason": f"虽有 {fail} 步空转，但核心推理步已产出实质文本"
+                                  f"（{real_steps} 步真实，相关性 {rel_score}）"}
         return {"status": "部分完成 ⚠️", "deliverable": deliverable,
                 "reason": f"{fail} 步失败/空转，但 {real_steps} 步有真实产出"}
     return {"status": "未完成 ❌", "deliverable": deliverable,
