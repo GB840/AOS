@@ -547,6 +547,21 @@
       ],
       "runtime": "standalone",
       "status": "active"
+    },
+    {
+      "id": "crossborder-compliance",
+      "name": "CrossBorder Compliance",
+      "module": "skills.crossborder_compliance",
+      "class": "CrossBorderAgent",
+      "version": "0.1.0",
+      "description": "跨境出海合规分析：输入商品和目的国，输出认证/税务/标签/海关全链路合规要求、缺口和风险",
+      "category": "business",
+      "capabilities": [
+        "crossborder.analyze",
+        "crossborder.compliance"
+      ],
+      "runtime": "standalone",
+      "status": "active"
     }
   ],
   "counts": {
