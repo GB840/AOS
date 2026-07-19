@@ -102,3 +102,24 @@ def test_invoke_records_read_only_mode():
     ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
     r = ad.invoke(InvokeRequest(capability=Capability.RE_IDA, payload={"tool": "get_metadata"}))
     assert r.ok and r.data.get("read_only") is True
+
+
+def test_explain_unsafe_tools_returns_risk_map():
+    # 红线「永久拒绝 dbg_*」必须可解释：能查到拒了什么、开销/风险多大。
+    risk = IdaProMcpAdapter.explain_unsafe_tools()
+    assert "memory_write" in risk and "control" in risk
+    # 最高危的 dbg_write 在 memory_write 类，明确标注「极高」风险
+    assert "dbg_write" in risk["memory_write"]["tools"]
+    assert risk["memory_write"]["risk"].startswith("极高")
+    # 非 dbg_ 但同样危险的 py_eval 也列入（任意 Python 代码损坏 IDB）
+    assert "py_eval" in risk["arbitrary_code"]["tools"]
+
+
+def test_invoke_dbg_reports_risk_summary():
+    # D3：拒绝 dbg_* 时附带可复核的风险摘要（诚实非黑箱拒绝）。
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    r = ad.invoke(InvokeRequest(capability=Capability.RE_IDA, payload={"tool": "dbg_write"}))
+    assert r.ok is False
+    assert r.data.get("blocked_reason") == "unsafe_debug_tool"
+    assert "dbg_write" in (r.data.get("unsafe_risk_summary") or "")
+    assert "?ext=dbg" in (r.data.get("unsafe_risk_summary") or "")

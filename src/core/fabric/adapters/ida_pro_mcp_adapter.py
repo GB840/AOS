@@ -8,7 +8,10 @@
 1. **仅连接 localhost 的 ida-pro-mcp server**（即你自己机器上的 IDA 实例）。
    任何非本机 URL 一律诚实拒绝——绝不连别人的 IDA、绝不碰你无权分析的二进制。
 2. **只做静态/只读分析**（反编译、列函数、查字符串、给自有的 IDB 加注释），
-   默认不触发调试器类「unsafe」工具（需显式 tool=dbg_* 且你自担风险）。
+   **永久拒绝**调试器类「unsafe」工具（`dbg_*`）。这些工具由 IDA 侧 `?ext=dbg`
+   启用（非 `--unsafe` 启动标志），需 IDA Pro 调试器许可 + 一个运行中的调试会话，
+   开销与风险远高于静态分析——最高危 `dbg_write` 可 corrupt 进程内存、`py_eval`
+   可凭任意 Python 代码损坏 IDB。详见 `explain_unsafe_tools()` 与 `docs/AOS_IDA_PRO_MCP.md`。
 3. **你负责确保对加载进 IDA 的二进制有合法分析权**（你自己的程序 / 已授权审计 /
    开源软件）。本适配器不判断二进制来源，但任何对外/对第三方目标的用途都越界。
 
@@ -42,6 +45,42 @@ _WRITE_TOOLS = frozenset({
     "set_struct_member_name", "add_struct", "add_enum",
 })
 _UNSAFE_PREFIX = "dbg_"
+
+# D3：调试类 unsafe 工具（dbg_*）永久拒绝。这些工具由 IDA 侧 `?ext=dbg` 启用，
+# 需要 IDA Pro 调试器许可 + 一个运行中的调试会话，开销与风险远高于静态分析。
+# 下表逐类列出开销与风险，供 `explain_unsafe_tools()` 与上層审计查询。
+# 数据来源：mrexodia/ida-pro-mcp README（GitHub，MIT，2026-06 核实）。
+_UNSAFE_TOOLS_RISK = {
+    "control": {
+        "tools": ["dbg_start", "dbg_exit", "dbg_continue", "dbg_run_to",
+                  "dbg_step_into", "dbg_step_over"],
+        "cost": "需启动/附加调试器，占用 IDA 调试会话与系统进程；失败可能遗留僵尸进程",
+        "risk": "高：错误地址/断点可致被调试进程崩溃或调试状态不一致",
+    },
+    "breakpoint": {
+        "tools": ["dbg_bps", "dbg_add_bp", "dbg_delete_bp", "dbg_toggle_bp"],
+        "cost": "依赖调试会话；误配致频繁 SIGTRAP 拖慢目标",
+        "risk": "中：误删/误加断点错过分析时机",
+    },
+    "memory_write": {
+        "tools": ["dbg_write"],
+        "cost": "需调试会话；直接写入目标进程内存",
+        "risk": "极高：写错地址/数据可 corrupt 进程内存、改变执行流、造成崩溃",
+    },
+    "read_only": {
+        "tools": ["dbg_regs", "dbg_regs_all", "dbg_regs_remote", "dbg_gpregs",
+                  "dbg_gpregs_remote", "dbg_regs_named", "dbg_regs_named_remote",
+                  "dbg_stacktrace", "dbg_read"],
+        "cost": "需调试会话；纯读取",
+        "risk": "低：只读，但依赖会话稳定性",
+    },
+    # 非 dbg_ 前缀但同样危险的工具（IDA 上下文执行任意 Python / 修改数据库）
+    "arbitrary_code": {
+        "tools": ["py_eval"],
+        "cost": "在 IDA 进程内执行任意 Python；可调用全部 IDA 内部 API",
+        "risk": "极高：可凭任意代码损坏 IDB、篡改反汇编、植入脚本",
+    },
+}
 
 
 def _host_of(url: str) -> str:
@@ -169,6 +208,16 @@ class IdaProMcpAdapter(BaseAgentAdapter):
         # 单一逆向工程能力；具体工具由 payload["tool"] 指定。
         return [Capability.RE_IDA]
 
+    @classmethod
+    def explain_unsafe_tools(cls) -> dict:
+        """返回调试类 unsafe 工具的开销/风险说明（供上层审计、用户自查、测试断言）。
+
+        为什么存在：红线「永久拒绝 dbg_*」必须可解释——用户/审计方应能查到
+        「到底拒了什么、为什么拒、开销多高、风险多大」，而非一句「不安全」黑箱拒绝
+        （对应理念6/9 诚实可验证）。返回结构是 `_UNSAFE_TOOLS_RISK` 的副本。
+        """
+        return dict(_UNSAFE_TOOLS_RISK)
+
     def health(self) -> bool:
         # 候选资格 = 配置了本机(localhost) URL。真实连通性延后到 invoke 时做
         # 握手（故障隔离、不传染）；_healthy 仅作「最近一次握手是否成功」的信息
@@ -192,7 +241,15 @@ class IdaProMcpAdapter(BaseAgentAdapter):
             return InvokeResult(
                 ok=False,
                 error=f"ida-pro-mcp 拒绝调试类 unsafe 工具 {tool!r}（红线：默认且永久不触发调试器）",
-                data={"tool": tool, "blocked_reason": "unsafe_debug_tool"},
+                data={
+                    "tool": tool,
+                    "blocked_reason": "unsafe_debug_tool",
+                    "unsafe_risk_summary": (
+                        "dbg_* 需 IDA 侧 ?ext=dbg 启用（非 --unsafe 标志），"
+                        "要求 IDA Pro 调试器 + 运行中的调试会话；最高危 dbg_write 可 corrupt "
+                        "进程内存，控制类可崩溃进程。详见 explain_unsafe_tools() / docs/AOS_IDA_PRO_MCP.md"
+                    ),
+                },
             )
         # D3：默认只读（read_only=True）；写操作（rename/comment/...）需显式 read_only=False。
         read_only = payload.get("read_only", True)
