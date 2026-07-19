@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -199,9 +200,11 @@ class SecurityAuditAdapter(BaseAgentAdapter):
         heal_results: Dict[str, Any] = {}
         # 自愈双重门控：① AOS_SELF_HEAL=1；② 调用方显式 self_heal=True。
         # 仅对「受影响 + 有安全修复指令」的项自动执行白名单命令并复验。
+        # AOS_SELF_HEAL_DRYRUN=1 → 只记录计划、绝不执行（D2 副作用可追责/可撤销前置）。
+        dry_run = os.environ.get("AOS_SELF_HEAL_DRYRUN") == "1"
         if payload.get("self_heal") and os.environ.get("AOS_SELF_HEAL") == "1":
-            heal_results = self._self_heal(findings)
-        report = self._build_report(findings, include_watch, heal_results)
+            heal_results = self._self_heal(findings, dry_run=dry_run)
+        report = self._build_report(findings, include_watch, heal_results, dry_run=dry_run)
         # 整体置信：能真实探测到的组件数越多，结论越可信（延续理念6 三级量化）。
         detectable = sum(1 for f in findings if f["status"] != "not_present")
         conf = assess(detectable, reason_fmt=lambda n: f"本机真实探测到 {n} 个相关组件：置信随可观测样本数上升")
@@ -272,12 +275,19 @@ class SecurityAuditAdapter(BaseAgentAdapter):
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "allowed": True, "error": f"自愈命令执行异常: {e!r}"}
 
-    def _self_heal(self, findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _self_heal(self, findings: List[Dict[str, Any]],
+                   dry_run: bool = False) -> Dict[str, Any]:
         """对受影响且具备安全修复指令的项尝试自愈，并复验确认。
 
-        返回 {cve: {attempted, command, run, reaudit_version, reaudit_status, healed}}。
-        诚实：复验仍受影响 → healed=False（绝不谎报修复成功）；命令不允许/失败 →
-        如实记录，不动该组件。
+        返回 {cve: {attempted, command, before_version, after_version,
+                     reaudit_status, healed, confidence, caveat, timestamp}}。
+
+        D1 诚实闸门：复验仍受影响 → healed=False（绝不谎报）。healed=True 仅是
+        「版本证据」级置信——版本号变了 ≠ 漏洞真修好（补丁可能未生效/检测脚本
+        本身有误），必须附 caveat 提示按厂商公告复核。
+        D2 副作用可追责：每次真实自愈落一条结构化审计记录（命令/前后版本/exit_code/
+        时间戳），默认零足迹（不设 AOS_SELF_HEAL_AUDIT_LOG 不落盘）；dry_run 只记录
+        计划、绝不执行，是可撤销前置。
         """
         results: Dict[str, Any] = {}
         adv_by_cve = {a.cve: a for a in ADVISORIES}
@@ -287,8 +297,20 @@ class SecurityAuditAdapter(BaseAgentAdapter):
                 continue
             adv = adv_by_cve[cve]
             cmd = adv.remediation_cmd
+            before_version = f.get("detected_version")
             if not cmd:
                 results[cve] = {"attempted": False, "reason": "无安全自动修复指令，仅人工处置"}
+                continue
+            # D2 干跑：只记录「将要做什么」，绝不执行任何命令。
+            if dry_run:
+                results[cve] = {
+                    "attempted": False, "dry_run": True, "command": cmd,
+                    "before_version": before_version, "after_version": None,
+                    "reaudit_status": "not_executed", "healed": False,
+                    "confidence": "planned_only",
+                    "caveat": "干跑模式：未执行任何命令，仅记录计划；真实自愈需去掉 dry-run。",
+                    "timestamp": _now_iso(),
+                }
                 continue
             run = self._heal_run(cmd)
             # 复验：重新探测该组件版本并判定
@@ -300,15 +322,57 @@ class SecurityAuditAdapter(BaseAgentAdapter):
             elif present and version:
                 re_status = "affected"
             healed = bool(run.get("ok")) and re_status == "patched"
-            results[cve] = {
+            conf, caveat = self._heal_confidence(healed, re_status, run)
+            record = {
+                "timestamp": _now_iso(),
+                "cve": cve,
                 "attempted": True,
                 "command": cmd,
-                "run": run,
-                "reaudit_version": version,
+                "allowed": run.get("allowed", False),
+                "exit_code": run.get("exit_code"),
+                "before_version": before_version,
+                "after_version": version,
                 "reaudit_status": re_status,
                 "healed": healed,
+                "confidence": conf,
+                "caveat": caveat,
             }
+            self._append_heal_audit(record)
+            results[cve] = record
         return results
+
+    @staticmethod
+    def _heal_confidence(healed: bool, re_status: str,
+                         run: Dict[str, Any]) -> Tuple[str, str]:
+        """D1：把 healed 的置信说清楚——版本证据 ≠ 真实可利用性验证。"""
+        if not healed:
+            if re_status == "affected":
+                return ("unverified",
+                        f"复验仍显示受影响，未修复；命令执行"
+                        f"{'成功' if run.get('ok') else '失败'}，但版本区间未变化，"
+                        "诚实回报未修复，绝不谎报。")
+            return ("unverified", "复验结果不确定，未判定为已修复，按未修复处置。")
+        # healed=True：只是版本号跨过了受影响区间，并非真实可利用性已验证。
+        return ("version_evidence_only",
+                "版本号已超出受影响区间，但版本变化≠漏洞确证修复"
+                "（补丁可能未生效、或检测脚本本身有误导致误判）；"
+                "建议按厂商官方公告二次复核确认。")
+
+    def _append_heal_audit(self, record: Dict[str, Any]) -> None:
+        """D2：把每次真实自愈落结构化审计轨迹，便于追责与事后复核。
+
+        零足迹优先：仅当显式设置 AOS_SELF_HEAL_AUDIT_LOG 才落盘（默认不写）。
+        """
+        path = os.environ.get("AOS_SELF_HEAL_AUDIT_LOG")
+        if path in (None, "", "0", "off", "false"):
+            return
+        try:
+            parent = os.path.dirname(path) or "."
+            os.makedirs(parent, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:  # noqa: BLE001 - 审计日志写失败不阻断主流程
+            logger.warning("自愈审计日志写入失败（不影响主流程）: %s", e)
 
     def _detect(self, adv: Advisory) -> Tuple[bool, Optional[str]]:
         """返回 (是否安装, 抓到的版本文本)。detect_cmd 为空或探测失败→(False, None)。"""
@@ -384,22 +448,30 @@ class SecurityAuditAdapter(BaseAgentAdapter):
         return findings
 
     def _build_report(self, findings: List[Dict[str, Any]], include_watch: bool,
-                      heal_results: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                      heal_results: Optional[Dict[str, Any]] = None,
+                      dry_run: bool = False) -> Dict[str, Any]:
         counts: Dict[str, int] = {}
         for f in findings:
             counts[f["status"]] = counts.get(f["status"], 0) + 1
         heal_enabled = bool(heal_results)
         healed_n = sum(1 for v in (heal_results or {}).values()
                        if isinstance(v, dict) and v.get("healed"))
+        # D1：按置信级别聚合，让运维一眼看清「哪些真修好、哪些只是版本证据」。
+        conf_levels: Dict[str, int] = {}
+        for v in (heal_results or {}).values():
+            if isinstance(v, dict) and v.get("confidence"):
+                conf_levels[v["confidence"]] = conf_levels.get(v["confidence"], 0) + 1
         return {
             "capability": "security.audit",
             "scope": "localhost",
             "mode": "defensive-only / read-only / no exploit code",
             "self_heal": {
                 "enabled": heal_enabled,
+                "dry_run": dry_run,
                 "attempted": sum(1 for v in (heal_results or {}).values()
                                  if isinstance(v, dict) and v.get("attempted")),
                 "healed": healed_n,
+                "confidence_levels": conf_levels,
             } if heal_enabled else None,
             "heal_details": heal_results or None,
             "generated_at": _now_iso(),
