@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '4ae19e71-8559-4e4b-ad31-4b1cc140fc36'
-  PropagateID: '4ae19e71-8559-4e4b-ad31-4b1cc140fc36'
-  ReservedCode1: '2c04d457-117f-4996-9d79-025b7efed67d'
-  ReservedCode2: '2c04d457-117f-4996-9d79-025b7efed67d'
+  ProduceID: '1d1a7d3c-44e0-4d1e-ae36-3944943b1076'
+  PropagateID: '1d1a7d3c-44e0-4d1e-ae36-3944943b1076'
+  ReservedCode1: '83e8ff3a-3725-4460-b84f-3314c700a795'
+  ReservedCode2: '83e8ff3a-3725-4460-b84f-3314c700a795'
 ---
 
 # AOS 项目状态总地图（STATUS）
@@ -163,6 +163,7 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 | `AGENTS.md` | **项目宪法**（九大核心理念 + 七级决策阶梯 + 基线快照真实规模） | 任何改动前先读 |
 | `docs/` | 各专项文档（CAPABILITY_AUDIT / OPEN_FABRIC / GLOBAL_REVIEW / WAIC2026_AOS_MAPPING 等） | 想看专项论证 |
 | `AOS_CURRENT_STATE_SNAPSHOT.md` / `AOS_V5_COMPLETION_SUMMARY.md` | v5 时代旧文档，**仍在根目录（18.3KB / 18.9KB，mtime 07-15/07-11，未被真删）**——STATUS.md 此前误报"已删"，2026-07-19 explore 真机核验纠偏 | 待删除（破坏性，需用户点头） |
+| `docs/retro/` | 历史审计 / 反思复盘归档目录（含 `RETRO-2026-07-19_audit-p0p1p2.md` + `README.md` 索引）。**非真相源**，仅供回溯 | 看历史决策时翻，数字不视为现状 |
 
 ---
 

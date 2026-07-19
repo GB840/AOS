@@ -2,7 +2,7 @@
   "$schema": "AOS Skill Manifest v1",
   "description": "AOS 技能生态清单——所有可被 FabricHub 发现与调度的技能。作为 skills/__init__.py 的声明式对等体，供 skill_registry 和外部工具读取。",
   "version": "1.0.0",
-  "generated": "2026-07-18",
+  "generated": "2026-07-19",
   "skills": [
     {
       "id": "skill-creator",
@@ -158,9 +158,9 @@
       "module": "skills.ruflo",
       "class": "RuFloSkill",
       "version": "1.0.0",
-      "description": "Rust 函数级代码生成与优化",
+      "description": "RuFlo 多智能体编排平台（Rust + WASM + Node.js，含 Swarm/Routing/Memory/Federation/MCP 集成）",
       "category": "code",
-      "capabilities": ["code.generate.rust"],
+      "capabilities": ["agent.orchestrate.rust", "swarm.run", "code.multi_agent"],
       "runtime": "both",
       "subagent": "subagents.ruflo_agent",
       "status": "active"
@@ -406,12 +406,48 @@
       "capabilities": ["code.generate", "code.review"],
       "runtime": "brain.py",
       "status": "active"
+    },
+    {
+      "id": "autoskill-engine",
+      "name": "AutoSkill Engine",
+      "module": "skills.autoskill_engine",
+      "class": "AutoSkillEngine",
+      "version": "1.0.0",
+      "description": "自动技能发现与安装引擎——一句话需求自动找 SkillHub/装/注册/即用，含安全沙箱与回滚（被 src/api/autoskill_api.py 消费）",
+      "category": "meta",
+      "capabilities": ["skill.discover", "skill.install", "skill.rollback"],
+      "runtime": "brain.py",
+      "status": "active"
+    },
+    {
+      "id": "autoskill-agent",
+      "name": "AutoSkill Agent",
+      "module": "skills.autoskill_agent",
+      "class": "AutoSkillAgent",
+      "version": "1.0.0",
+      "description": "一句话全自动智能体——意图分析 + 缺技能自动装 + 编排执行 + 诚实展示用了什么技能（被 src/api/autoskill_api.py 消费）",
+      "category": "agent",
+      "capabilities": ["agent.orchestrate", "skill.autofit"],
+      "runtime": "brain.py",
+      "status": "active"
+    },
+    {
+      "id": "skillhub-integration",
+      "name": "SkillHub Integration",
+      "module": "skills.skillhub_integration",
+      "class": "SkillHubAdapter",
+      "version": "1.0.0",
+      "description": "SkillHub CLI 适配器——接入 7.9 万+ AI 技能商店（搜索/安装/优先源策略/优雅降级；被 src/api/autoskill_api.py 与 autoskill_engine.py 消费）",
+      "category": "meta",
+      "capabilities": ["skill.search.remote", "skill.install.remote"],
+      "runtime": "brain.py",
+      "status": "active"
     }
   ],
   "counts": {
-    "total": 31,
+    "total": 36,
     "by_category": {
-      "meta": 4,
+      "meta": 5,
       "orchestration": 2,
       "design": 3,
       "search": 2,
@@ -426,10 +462,10 @@
       "voice": 1,
       "memory": 1,
       "routing": 1,
-      "agent": 1
+      "agent": 2
     },
     "by_runtime": {
-      "brain.py": 23,
+      "brain.py": 28,
       "both": 8
     }
   }
