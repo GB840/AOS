@@ -878,6 +878,13 @@ def _looks_like_text_not_code(text: str) -> bool:
     if len(stripped) > 100 and first_line and "\u4e00" <= first_line[0] <= "\u9fff":
         return True
 
+    # 判据4: 含大量中文（占比>30%）且无代码语法——研报/文档段落常含英文术语但主体是中文
+    # （如 "Node）与边（Edge）。每个节点维护一个共享的状态对象..." 以英文开头但主体是中文）
+    if len(stripped) > 50:
+        cn_chars = sum(1 for c in stripped if "\u4e00" <= c <= "\u9fff")
+        if cn_chars / len(stripped) > 0.3:
+            return True
+
     return False
 
 

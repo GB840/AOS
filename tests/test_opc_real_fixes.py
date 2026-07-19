@@ -74,6 +74,14 @@ def test_looks_like_text_not_code_cn_starter():
     assert ap._looks_like_text_not_code("以下是基于一人公司特性的研报结构建议")
 
 
+def test_looks_like_text_not_code_en_start_cn_body():
+    """英文开头但主体是中文的研报片段 → 判为非代码（判据4：中文占比>30%）。"""
+    text = ("Node）与边（Edge）。每个节点维护一个共享的状态对象（State），"
+            "支持断点续传、人工介入（Human-in-the-loop）和循环回溯。"
+            "这种架构使得调试复杂工作流变得可视化且可控。")
+    assert ap._looks_like_text_not_code(text)
+
+
 def test_not_text_when_has_code_syntax():
     """含代码语法特征 → 不拦（可能是带注释的代码）。"""
     assert not ap._looks_like_text_not_code("# 注释\nprint('hello')")
