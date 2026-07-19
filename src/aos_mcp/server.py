@@ -5,11 +5,11 @@
 stdio 连接 AOS。
 
 已知约束（重要，已按"验证够再定性"纪律核实，勿遗漏）：
-1. **命名冲突**：AOS 自有 `src/aos_mcp/` 包与官方 `mcp` SDK 同名。在 AOS 运行时（PYTHONPATH 含 src）
-   下 `import aos_mcp` 解析到 AOS 本地包，官方 SDK 被遮蔽；且 `src/api/main.py`、`src/core/brain.py`
-   共 3 处 `from aos_mcp import ...` 依赖本地包。因此本服务端用本地 `MCPProtocol` + 自研 stdio 循环，
-   而非官方 `mcp.server` SDK。彻底解决需将 `src/aos_mcp` 重命名为 `src/aos_mcp` 并更新这 3 处引用
-   （已记录为待办 #140）。
+1. **命名已解耦**：AOS 自有协议封装原位于 `src/mcp/`，与 PyPI 官方 `mcp` SDK 同名导致
+   PYTHONPATH=src 下本地包遮蔽官方 SDK。2026-07-19 按项目待办 #140 完成重命名
+   `src/mcp/` → `src/aos_mcp/`，src/ 内 13 处 `from mcp import` 同步改为 `from aos_mcp import`。
+   本服务端用本地 `MCPProtocol` + 自研 stdio 循环；官方 `mcp` SDK 仍可被 external/
+   示例代码或 ag2 等依赖正常 import，互不干扰。
 2. **stdout 纯净**：MCP stdio 要求 stdout 仅含 JSON-RPC。真实工具（openclaw / gui / office /
    RAG / agency）在调用时会 `import core` 或 `import skills`，触发 AOS 启动日志/警告刷屏污染流。
    故本服务端默认仅挂载“不触发 core/skills”的干净工具（get_status 等）；需要大脑的工具在大脑
@@ -17,9 +17,9 @@ stdio 连接 AOS。
 3. 启动即 `logging.disable(CRITICAL)` + `AOS_CLI_STANDALONE=1`，最大限度抑制日志噪音。
 
 运行：
-    PYTHONPATH=D:/AOS/src python -m mcp.server
+    PYTHONPATH=D:/AOS/src python -m aos_mcp.server
 MCP 客户端配置（stdio）：
-    { "mcpServers": { "aos": { "command": "python", "args": ["-m", "mcp.server"], "env": { "PYTHONPATH": "D:/AOS/src" } } } }
+    { "mcpServers": { "aos": { "command": "python", "args": ["-m", "aos_mcp.server"], "env": { "PYTHONPATH": "D:/AOS/src" } } } }
 """
 
 import json

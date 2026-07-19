@@ -149,7 +149,7 @@ class SkillRegistry:
         return info
 
 
-# 模块级单例（惰性初始化，与 mcp/protocol._get_hub 同构）
+# 模块级单例（惰性初始化，与 aos_mcp/protocol._get_hub 同构）
 _registry: Optional[SkillRegistry] = None
 
 

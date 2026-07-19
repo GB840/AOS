@@ -18,7 +18,7 @@ AOS = 单内核 FabricHub + 多芯粒的 agent 运行时。价值在「多步编
 - 芯粒＝隔离计算单元，重型引擎跑独立子进程，崩溃不传染。
 - 按 Capability 发现引擎不按名字（`src/core/fabric/capability.py`、`registry.py`）。
 - 所有适配器实现 `BaseAgentAdapter`（`src/core/fabric/adapter.py`）。
-- 对外＝标准 MCP server（`src/mcp/protocol.py`）。
+- 对外＝标准 MCP server（`src/aos_mcp/protocol.py`）。
 
 ## 反模式（见到就改）
 - 路由只取 providers[0] 就停 → 必须遍历所有 live 供给方故障转移。

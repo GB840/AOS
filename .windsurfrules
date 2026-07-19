@@ -19,7 +19,7 @@ AOS = 单内核 FabricHub + 多芯粒的 agent 运行时。价值在「多步编
 - FabricHub（src/kernel/plugins/fabric_hub.py）是唯一内核，管路由/记忆/上下文主权。
 - 芯粒＝隔离计算单元，重型引擎跑独立子进程，崩溃不传染。
 - 按 Capability 发现引擎不按名字。所有适配器实现 BaseAgentAdapter。
-- 对外＝标准 MCP server（src/mcp/protocol.py）。
+- 对外＝标准 MCP server（src/aos_mcp/protocol.py）。
 - 新功能一律进 FabricHub，别往 legacy 双轨（brain/deerflow/swarm/hermes）加料。
 
 ## 反模式（见到就改）

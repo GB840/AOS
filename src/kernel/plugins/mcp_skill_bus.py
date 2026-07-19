@@ -1,4 +1,4 @@
-"""插件：把现有 mcp.MCPProtocol 登记为 SkillBus。
+"""插件：把现有 aos_mcp.MCPProtocol 登记为 SkillBus。
 
 内核只认 SkillBus(ABC)。本文件把已有的 MCPProtocol（基于 MCP 协议的工具
 总线）薄封装成 SkillBus，使现有 MCP 工具作为内核插件挂入，内核一行不改。
@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from ..interfaces import SkillBus
 from ..types import SkillInfo, SkillResult, SkillSpec
 
-# 延迟导入具体实现（注意：src/aos_mcp 与官方 mcp SDK 同名，此处取本地包）
+# 延迟导入具体实现（注意：src/aos_mcp 与 PyPI 官方 mcp SDK 已解耦（2026-07-19 完成改名），此处取本地包）
 from aos_mcp.protocol import MCPProtocol, MCPTool
 
 

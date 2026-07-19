@@ -28,7 +28,7 @@ def main() -> int:
     env["AOS_CLI_STANDALONE"] = "1"
 
     proc = subprocess.Popen(
-        [PY, "-m", "mcp.server"],
+        [PY, "-m", "aos_mcp.server"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=env, cwd=ROOT, text=True,
     )

@@ -1,3 +1,14 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '8c4ca953-2f96-4bca-b77c-5437746053b9'
+  PropagateID: '8c4ca953-2f96-4bca-b77c-5437746053b9'
+  ReservedCode1: '2b90e402-7f07-4961-b5b5-0d2aeea1156f'
+  ReservedCode2: '2b90e402-7f07-4961-b5b5-0d2aeea1156f'
+---
+
 # AGENTS.md — AOS 宪法（Single Source of Truth）
 
 > 本文件是 AOS 项目对所有 AI 编码工具（Claude Code / Cursor / Codex / Windsurf / Aider / Gemini CLI…）的
@@ -237,7 +248,7 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
   - 代码：`src/core/fabric/capability.py`、`src/core/fabric/registry.py`
 - **引擎无关契约**：所有适配器实现 `BaseAgentAdapter`（`src/core/fabric/adapter.py`）。
 - **新增适配器/引擎/芯粒前必须先跑 §10 Ponytail 七级阶梯**，把每级答案贴在 PR 描述中。
-- **对外出口 = 标准 MCP server**（`src/mcp/protocol.py`）：`aos_list_engines / aos_route / aos_invoke_engine`。
+- **对外出口 = 标准 MCP server**（`src/aos_mcp/protocol.py`）：`aos_list_engines / aos_route / aos_invoke_engine`。
 - **编排器**：`OrchestrationChiplet`（`src/kernel/plugins/orchestration_chiplet.py`）真流水线执行器，
   `steps[]` 逐跳经 hub 路由，上一步输出喂下一步；支持 `parallel_groups` 组内并发。
 - **think→do 闭环已收口**：`run_task(planner='ag2')` — ag2 规划文本 → 解析成带 `[AOS能力]` 标签的 steps → 逐跳执行。
@@ -453,3 +464,5 @@ AOS 不重造轮子：任何支持 **MCP** 的真实产品都能经**通用 MCP 
 - 每次产出前先在心里跑一遍阶梯；若我本可一行/复用/用标准库却写了重的，用户有权直接打回。
 - 不主动"加戏"：未要求的抽象、配置、防御性分支、额外依赖，一律不写。
 - 当 10.2 与"看起来更稳妥"冲突时，选更简单但安全达标那侧；确需复杂时，先说清为什么简单方案不行。
+
+> AI生成
