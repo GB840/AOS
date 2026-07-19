@@ -1,0 +1,74 @@
+"""本机 IDA Pro 逆向工程 MCP 适配器测试：localhost 红线 / 能力映射 / 工具调用。"""
+import sys
+
+sys.path.insert(0, "D:/AOS/src")
+
+import pytest
+
+from core.fabric.adapters.ida_pro_mcp_adapter import IdaProMcpAdapter, _host_of
+from core.fabric.adapter import InvokeRequest
+from core.fabric.capability import Capability
+
+
+def _fake_rpc(method, params=None, notif=False):
+    if notif:
+        return None
+    if method == "initialize":
+        return {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "ida-pro-mcp"}}
+    if method == "tools/list":
+        return {"tools": [{"name": "get_metadata"}, {"name": "decompile_function"}]}
+    if method == "tools/call":
+        name = (params or {}).get("name")
+        if name == "get_metadata":
+            return {"content": [{"type": "text", "text": "IDA v9.3, functions=1234"}]}
+        if name == "decompile_function":
+            return {"content": [{"type": "text", "text": "int main() { return 0; }"}]}
+    return {"content": []}
+
+
+def test_host_of_parsing():
+    assert _host_of("http://localhost:13337/mcp") == "localhost"
+    assert _host_of("http://127.0.0.1/mcp") == "127.0.0.1"
+    assert _host_of("http://8.8.8.8/mcp") == "8.8.8.8"
+
+
+def test_advertises_re_ida():
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    assert ad.advertise_capabilities() == [Capability.RE_IDA]
+
+
+def test_localhost_only_red_line():
+    ad = IdaProMcpAdapter(server_url="http://8.8.8.8/mcp")
+    assert ad.is_localhost is False
+    assert ad.health() is False
+    res = ad.invoke(InvokeRequest(capability=Capability.RE_IDA, payload={"tool": "get_metadata"}))
+    assert res.ok is False and "localhost" in (res.error or "")
+
+
+def test_invoke_get_metadata_and_decompile():
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    r1 = ad.invoke(InvokeRequest(capability=Capability.RE_IDA, payload={"tool": "get_metadata"}))
+    assert r1.ok and "IDA v9.3" in r1.data["text"]
+    r2 = ad.invoke(InvokeRequest(capability=Capability.RE_IDA,
+                                 payload={"tool": "decompile_function", "arguments": {"address": 0x1000}}))
+    assert r2.ok and "int main" in r2.data["text"]
+
+
+def test_default_tool_is_get_metadata():
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    r = ad.invoke(InvokeRequest(capability=Capability.RE_IDA, payload={}))
+    assert r.ok and "IDA v9.3" in r.data["text"]
+
+
+def test_fabrichub_register_refuses_non_localhost():
+    # 集成：FabricHub 在 URL 非 localhost 时应拒绝注册（红线），localhost 时注册成功。
+    try:
+        from kernel.plugins.fabric_hub import FabricHub
+    except Exception as e:  # noqa: BLE001 - 重型依赖缺失则跳过，不拖垮套件
+        pytest.skip(f"FabricHub 不可用（重型依赖）: {e}")
+    hb = FabricHub(adapters=())
+    assert hb.register_ida_pro_mcp(url="http://8.8.8.8/mcp") is None
+    eid = hb.register_ida_pro_mcp(url="http://localhost:13337/mcp")
+    assert eid == "ida-pro-mcp"
+    provs = hb._registry.providers_for(Capability.RE_IDA, "high")
+    assert any(p.engine_id == "ida-pro-mcp" for p in provs)

@@ -100,9 +100,26 @@ class Capability(str, Enum):
     BENCH_ISOLATE = "bench.isolate"    # 崩溃隔离专用合成能力（tests + gate_check）
     WORKFLOW_EXECUTE = "system.workflow"  # 编排芯粒：把多芯粒串成流水线（Day15-21）
     CONTENT_PRODUCE = "content.produce"   # 自主内容生产流水线（检索→分析→剧本→导演→工具→审核→发布）
+
+    # 内容飞轮细分能力（与 CONTENT_PRODUCE 端到端大流水线正交）：把发布后环节单独
+    # 广播出来，便于路由到 echo/cast/refine/content_marketer 等专门化适配器。
+    # 9 个成员与 echo_adapter/cast_adapter/refine_adapter/content_marketer_adapter
+    # 的 advertise_capabilities() 字符串值一一对应（保持下游字符串匹配零破坏）。
+    CONTENT_FEEDBACK = "content.feedback"         # 全网回声采集：搜索讨论→抓取→情感→需求
+    CONTENT_SENTIMENT = "content.sentiment"       # 情感分析（positive/negative/neutral）
+    CONTENT_NEED_MINING = "content.need_mining"   # 从反馈中挖掘潜在需求 / 问题
+    CONTENT_PUBLISH = "content.publish"           # 生成发布包 / 平台发布
+    CONTENT_DISTRIBUTE = "content.distribute"     # 多平台格式适配 / 分发策略
+    CONTENT_OPTIMIZE = "content.optimize"         # 基于反馈的内容迭代优化建议
+    CONTENT_REFINE = "content.refine"             # 局部润色 / 重新生成
+    CONTENT_AB_TEST = "content.ab_test"           # A/B 测试设计与结论
+    CONTENT_MARKETING_VIDEO = "content.marketing_video"  # 一句话目标→营销视频生产（端到端）
     # 防御型本地漏洞自查（只读、仅本机；仅用公开 CVE 元数据，绝不携带/运行 exploit）。
     # 把「exploitarium 式零日情报」转化为对**自己环境**的巡检能力，而非攻击能力。
     SECURITY_AUDIT = "security.audit"
+    # 逆向工程（经本机 IDA Pro MCP server；仅分析你有权分析的二进制，localhost-only）。
+    # 把 mrexodia/ida-pro-mcp 这类真实开源逆向工具弄进 AOS 供给面，落实「万物为我所用」。
+    RE_IDA = "re.ida"
 
 
 # ============================================================================
@@ -163,6 +180,8 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     "content-director": [Capability.CONTENT_PRODUCE],
     # security-audit：防御型本地漏洞自查（仅本机、只读、用公开 CVE 元数据）
     "security-audit": [Capability.SECURITY_AUDIT],
+    # ida-pro-mcp：本机 IDA Pro 逆向工程 MCP server（localhost-only，仅分析有权分析的二进制）
+    "ida-pro-mcp": [Capability.RE_IDA],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -196,6 +215,8 @@ ENGINE_TIER: dict[str, str] = {
     "content-director": TIER_HIGH,
     # security-audit：本地只读漏洞自查（零成本/最强隐私/纯防御）→ 高档
     "security-audit": TIER_HIGH,
+    # ida-pro-mcp：本机 IDA Pro 逆向 MCP（本地优先/零成本/最强隐私）→ 高档
+    "ida-pro-mcp": TIER_HIGH,
 }
 
 

@@ -128,12 +128,43 @@ try:
 except Exception:  # noqa: BLE001 - 缺依赖则跳过，不拖垮内核
     SecurityAuditAdapter = None
 
+try:
+    from .ida_pro_mcp_adapter import IdaProMcpAdapter
+except Exception:  # noqa: BLE001 - 缺依赖则跳过，不拖垮内核
+    IdaProMcpAdapter = None
+
+# 内容飞轮 4 个适配器：fabric_hub.py 也单独 `from .xxx_adapter import` 注册，
+# 这里补做统一入口导出（TD-10），方便外部代码（测试 / 文档生成 / 健康检查）
+# 用 `from core.fabric.adapters import XxxAdapter` 一行拿到。
+try:
+    from .content_marketer_adapter import ContentMarketerAdapter
+except Exception:  # noqa: BLE001
+    ContentMarketerAdapter = None
+
+try:
+    from .cast_adapter import CastAdapter
+except Exception:  # noqa: BLE001
+    CastAdapter = None
+
+try:
+    from .echo_adapter import EchoAdapter
+except Exception:  # noqa: BLE001
+    EchoAdapter = None
+
+try:
+    from .refine_adapter import RefineAdapter
+except Exception:  # noqa: BLE001
+    RefineAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
         "AgnesAdapter",
         "BrowserUseAdapter",
+        "CastAdapter",
         "CodeExecutionAdapter",
+        "ContentMarketerAdapter",
+        "EchoAdapter",
         "FileAdapter",
         "LangfuseAdapter",
         "LiteLLMAdapter",
@@ -142,11 +173,13 @@ __all__ = [
         "MCPStdioAdapter",
         "Mem0Adapter",
         "OpenClawAdapter",
+        "RefineAdapter",
         "SearchAdapter",
         "WebFetchAdapter",
         "ThreejsAdapter",
         "STTAdapter",
         "TTSAdapter",
+        "IdaProMcpAdapter",
         "LNNAdapter",
         "ScriptsAdapter",
         "MiniCPMOAdapter",

@@ -48,6 +48,7 @@ from core.fabric.adapters import (
     VideoMakerAdapter,
     RemotionAdapter,
     SecurityAuditAdapter,
+    IdaProMcpAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -273,6 +274,13 @@ class FabricHub:
             self.register_weknora_mcp()
         except Exception as e:  # noqa: BLE001 - 远端/网络故障不拖垮枢纽
             _LOG.warning("WeKnora MCP 注册失败(将跳过): %s", e)
+        # 本机 IDA Pro 逆向工程 MCP（mrexodia/ida-pro-mcp，真实开源）：仅当
+        # IDA_PRO_MCP_URL 配置且为 localhost 时注册 re.ida 芯粒；非本机 URL 或
+        # IDA 未运行则静默跳过，绝不谎报 live（红线：仅连你自己机器上的 IDA）。
+        try:
+            self.register_ida_pro_mcp()
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("ida-pro-mcp 注册失败(将跳过): %s", e)
         # codebase-memory-mcp 是 stdio-only 的 MCP server（纯 C / 零依赖 / MIT），
         # 现有 register_mcp_server 只接 HTTP(SSE)，接不上它。这里单独接 stdio
         # 传输，并把真实工具「弄进」AOS：二进制缺失时优雅跳过，绝不谎报 live。
@@ -698,6 +706,47 @@ class FabricHub:
             auth_token=auth_token,
             timeout=timeout,
         )
+
+    # ---- ida-pro-mcp（本机 IDA Pro 逆向工程 MCP）即插即用 ------------
+    def register_ida_pro_mcp(
+        self,
+        url: Optional[str] = None,
+        engine_id: str = "ida-pro-mcp",
+        auth_token: Optional[str] = None,
+        timeout: float = 15.0,
+    ) -> Optional[str]:
+        """把本机 mrexodia/ida-pro-mcp（真实开源逆向工程 MCP，MIT）注册成 AOS re.ida 芯粒。
+
+        前置（用户主机，沙箱无法跑 IDA）：
+          1) pip install --upgrade git+https://github.com/mrexodia/ida-pro-mcp
+          2) ida-pro-mcp --install   # 安装 IDA 插件
+          3) 启动 IDA 并加载目标二进制（.idb/.i64）
+          4) 设 IDA_PRO_MCP_URL=http://localhost:<port>/mcp
+        AOS 侧在 IDA_PRO_MCP_URL 存在且为 localhost 时自动注册；否则返回 None（opt-in）。
+
+        红线：非 localhost URL 一律拒绝注册（绝不连你无权分析的第三方 IDA 实例）。
+        返回 engine_id；IDA 未运行/不可达时返回 None 并记警告（绝不谎报 live）。
+        """
+        url = url or os.environ.get("IDA_PRO_MCP_URL")
+        if not url:
+            return None
+        host = url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+        if host not in ("localhost", "127.0.0.1", "::1", "0.0.0.0") and not host.endswith(".localhost"):
+            _LOG.warning(
+                "IDA_PRO_MCP_URL 非 localhost，拒绝注册（红线：仅连你自己机器上的 IDA）：%s",
+                url,
+            )
+            return None
+        try:
+            adapter = IdaProMcpAdapter(
+                server_url=url, engine_id=engine_id,
+                auth_token=auth_token, timeout=timeout,
+            )
+        except Exception as e:  # noqa: BLE001 - IDA 未运行等，优雅跳过
+            _LOG.warning("ida-pro-mcp 注册失败（IDA 未运行？）：%s", e)
+            return None
+        self.register_adapter(adapter)
+        return engine_id
 
     # ---- Desktop-Touch-MCP（Windows 原生 UIA 桌面视觉执行）即插即用 --
     def register_desktop_touch_mcp(
