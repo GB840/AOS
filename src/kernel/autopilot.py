@@ -8,7 +8,8 @@
   python -m kernel.autopilot "搜索最新的开源语音识别模型并评估是否适合 Windows"
 
 设计原则：
-  - 零依赖 FabricHub 全量构造（不拖 deerflow / 127 个适配器注册的慢启动）
+  - 默认经 FabricHub 统一路由（统一能力路由 / 故障转移 / 白盒蒸馏）
+  - FabricHub 构造失败时透明降级到本地惰性适配器（零阻塞）
   - 所有适配器按需惰性初始化
   - ag2 不可用时透明降级 heuristic planner
   - 执行结果清晰可读（不堆 raw JSON）
@@ -69,33 +70,39 @@ def _get_ag2():
     return _ag2
 
 
-# ---- ⑤ 融合 FabricHub 单一内核路由（opt-in）---------------------------
-# 默认关闭：autopilot 仍走自有惰性适配器单例，保留「零依赖 FabricHub 全量构造」
-# 的快启动设计（见模块 docstring）。设 AOS_AUTOPILOT_USE_FABRICHUB=1 时，所有
-# 真实适配器调用改经 FabricHub.route() 统一派发——统一能力路由 / 运行时故障转移
-# / 策略边界（理念5），消除「autopilot 绕开 FabricHub 自成一路」的双轨债。
-# 两种路径最终命中同一底层适配器，返回 InvokeResult(.data 同构)，故 autopilot
-# 的真实闸门 / 量化指标逻辑无需改动即可作用于两条路径。
-_AUTOPILOT_USE_HUB = os.environ.get("AOS_AUTOPILOT_USE_FABRICHUB", "0") == "1"
+# ---- ⑤ 融合 FabricHub 单一内核路由（默认启用）---------------------------
+# 默认走 FabricHub 统一路由：所有真实适配器调用经 FabricHub.route() 统一派发——
+# 统一能力路由 / 运行时故障转移 / 策略边界 / 白盒蒸馏（理念5/8），消除「autopilot
+# 绕开 FabricHub 自成一路」的双轨债。首次 _dispatch 触发惰性构造（可能较慢，因
+# 需加载 20+ 适配器），后续调用复用单例。构造失败时透明降级到本地惰性适配器。
+# 设 AOS_AUTOPILOT_USE_FABRICHUB=0 可显式关闭（保留快启动设计，用于 CLI 一次性任务）。
+_AUTOPILOT_USE_HUB = os.environ.get("AOS_AUTOPILOT_USE_FABRICHUB", "1") == "1"
 _HUB = None
+_HUB_ATTEMPTED = False  # 避免重复尝试构造（失败后不再重试）
 
 
 def _get_hub():
-    """返回 FabricHub 单例（opt-in）；未启用时返回 None（走本地适配器）。"""
-    global _HUB
+    """返回 FabricHub 单例（默认启用）；构造失败或显式关闭时返回 None（走本地适配器）。"""
+    global _HUB, _HUB_ATTEMPTED
     if not _AUTOPILOT_USE_HUB:
         return None
-    if _HUB is None:
-        from kernel.plugins.fabric_hub import get_fabric_hub
-        _HUB = get_fabric_hub()
+    if _HUB is None and not _HUB_ATTEMPTED:
+        _HUB_ATTEMPTED = True
+        try:
+            logger.info("autopilot: 首次路由经 FabricHub 统一派发（惰性构造中…）")
+            from kernel.plugins.fabric_hub import get_fabric_hub
+            _HUB = get_fabric_hub()
+        except Exception:  # noqa: BLE001
+            logger.warning("autopilot: FabricHub 构造失败，透明降级到本地适配器",
+                           exc_info=True)
     return _HUB
 
 
 def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
-    """真实适配器调用：opt-in 经 FabricHub 单一内核路由，否则走本地惰性适配器。
+    """真实适配器调用：默认经 FabricHub 统一路由，构造失败时降级到本地惰性适配器。
 
-    两种路径最终都命中同一底层适配器，返回 InvokeResult(.data 同构)；
-    autopilot 的真实闸门 / 量化指标逻辑因此无需改动即可作用于两条路径。
+    两条路径最终命中同一底层适配器，返回 InvokeResult(.data 同构)；
+    autopilot 的真实闸门 / 量化指标逻辑无需改动即可作用于两条路径。
     """
     hub = _get_hub()
     if hub is not None:

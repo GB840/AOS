@@ -1471,7 +1471,8 @@ class FabricHub:
             _LOG.warning("skill_discover 失败: %s", e)
             return {"skills": [], "error": str(e), "total": 0}
 
-    def run_task(self, task: str, planner: str = "ag2", session_id: str = None) -> Dict[str, Any]:
+    def run_task(self, task: str, planner: str = "ag2", session_id: str = None,
+                 reflect: bool = False, max_reflect: int = None) -> Dict[str, Any]:
         """「think→do」自主执行闭环：规划 → 解析成 steps → 编排芯粒逐跳执行。
 
         这是把路由器变成 agent 的关键一跃（视频观点的落地）：
@@ -1482,11 +1483,32 @@ class FabricHub:
           - 执行阶段复用 OrchestrationChiplet（system.workflow），经统一
             route() 逐跳委派，故障隔离同样生效（任一芯粒崩溃不传染整条流水线）。
 
-        返回 {task, planner, plan, steps, execution}。
+        reflect=True 时启用完整反思闭环（规划→执行→质疑→重设计→再执行…），
+        经 autopilot.run() 实现。autopilot 默认经本 hub 统一路由，故调用方只
+        需一个入口即可获得「统一路由 + 反思闭环」的完整自主执行能力。
+
+        返回 {task, planner, plan, steps, execution}。reflect=True 时额外含
+        reflection 字段（attempts/exhausted/log）。
 
         注意：逻辑上分工（每步不同 capability）被保留；物理上仍是内核经统一
         route() 调度——不是自治多 Agent，正是视频反对的那类反模式我们没有。
         """
+        if reflect:
+            # 完整反思闭环：委托 autopilot（其 _dispatch 默认经本 hub 路由，
+            # 统一路径不分裂）。函数级 import 避免模块级循环依赖。
+            from kernel.autopilot import run as _autopilot_run
+            kwargs = {"task": task, "planner": planner}
+            if max_reflect is not None:
+                kwargs["run_id"] = None  # 兼容未来扩展
+            result = _autopilot_run(**kwargs)
+            # 会话记录：把反思闭环结果也纳入会话上下文
+            if session_id and isinstance(result, dict):
+                final = (result.get("execution") or {}).get("final", "")
+                if final:
+                    history = _load_session(session_id)
+                    history.append({"task": task, "response": str(final)[:500]})
+                    _save_session(session_id, history)
+            return result
         caps = self._known_capabilities()
         # B 路线记忆：执行前召回与该任务相关的历史记忆，注入流水线初始上下文
         # （下游步骤可用 in_from:"initial"/field 取用；无记忆引擎则空）。
