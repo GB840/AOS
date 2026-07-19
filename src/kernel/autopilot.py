@@ -32,6 +32,8 @@ from kernel.run_state_store import (
     create_run, save_checkpoint, load_checkpoint, mark_done,
 )
 from kernel.compliance import check_capability, policy_enforce_enabled
+from kernel.evolution_distiller import EvolutionDistiller
+from kernel.causal import CausalModel
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +104,10 @@ def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
         return hub.route(cap, payload)
     # 本地兜底（默认）：保持零依赖 FabricHub 全量构造的快启动设计
     if capability == "web.search":
-        return _get_search().invoke(InvokeRequest(capability=capability, payload=payload))
+        return _get_search().invoke(InvokeRequest(capability=capability, payload={
+            "query": payload.get("query") or payload.get("task") or payload.get("instruction") or "",
+            "engine": payload.get("engine") or payload.get("engine_hint"),
+        }))
     if capability == "action.code_exec":
         return _get_code_exec().invoke(InvokeRequest(capability=capability, payload=payload))
     if capability in ("inference.llm", "cognition.reasoning", "cognition.planning"):
@@ -112,6 +117,152 @@ def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
         return InvokeResult(ok=bool(text and text.strip()),
                             data={"content": text or "", "output": text or ""})
     return InvokeResult(ok=False, error=f"autopilot: _dispatch 不支持的能力 {capability}")
+
+
+# ---- 因果反思闭环（D5 决策论层接入 autopilot 反思链路）-----------------
+# 把 autopilot 每步的「真实成败 + 引擎」喂进白盒蒸馏器，反思时经 CausalModel 的
+# counterfactual / best_action 选「换做法」引擎，使反思从「LLM 猜」变为「数据支撑」。
+# 默认零足迹（opt-in）：AOS_AUTOPILOT_DISTILL=1 才喂本地蒸馏器；若已走 FabricHub
+# 路由（AOS_AUTOPILOT_USE_FABRICHUB=1）则直接复用其蒸馏器，不另起炉灶（理念4/8）。
+_DISTILLER: Optional[EvolutionDistiller] = None
+_DISTILLER_INITED = False
+
+# 引擎相对成本（仅用于决策论层 best_action 的 cost 权重；数值为相对量级，非真实计费）。
+# 免费本机/HTML 源为 0；需远程 key/计费的源更高 → 成功率相近时优先选免费的，实现降本。
+_ENGINE_COST = {
+    "anysearch": 0.1, "baidu": 0.0, "bing": 0.0, "duckduckgo": 0.0,
+    "jina": 0.1, "searxng": 0.0, "zhipu": 0.4,
+}
+
+
+def _get_causal_distiller() -> Optional[EvolutionDistiller]:
+    """返回可复用的白盒蒸馏器（供因果反思消费），无可用则 None（诚实跳过）。"""
+    global _DISTILLER, _DISTILLER_INITED
+    if _DISTILLER_INITED:
+        return _DISTILLER
+    _DISTILLER_INITED = True
+    # 1) 优先复用 FabricHub 已在路由热路径喂好的蒸馏器（零额外开销）
+    if os.environ.get("AOS_AUTOPILOT_USE_FABRICHUB") == "1":
+        try:
+            from kernel.plugins.fabric_hub import get_fabric_hub
+            hb = get_fabric_hub()
+            if hb is not None and getattr(hb, "_distiller", None) is not None:
+                _DISTILLER = hb._distiller
+                return _DISTILLER
+        except Exception:
+            logger.warning("获取 FabricHub 蒸馏器失败，退回本地", exc_info=True)
+    # 2) opt-in 本地蒸馏器：仅 AOS_AUTOPILOT_DISTILL=1 才落盘（默认零足迹）
+    if os.environ.get("AOS_AUTOPILOT_DISTILL") == "1":
+        try:
+            store = os.environ.get("AOS_AUTOPILOT_DISTILL_STORE") or os.path.join(
+                os.path.dirname(__file__), "..", "..", "data", "workspaces",
+                "autopilot", "distill.jsonl")
+            _DISTILLER = EvolutionDistiller(store_path=store)
+            return _DISTILLER
+        except Exception:
+            logger.warning("创建 autopilot 蒸馏器失败", exc_info=True)
+    return None
+
+
+def _feed_distiller(capability: str, result: Any) -> None:
+    """把一步的真实成败 + 引擎喂进白盒蒸馏器（opt-in，热路径安全）。
+
+    为什么：否则 CausalModel.from_distiller 永远空 → 反思调 counterfactual
+    只会返回 unknown，因果闭环断开。改变之后：autopilot 的每条真实 Trace 都成为
+    可复核的干预样本，反思能基于「哪个引擎更值」做数据决策而非 LLM 瞎猜。
+    """
+    d = _get_causal_distiller()
+    if d is None or not isinstance(result, InvokeResult) or not isinstance(result.data, dict):
+        return
+    engine = result.data.get("engine")
+    if not engine:
+        return  # 该能力未暴露引擎（如纯本地 code_exec），无因果候选可记
+    rm = result.data.get("real_metrics") or {}
+    ok_real = bool(result.ok) and (rm.get("is_real") is True)
+    try:
+        d.record_outcome(capability, engine, ok_real)
+    except Exception:
+        logger.warning("喂蒸馏器失败", exc_info=True)
+
+
+def _causal_reflection_hint(failed_cap: str, distiller: EvolutionDistiller) -> Optional[Dict[str, Any]]:
+    """用因果决策论层为失败能力选「换做法」引擎（D5 落地反思闭环）。
+
+    为什么：反思若只靠 LLM 猜「下次换什么引擎」，是黑盒、不可复核、易重复失败。
+    改变之后：直接复用白盒蒸馏器的 (能力,引擎)→成败，经 CausalModel.best_action
+    在『成功率×成本×时延』带权下选最优引擎，并 counterfactual 给出可复核证据
+    （Δ成功率 / Δ效用 / Wilson 置信区间 / 标注观测相关非已证因果）。
+    样本不足（候选<2 或任一方<MIN_SAMPLES）诚实返回 None——绝不编造换做法建议。
+    """
+    model = CausalModel().from_distiller(distiller)
+    cands: List[str] = []
+    for k in distiller.stats:
+        if k.startswith(failed_cap + "::"):
+            act = k.split("::", 1)[1]
+            if model.effect_of(failed_cap, act)["success_rate"] is not None:
+                cands.append(act)
+    if len(cands) < 2:
+        return None  # 证据不足，诚实不瞎建议
+    weights = {"rate": 1.0, "cost": 0.3, "latency": 0.2}
+    best = model.best_action(failed_cap, cands, weights=weights)
+    if not best:
+        return None
+    # 选最差候选做反事实基线，给出「换到 best 能好多少」的可复核证据
+    worst = min(cands, key=lambda a: model.effect_of(failed_cap, a)["success_rate"])
+    cf = model.counterfactual(
+        failed_cap, worst, best["action"],
+        costs={c: _ENGINE_COST.get(c, 0.0) for c in cands})
+    return {
+        "capability": failed_cap,
+        "suggested_engine": best["action"],
+        "best_success_rate": best["success_rate"],
+        "best_ci": (best.get("ci_low"), best.get("ci_high")),
+        "best_confidence": best.get("confidence"),
+        "inference_type": best.get("inference_type"),
+        "utility": best.get("utility"),
+        "evidence": cf,
+    }
+
+
+def _compute_causal_hints(failed: List[str], distiller: Optional[EvolutionDistiller]):
+    """对失败步列表算因果换做法建议，返回 (提示文本块, {cap: hint})。
+
+    纯函数、可单测：从失败步文本里解析能力标签，逐一查因果建议；无蒸馏器或
+    样本不足则双双返回空——反思退化回质疑 agent 诊断，绝不伪造证据。
+    """
+    from typing import Tuple
+    hints: Dict[str, Any] = {}
+    if distiller is not None:
+        for f in failed:
+            m = re.match(r"步骤\d+\[([^\]]+)\]", f)
+            cap = m.group(1) if m else None
+            if cap and cap not in hints:
+                h = _causal_reflection_hint(cap, distiller)
+                if h:
+                    hints[cap] = h
+    if not hints:
+        return "", {}
+    lines = []
+    for cap, h in hints.items():
+        ev = h.get("evidence") or {}
+        lines.append(
+            f"  - [{cap}] 因果证据建议改用引擎「{h['suggested_engine']}」"
+            f"（成功率 {h['best_success_rate']:.2f}，95%CI "
+            f"[{h['best_ci'][0]:.2f},{h['best_ci'][1]:.2f}]，置信 {h['best_confidence']}；"
+            f"{ev.get('reason', '')}）。"
+            f"注意：此为观测相关（{h['inference_type']}），非已证因果，仅供换做法参考。"
+        )
+    block = ("\n【因果反思建议（白盒蒸馏+决策论层，数据支撑的换做法，非 LLM 猜测）】\n"
+             + "\n".join(lines) + "\n")
+    return block, hints
+
+
+def _attach_engine_hints(steps: List[Dict[str, Any]], hints: Dict[str, Any]) -> None:
+    """把因果建议的引擎打到重设计步骤上，路由时优先采用（engine_hint）。"""
+    for s in steps:
+        cap = s.get("capability")
+        if cap in hints and "engine_hint" not in s:
+            s["engine_hint"] = hints[cap]["suggested_engine"]
 
 
 # ---- 推理超时守护（ag2 无内部超时，挂死会拖垮整条自主环）----
@@ -475,7 +626,9 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
         if not query:
             return InvokeResult(ok=False, error="autopilot: 搜索步缺少查询词")
         # opt-in 经 FabricHub 路由；否则本地 SearchAdapter（见 _dispatch）
-        result = _dispatch("web.search", {"type": "search", "query": query, "count": 5})
+        engine_hint = payload.get("engine_hint") or payload.get("engine")
+        result = _dispatch("web.search", {"type": "search", "query": query, "count": 5,
+                                          "engine": engine_hint})
         _capture_text(capability, result)
         rm = _search_real_metrics(result)
         # 真实闸门：搜索必须真返回结果才算这步成立（空结果=敷衍，判失败）
@@ -874,6 +1027,8 @@ def _execute(task: str, steps: List[Dict[str, Any]], seed_context: Optional[Dict
         if isinstance(res, InvokeResult) and res.ok and isinstance(res.data, dict):
             if (res.data.get("real_metrics") or {}).get("is_real"):
                 recorded.append({"capability": capability, "out": res.data})
+        # 因果反思闭环：把每步真实成败+引擎喂进白盒蒸馏器（opt-in）
+        _feed_distiller(capability, res)
         return res
 
     oc = OrchestrationChiplet(route_fn=_rec_route)
@@ -1104,6 +1259,11 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
     if not failed:
         return None  # 没有可反思的失败
 
+    # 因果反思建议（D5 决策论层）：用白盒蒸馏器的 (能力,引擎)→成败，经 CausalModel
+    # 选「换做法」引擎并给出可复核证据，注入下方提示词 + 给重设计步骤打 engine_hint。
+    # 无蒸馏器或样本不足则 causal_block/hints 皆空，反思退化回质疑 agent 诊断。
+    causal_block, causal_hints = _compute_causal_hints(failed, _get_causal_distiller())
+
     # 上轮已成功步的真实产出（供本轮续接，不重跑、不回归）
     prior_parts = []
     for s in (prior_success or []):
@@ -1132,6 +1292,7 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
         )
 
     prompt = (
+        causal_block +
         f"你是 AOS 自主执行环的『质疑与风险检查 agent』。\n"
         f"原始目标：{task}\n\n"
         f"上一轮执行中，以下步失败或空转（附真实错误）：\n"
@@ -1154,7 +1315,9 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
         elif text:
             steps = parse_plan_to_steps(text, _CAPS)
             if steps:
-                return _finalize_reflect(task, failed, text.strip(), steps, "ag2")
+                _attach_engine_hints(steps, causal_hints)
+                return _finalize_reflect(task, failed, text.strip(), steps, "ag2",
+                                         causal_hints=causal_hints)
     except Exception as e:  # noqa: BLE001
         logger.warning("反思 ag2 失败，降级 ollama: %s", e)
     # 2) 本地 ollama（ag2 dead / 无 key 时的真实 LLM 反思后端）
@@ -1162,18 +1325,23 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
         text = _ollama_generate(prompt)
         steps = parse_plan_to_steps(text, _CAPS) if text else []
         if steps:
-            return _finalize_reflect(task, failed, text.strip(), steps, "ollama")
+            _attach_engine_hints(steps, causal_hints)
+            return _finalize_reflect(task, failed, text.strip(), steps, "ollama",
+                                     causal_hints=causal_hints)
     except Exception as e:  # noqa: BLE001
         logger.warning("反思 ollama 失败，降级 heuristic 重试: %s", e)
     # 3) heuristic 兜底：重试上轮失败步（不编造新计划，仅重发失败能力）
     heur = _heuristic_reflect(r)
     if heur:
-        return _finalize_reflect(task, failed, heur["plan"], heur["steps"], "heuristic")
+        _attach_engine_hints(heur["steps"], causal_hints)
+        return _finalize_reflect(task, failed, heur["plan"], heur["steps"], "heuristic",
+                                 causal_hints=causal_hints)
     logger.warning("反思三后端均不可用且无失败步可重试，停止避免空转")
     return None
 
 
-def _finalize_reflect(task, failed, plan_text, steps, engine) -> Dict[str, Any]:
+def _finalize_reflect(task, failed, plan_text, steps, engine,
+                      causal_hints: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """沉淀教训（求是引擎 Meta-Trace / Reflexion episodic）并封装反思结果。"""
     new_first = steps[0].get("capability", "?")
     lesson = (
@@ -1186,7 +1354,11 @@ def _finalize_reflect(task, failed, plan_text, steps, engine) -> Dict[str, Any]:
         failed[0] if failed else "",
         lesson,
     )
-    return {"plan": plan_text, "steps": steps, "engine": engine}
+    result = {"plan": plan_text, "steps": steps, "engine": engine}
+    if causal_hints:
+        result["causal_hints"] = {cap: h["suggested_engine"]
+                                  for cap, h in causal_hints.items()}
+    return result
 
 
 def _ollama_generate(prompt: str, model: Optional[str] = None) -> Optional[str]:
@@ -1380,6 +1552,7 @@ def _advance_cycle(s: _RunState) -> bool:
         ],
         "new_step_count": len(refl["steps"]),
         "preserved_success_steps": len(s.prior_success),
+        "causal_hints": list((refl.get("causal_hints") or {}).items()),
     })
     s.steps = refl["steps"]
     s.plan_text = refl.get("plan") or s.plan_text

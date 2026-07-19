@@ -131,7 +131,9 @@ class CausalModel:
             return {
                 "context": context, "actual": actual, "alt": alt,
                 "delta": None, "utility_delta": None, "verdict": "unknown",
-                "reason": "实际或备选动作样本不足，无法做反事实复盘",
+                "inference_type": "observational_association",
+                "reason": "实际或备选动作样本不足，无法做反事实复盘"
+                         "（且此为观测相关，非已证因果）",
             }
         delta = round(alt["success_rate"] - actual["success_rate"], 4)
         util_actual = actual["success_rate"] - costs.get(actual_action, 0.0)
@@ -146,9 +148,11 @@ class CausalModel:
             "utility_delta": util_delta,
             "verdict": ("alt_better" if util_delta > 0 else
                         "actual_better" if util_delta < 0 else "parity"),
+            "inference_type": "observational_association",
             "reason": f"备选 {alt_action} 成功率 {alt['success_rate']:.2f} "
                       f"vs 实际 {actual_action} {actual['success_rate']:.2f} "
-                      f"(Δ成功={delta:+.2f}, Δ效用={util_delta:+.2f})",
+                      f"(Δ成功={delta:+.2f}, Δ效用={util_delta:+.2f})"
+                      f"；此为观测相关（非已证因果），仅供换做法参考",
         }
 
     def best_action(self, context: str, actions: List[str],

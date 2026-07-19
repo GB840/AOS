@@ -86,6 +86,13 @@ class SearchAdapter(BaseAgentAdapter):
             ("jina", self._search_jina),
             ("zhipu", self._search_zhipu),
         ]
+        # 因果反思 engine_hint 生效点：调用方若显式指定 engine（如 autopilot 反思
+        # 经 CausalModel.best_action 选出的更值引擎），把它提到最前优先尝试；
+        # 非法/未知源名被过滤掉（列表不动），零副作用、零伪造。
+        hint = (req.payload.get("engine") or "").strip().lower()
+        if hint:
+            sources = ([(n, fn) for (n, fn) in sources if n == hint]
+                       + [(n, fn) for (n, fn) in sources if n != hint])
         for name, fn in sources:
             try:
                 res = fn(query, max_results)
