@@ -35,10 +35,11 @@ concurrent-log-handler==0.9.29
 # 来源：用户 8 条清单之「依赖声明 / mcp SDK 未声明」映射 + 实际 import 审计。
 # ============================================================
 
-# MCP: main.py 顶层 `from mcp import MCPMessage` 为硬依赖。
-# 此前仅靠 AOS_EXTRA_SITE 从 default venv 借入（脆弱耦合），现显式声明使 aos venv 自洽。
-# 注意：必须与 ag2 的 mcp 引脚保持一致（ag2==0.14.0 锁 mcp==1.28.0），
-# 否则 `pip install -r requirements.txt` 因 mcp 版本冲突而 ResolutionImpossible 失败。
+# MCP: 显式锁定 mcp==1.28.0，目的是满足 ag2==0.14.0 的传递依赖约束（ag2 锁 mcp==1.28.0）。
+# 注意（诚实修正，避免误导）：AOS 自有 `src/mcp/` 包（本地实现）与 PyPI 的 mcp SDK 同名但相互独立；
+#       main.py 顶层 `from mcp import MCPMessage` 实际解析到本地 `src/mcp/` 包，并非本 PyPI 包。
+#       仍显式声明本 PyPI mcp==1.28.0，是为了与 ag2 的锁版一致，
+#       否则 `pip install -r requirements.txt` 会因 mcp 版本冲突而 ResolutionImpossible 失败。
 mcp==1.28.0
 
 # AG2 (AutoGen 社区分叉, MIT): /api/groupchat 生产路径驱动真实多智能体编排。

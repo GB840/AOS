@@ -410,6 +410,8 @@ class DeerFlowGatewayClient:
                 rec["status"] = "failed"
             finally:
                 rec["finished_at"] = time.time()
+                with self._task_lock:
+                    self._evict_terminal_tasks()
 
         threading.Thread(target=_worker, daemon=True).start()
         return task_id
@@ -434,6 +436,7 @@ class DeerFlowGatewayClient:
             rec = self._tasks.get(task_id)
             if rec and rec.get("status") == "running":
                 rec["status"] = "cancelled"
+                self._evict_terminal_tasks()
                 return True
         return False
 
@@ -611,10 +614,15 @@ class DeerFlowGatewayClient:
         def _worker():
             try:
                 res = self.execute_subagent(name, task, thread_id=thread_id, **kwargs)
-                self._tasks[task_id] = {"status": "completed", **res}
+                with self._task_lock:
+                    self._tasks[task_id] = {"status": "completed", **res}
             except Exception as e:  # noqa: BLE001
                 logger.warning("Async subagent task %s failed: %s", task_id, e)
-                self._tasks[task_id] = {"status": "failed", "success": False, "error": str(e)}
+                with self._task_lock:
+                    self._tasks[task_id] = {"status": "failed", "success": False, "error": str(e)}
+            finally:
+                with self._task_lock:
+                    self._evict_terminal_tasks()
 
         threading.Thread(target=_worker, daemon=True).start()
         return task_id
@@ -623,9 +631,33 @@ class DeerFlowGatewayClient:
         return self._tasks.get(task_id)
 
     def cancel_subagent(self, task_id):
-        cur = self._tasks.get(task_id, {})
-        self._tasks[task_id] = {**cur, "status": "cancelled", "cancelled": True}
+        with self._task_lock:
+            cur = self._tasks.get(task_id, {})
+            self._tasks[task_id] = {**cur, "status": "cancelled", "cancelled": True}
+            self._evict_terminal_tasks()
         return True
+
+    # 任务记录保留上限（防长运行内存无限增长，审计 P1-7）。
+    # 仅淘汰终态(completed/failed/cancelled)任务，运行中任务永不淘汰。
+    def _evict_terminal_tasks(self) -> None:
+        """淘汰超出保留上限的终态任务记录，避免长运行内存泄漏（审计 P1-7）。
+
+        self._tasks 为插入有序 dict，最旧在前；仅移除 completed/failed/cancelled
+        状态的最旧记录，running 状态永不淘汰，保证进行中任务状态查询始终可用。
+        调用方须自行持 self._task_lock（本方法不重复加锁）。
+        """
+        cap = int(os.environ.get("AOS_TASK_RETENTION_MAX", "2000"))
+        if len(self._tasks) <= cap:
+            return
+        drop_count = len(self._tasks) - cap
+        dropped = 0
+        for tid in list(self._tasks.keys()):
+            if dropped >= drop_count:
+                break
+            rec = self._tasks.get(tid)
+            if rec is not None and rec.get("status") in ("completed", "failed", "cancelled"):
+                self._tasks.pop(tid, None)
+                dropped += 1
 
 
 class UnifiedBrain:
