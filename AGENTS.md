@@ -60,7 +60,7 @@ AIGC:
 | 生成时间 | 2026-07-19 | 人工同步至 STATUS.md 真值；待 baseline_snapshot.py HEAVY 重跑 |
 <!-- BASELINE_END -->
 
-### 0.6 双轨融合进度（2026-07-18 更新）
+### 0.6 双轨融合进度（2026-07-20 更新）
 
 > 方向：FabricHub（新栈）收口 legacy（brain.py/deerflow/swarm/lemon）。不是替代，是桥接——让所有组件经统一路由调度。
 
@@ -72,6 +72,8 @@ AIGC:
 | 搜索 → FabricHub | ✅ 已统一 | DuckDuckGoSearchSkill → FabricHub SearchAdapter（多源 fallback） |
 | Skill 生态 → FabricHub | ✅ 已接 | `skills/manifest.json` + `skill_registry` + `skill_discover()` |
 | 白盒进化闭环 | ✅ 已闭环 | trace 生产者 → 蒸馏器 → Registry 回读沉底不可靠引擎 |
+| Autopilot → FabricHub | ✅ 已统一 | 默认路由经 FabricHub（`AOS_AUTOPILOT_USE_FABRICHUB=1`），含方向验证/出门检/假反思拦截/成本硬停 |
+| run_task(reflect=True) | ✅ 已通 | 统一入口委托 autopilot 完整反思闭环（规划→执行→反思→重设计） |
 | 记忆 → FabricHub | ❌ 未桥接 | brain.py 仍直连 `memory/memory.py`，FabricHub 有独立的 `memory_recall/store` |
 | DeerFlow → FabricHub | ❌ 未桥接 | DeerFlow 仍独立运行，与 FabricHub run_task 互不感知 |
 | 双轨全收口 | ❌ 6月工程 | brain.py 含 30+ 组件，FabricHub 缺意图分类/技能/合规等 20+ 能力 |
