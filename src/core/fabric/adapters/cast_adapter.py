@@ -115,8 +115,8 @@ class CastAdapter(BaseAgentAdapter):
     def set_route_fn(self, route_fn) -> None:
         self._route_fn = route_fn
 
-    def advertise_capabilities(self) -> list:
-        return ["content.publish", "content.distribute"]
+    def advertise_capabilities(self) -> list[Capability]:
+        return [Capability.CONTENT_PUBLISH, Capability.CONTENT_DISTRIBUTE]
 
     def health(self) -> bool:
         return True  # 生成发布包不需要外部依赖，永远可用

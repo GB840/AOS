@@ -347,11 +347,23 @@ class V5Bridge:
             def list_agents(self):
                 return []
 
+            # TODO(v1.1): BridgeAgentRuntime 是「注入单回调 handler」式的薄代理
+            # runtime，不持有 agent 实例状态——create_agent / stream_run 语义上不适用。
+            # 当前 register_engine_callback 的调用方只使用 run_agent，未触发这两个路径。
+            # 如未来需要真正的 streaming 或 spec lifecycle，应注入完整 AgentRuntime 实现
+            # 而非 BridgeAgentRuntime。这里显式 raise 让误用早失败，不静默返回 None。
             def create_agent(self, spec):
-                pass
+                raise NotImplementedError(
+                    "BridgeAgentRuntime is a callback-injection proxy; "
+                    "create_agent is not supported. Register a full AgentRuntime "
+                    "implementation instead."
+                )
 
             def stream_run(self, agent, task):
-                raise NotImplementedError
+                raise NotImplementedError(
+                    "BridgeAgentRuntime is a callback-injection proxy; "
+                    "stream_run is not supported. Use run_agent for sync execution."
+                )
 
         self.kernel._runtimes[engine] = BridgeAgentRuntime()
 

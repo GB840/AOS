@@ -63,8 +63,8 @@ class ContentMarketerAdapter(BaseAgentAdapter):
     def set_route_fn(self, route_fn) -> None:
         self._route_fn = route_fn
 
-    def advertise_capabilities(self) -> list:
-        return ["content.marketing_video"]
+    def advertise_capabilities(self) -> list[Capability]:
+        return [Capability.CONTENT_MARKETING_VIDEO]
 
     def health(self) -> bool:
         return self._route_fn is not None

@@ -70,8 +70,8 @@ class RefineAdapter(BaseAgentAdapter):
     def set_route_fn(self, route_fn) -> None:
         self._route_fn = route_fn
 
-    def advertise_capabilities(self) -> list:
-        return ["content.optimize", "content.refine", "content.ab_test"]
+    def advertise_capabilities(self) -> list[Capability]:
+        return [Capability.CONTENT_OPTIMIZE, Capability.CONTENT_REFINE, Capability.CONTENT_AB_TEST]
 
     def health(self) -> bool:
         return True  # 规则化优化不依赖外部服务

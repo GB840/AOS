@@ -1,15 +1,26 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '922ab4d2-a342-4501-be7b-f23805873a61'
+  PropagateID: '922ab4d2-a342-4501-be7b-f23805873a61'
+  ReservedCode1: 'e3957bd8-985a-4a16-8b0d-1e0c6c1a0b7b'
+  ReservedCode2: 'e3957bd8-985a-4a16-8b0d-1e0c6c1a0b7b'
+---
+
 # AOS 项目状态总地图（STATUS）
 
 > 这是一份**导航索引**，不是技术文档。每次大状态变动更新这里。
-> 最后更新：**2026-07-18**（取代 2026-07-10 的 v5→v1.0 旧文，旧文已严重失实，本次整体重写）。
+> 最后更新：**2026-07-19**（TD-3 修订：纠正旧文「5 路由文件 / 26 适配器」的低估——实测 **16 API 路由文件 / 29 适配器类**）。
 
 ---
 
-## 0. 一句话现状（2026-07-18）
+## 0. 一句话现状（2026-07-19）
 
 AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器）** 为干净运行时，统一持有路由/记忆/上下文主权并调度各芯粒适配器；legacy 的 `brain.py` 仍作 `/api/chat` 灰度兜底（双轨尚未合流）。在此之上新增了**内容飞轮平台**（Studio/Hub/Pulse/Evolve + 5 适配器 + SkillHub/AutoSkill 集成），端到端已真跑通（搜索→LLM 写脚本→本地 ffmpeg+edge-tts 生成视频）。
 
-**规模（实测，非记忆）：26 适配器类 / 27 文件 · 702 测试函数 / 109 文件 · 33 技能（manifest）· 7 内核子包 + 31 内核顶层模块 · 5 个 API 路由文件。**
+**规模（实测，非记忆）：29 适配器类 / 30 文件 · 702 测试函数 / 109 文件 · 33 技能（manifest）· 7 内核子包 + 31 内核顶层模块 · 16 个 API 路由文件。**
 
 ---
 
@@ -44,7 +55,7 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
                   │   能力注册 · 健康门控 · 全局高中低三级路由     │
                   └─────────────────────────────────────────────┘
               ┌──────────────┬──────────────┬───────────────┬──────────────┐
-        26 芯粒适配器   内核子包(7)      内容飞轮平台      外部生态
+        29 芯粒适配器   内核子包(7)      内容飞轮平台      外部生态
         (adapters/)  (kernel/*/)   (studio/hub/pulse/   (SkillHub 7.9万
                                   evolve + 5适配器)      技能 / IMA / WeKnora)
 ```
@@ -53,7 +64,7 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 
 ---
 
-## 3. 26 个 FabricHub 适配器（`src/core/fabric/adapters/`）
+## 3. 29 个 FabricHub 适配器（`src/core/fabric/adapters/`）
 
 按"真实开源绑定 vs AOS 自研"分类（核实结论，不编造）：
 
@@ -107,13 +118,24 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 
 ## 5. API 路由（`src/api/`）
 
-| 文件 | 路由 |
-|---|---|
-| `main.py` | 主应用：`/api/chat`、`/api/sandbox/exec`、`/api/skills`、挂载 `/studio` 静态前端 |
-| `security.py` | `APISecurityMiddleware`（统一鉴权，无凭证→401；含 `create_access_token(subject, expires_min=None)`，**无 scopes 参数**） |
-| `gateway.py` | 网关装配 |
-| `product_flywheel_api.py` | 内容飞轮平台路由 |
-| `autoskill_api.py` | AutoSkill 路由 |
+| 文件 | 路由前缀 | 职责 |
+|---|---|---|
+| `main.py` | 主应用（含 `/api/chat`、`/api/sandbox/exec`、`/api/skills`，挂载 `/studio` 静态前端） | FastAPI 入口，挂载所有子路由 |
+| `chat_routing.py` | 直挂 app（与 `/api/chat` 同前缀） | Chat 后端路由决策（单基座第一性，与 `main.py` 协同实现智能切流） |
+| `security.py` | 无（中间件，非 router） | `APISecurityMiddleware` 统一鉴权，无凭证→401；`create_access_token(subject, expires_min=None)`，**无 scopes 参数** |
+| `gateway.py` | 无（网关装配） | AOS 统一网关（Unified Gateway）装配 |
+| `product_flywheel_api.py` | `/api/studio`、`/api/hub`、`/api/pulse`、`/api/evolve`、`/api/proposals` | 内容飞轮平台路由（单文件五 prefix） |
+| `autoskill_api.py` | `/api/autoskill` | AutoSkill 全自动技能发现与使用 |
+| `review_api.py` | `/api/review` | 步骤级审核控制面 API（三省六部制式「封驳」闭环） |
+| `approval_api.py` | `/api/approvals` | Human-in-the-Loop 审批 API（Task 4） |
+| `eval_api.py` | `/api/eval` | Eval Framework 评估框架 HTTP 接口（Task 3） |
+| `replay_api.py` | `/api/replay` | Replay & Debug 失败回放与单步调试（Task 5） |
+| `context_api.py` | `/api/context` | Context Engineering 运行时上下文管理 |
+| `kanban_api.py` | 直挂 app（看板道面） | 编排运行可视化看板（任务 ①） |
+| `memory_control_api.py` | 直挂 app（记忆控制面） | 可干预记忆控制面 API（任务 ②） |
+| `video_api.py` | `/api/video/remotion` | Remotion 视频渲染对外 API（`video.remotion` 能力） |
+| `vlm_api.py` | 直挂 app（`/api/multimodal/*`） | 多模态视觉理解 API（暴露 VLMAdapter 端点） |
+| `self_harness_api.py` | 直挂 app（`/api/self-harness/run`） | Self-Harness 自测闭环端点 |
 
 > `/api/sandbox/exec` 调 `brain.deerflow.create_sandbox(thread_id=)`，鉴权委托中间件；注入检测在 `_is_command_allowed`（检测到 `; | & && || > >> < \` $()` 即拒，返回 `200 + success=False`，非 4xx）。
 
@@ -144,9 +166,9 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 
 ```
 src\
-  core\fabric\           接线板：capability/registry/protocols + adapters/(26)
+  core\fabric\           接线板：capability/registry/protocols + adapters/(29)
   kernel\                v1.0 内核：7 子包 + 31 顶层模块
-  api\                   5 路由文件（main/security/gateway/product_flywheel/autoskill）
+  api\                   16 路由文件（main/security/gateway/chat_routing/product_flywheel/autoskill/review/approval/eval/replay/context/kanban/memory_control/video/vlm/self_harness）
   skills\                manifest.json(33技能) + autoskill + skillhub_integration
   hermes\                LLM 桥（AOS_FABRIC_LLM=1 走 FabricHub）
   subagents\             IMA 等子智能体
@@ -194,3 +216,6 @@ C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe -m py_
 2. **文档滞后**：`AOS_CURRENT_STATE_SNAPSHOT.md` / `AOS_V5_COMPLETION_SUMMARY.md` 仍 v5 时代，建议整体重写或删除（本次已重写 STATUS.md 与 AGENTS.md）。
 3. **未 push**：`a13c489`/`5e889c3` 需 `git push origin feature/infra-setup`（沙箱已同步主机仓库，但远端要你手动推）。
 4. **QQ 脱敏不一致**：`ContentGuard.check()` 能检测 QQ 号但 `_redact()` 替换表不含 QQ（phone/id_card/bank_card/email/api_key 才遮），属设计缺口非 bug，留待后续补。
+5. **2026-07-19 全量审计跟进**：P0/P1/P2/P3 + TD-3/TD-7/TD-8/TD-9/TD-10 已在 `feature/infra-setup` 分支完成（审计报告 `AOS_CODE_AUDIT_REPORT.docx`）。TD-1（brain.py 2091 行单体）/ TD-2（web/app.py 4299 行）属大工程，未在本轮处理；TD-5（导入风格不统一，≥12 文件用绝对导入）改可能触发 import 紊乱，暂跳过；TD-6（system.py 占位）核实后仅 `_heal_isolate` 返 True 算 stub，不阻塞。
+
+> AI生成

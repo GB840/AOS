@@ -1,7 +1,16 @@
-"""
-连接池管理器 - 优化性能和资源使用
+"""连接池管理器 - 优化性能和资源使用
 
 管理数据库连接、HTTP连接等资源，防止资源耗尽
+
+DEPRECATED (audit 2026-07-19 / TD-8):
+    本模块是一个 async-only 通用连接池，但在当前代码树中**没有任何真实消费者**。
+    - `src/kernel/.../memory.py` 显式禁用此池，使用自己的 sqlite 直连；
+    - `src/api/main.py` 虽调用 `initialize_pools()`，但运行时无人 acquire/release，
+      实际是 no-op。
+    类和工厂代码完整，未来若引入真正的高并发 SQLite 路径可重新启用。
+    暂保留以避免破坏 import 链；如需清理，搜索 `from core.pool.connection_pool`
+    及 `initialize_pools` 即可定位全部调用点。
+
 """
 
 import asyncio

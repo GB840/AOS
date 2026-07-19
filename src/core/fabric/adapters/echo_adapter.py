@@ -80,8 +80,8 @@ class EchoAdapter(BaseAgentAdapter):
         """注入 PulseCollector（可选，不注入就不上报）。"""
         self._pulse = pulse
 
-    def advertise_capabilities(self) -> list:
-        return ["content.feedback", "content.sentiment", "content.need_mining"]
+    def advertise_capabilities(self) -> list[Capability]:
+        return [Capability.CONTENT_FEEDBACK, Capability.CONTENT_SENTIMENT, Capability.CONTENT_NEED_MINING]
 
     def health(self) -> bool:
         return self._route_fn is not None
