@@ -2,7 +2,7 @@
   "$schema": "AOS Skill Manifest v1",
   "description": "AOS 技能生态清单——所有可被 FabricHub 发现与调度的技能。作为 skills/__init__.py 的声明式对等体，供 skill_registry 和外部工具读取。",
   "version": "1.0.0",
-  "generated": "2026-07-19",
+  "generated": "2026-07-20",
   "skills": [
     {
       "id": "skill-creator",
@@ -12,7 +12,10 @@
       "version": "1.0.0",
       "description": "元技能：从自然语言描述自动创建新技能",
       "category": "meta",
-      "capabilities": ["skill.create", "skill.evolve"],
+      "capabilities": [
+        "skill.create",
+        "skill.evolve"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -24,7 +27,9 @@
       "version": "1.0.0",
       "description": "元技能：搜索和发现已有技能",
       "category": "meta",
-      "capabilities": ["skill.discover"],
+      "capabilities": [
+        "skill.discover"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -36,7 +41,9 @@
       "version": "1.0.0",
       "description": "工作流编排：多技能串联执行",
       "category": "orchestration",
-      "capabilities": ["workflow.orchestrate"],
+      "capabilities": [
+        "workflow.orchestrate"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -48,7 +55,9 @@
       "version": "1.0.0",
       "description": "全栈开发工作流编排",
       "category": "orchestration",
-      "capabilities": ["workflow.fullstack"],
+      "capabilities": [
+        "workflow.fullstack"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -60,7 +69,9 @@
       "version": "1.0.0",
       "description": "前端 UI 设计与生成",
       "category": "design",
-      "capabilities": ["ui.generate"],
+      "capabilities": [
+        "ui.generate"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -72,7 +83,10 @@
       "version": "1.0.0",
       "description": "专业级 UI/UX 设计与原型生成",
       "category": "design",
-      "capabilities": ["ui.generate", "ux.design"],
+      "capabilities": [
+        "ui.generate",
+        "ux.design"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -84,7 +98,11 @@
       "version": "2.0.0",
       "description": "Web 搜索（已桥接 FabricHub SearchAdapter，多源 fallback）",
       "category": "search",
-      "capabilities": ["web.search", "web.news", "web.image"],
+      "capabilities": [
+        "web.search",
+        "web.news",
+        "web.image"
+      ],
       "runtime": "both",
       "fabric_capability": "web.search",
       "status": "active"
@@ -97,7 +115,9 @@
       "version": "1.0.0",
       "description": "SearXNG 元搜索引擎（自建实例）",
       "category": "search",
-      "capabilities": ["web.search.meta"],
+      "capabilities": [
+        "web.search.meta"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -109,7 +129,9 @@
       "version": "1.0.0",
       "description": "Jina AI 网页内容提取器",
       "category": "web",
-      "capabilities": ["web.fetch"],
+      "capabilities": [
+        "web.fetch"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -121,7 +143,10 @@
       "version": "1.0.0",
       "description": "闭环任务工程——迭代优化与自动化执行",
       "category": "engineering",
-      "capabilities": ["task.loop", "engineering.iterate"],
+      "capabilities": [
+        "task.loop",
+        "engineering.iterate"
+      ],
       "runtime": "both",
       "subagent": "subagents.loop_engineering_agent",
       "status": "active"
@@ -134,7 +159,10 @@
       "version": "1.0.0",
       "description": "视频理解与内容分析",
       "category": "video",
-      "capabilities": ["video.analyze", "vision.understand"],
+      "capabilities": [
+        "video.analyze",
+        "vision.understand"
+      ],
       "runtime": "both",
       "subagent": "subagents.vimax_agent",
       "status": "active"
@@ -147,7 +175,11 @@
       "version": "1.0.0",
       "description": "腾讯 IMA Copilot 知识库与笔记（OpenAPI 直连）",
       "category": "knowledge",
-      "capabilities": ["knowledge.search", "knowledge.note", "knowledge.handoff"],
+      "capabilities": [
+        "knowledge.search",
+        "knowledge.note",
+        "knowledge.handoff"
+      ],
       "runtime": "both",
       "subagent": "subagents.ima_agent",
       "status": "active"
@@ -160,7 +192,11 @@
       "version": "1.0.0",
       "description": "RuFlo 多智能体编排平台（Rust + WASM + Node.js，含 Swarm/Routing/Memory/Federation/MCP 集成）",
       "category": "code",
-      "capabilities": ["agent.orchestrate.rust", "swarm.run", "code.multi_agent"],
+      "capabilities": [
+        "agent.orchestrate.rust",
+        "swarm.run",
+        "code.multi_agent"
+      ],
       "runtime": "both",
       "subagent": "subagents.ruflo_agent",
       "status": "active"
@@ -173,7 +209,9 @@
       "version": "1.0.0",
       "description": "AI 视频生成与编辑",
       "category": "media",
-      "capabilities": ["media.video"],
+      "capabilities": [
+        "media.video"
+      ],
       "runtime": "both",
       "subagent": "subagents.pixelle_agent",
       "status": "active"
@@ -186,7 +224,11 @@
       "version": "1.0.0",
       "description": "ComfyUI 图像/视频生成（动态节点编排 + LoRA/ControlNet）",
       "category": "media",
-      "capabilities": ["media.image", "media.video", "media.node_graph"],
+      "capabilities": [
+        "media.image",
+        "media.video",
+        "media.node_graph"
+      ],
       "runtime": "both",
       "fabric_adapter": "ComfyUIAdapter",
       "status": "active"
@@ -199,7 +241,9 @@
       "version": "1.0.0",
       "description": "GUI 自动化操作与桌面控制",
       "category": "automation",
-      "capabilities": ["desktop.automate"],
+      "capabilities": [
+        "desktop.automate"
+      ],
       "runtime": "both",
       "status": "active"
     },
@@ -211,7 +255,9 @@
       "version": "1.0.0",
       "description": "Ollama 本地 LLM 推理",
       "category": "inference",
-      "capabilities": ["inference.local"],
+      "capabilities": [
+        "inference.local"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -223,7 +269,9 @@
       "version": "1.0.0",
       "description": "llama.cpp 本地推理（GGUF 模型）",
       "category": "inference",
-      "capabilities": ["inference.local.gguf"],
+      "capabilities": [
+        "inference.local.gguf"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -235,7 +283,9 @@
       "version": "1.0.0",
       "description": "轻量级 RAG 知识检索增强生成",
       "category": "knowledge",
-      "capabilities": ["knowledge.rag"],
+      "capabilities": [
+        "knowledge.rag"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -247,7 +297,9 @@
       "version": "1.0.0",
       "description": "向量嵌入与语义检索",
       "category": "knowledge",
-      "capabilities": ["memory.vector"],
+      "capabilities": [
+        "memory.vector"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -259,7 +311,9 @@
       "version": "1.0.0",
       "description": "语音合成（TTS）",
       "category": "voice",
-      "capabilities": ["voice.tts"],
+      "capabilities": [
+        "voice.tts"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -271,7 +325,9 @@
       "version": "1.0.0",
       "description": "图谱记忆与知识关系推理（cognee）",
       "category": "memory",
-      "capabilities": ["memory.graph"],
+      "capabilities": [
+        "memory.graph"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -283,7 +339,9 @@
       "version": "1.0.0",
       "description": "代码库记忆索引与检索",
       "category": "code",
-      "capabilities": ["code.memory"],
+      "capabilities": [
+        "code.memory"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -295,7 +353,9 @@
       "version": "1.0.0",
       "description": "代码库 MCP 服务端记忆",
       "category": "code",
-      "capabilities": ["code.memory.mcp"],
+      "capabilities": [
+        "code.memory.mcp"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -307,7 +367,10 @@
       "version": "1.0.0",
       "description": "270+ Agency 角色库管理",
       "category": "meta",
-      "capabilities": ["agency.list", "agency.load"],
+      "capabilities": [
+        "agency.list",
+        "agency.load"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -319,7 +382,9 @@
       "version": "1.0.0",
       "description": "全模态路由与意图分发",
       "category": "routing",
-      "capabilities": ["routing.omni"],
+      "capabilities": [
+        "routing.omni"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -331,7 +396,9 @@
       "version": "1.0.0",
       "description": "视频蒙太奇编排与剪辑",
       "category": "media",
-      "capabilities": ["media.montage"],
+      "capabilities": [
+        "media.montage"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -343,7 +410,9 @@
       "version": "1.0.0",
       "description": "视频理解与使用（yt-dlp + browser-use）",
       "category": "video",
-      "capabilities": ["video.use"],
+      "capabilities": [
+        "video.use"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -355,7 +424,9 @@
       "version": "1.0.0",
       "description": "Herdr 多 Agent 协作框架",
       "category": "agent",
-      "capabilities": ["agent.herd"],
+      "capabilities": [
+        "agent.herd"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -367,7 +438,9 @@
       "version": "1.0.0",
       "description": "Markdown 设计文档生成",
       "category": "design",
-      "capabilities": ["doc.design"],
+      "capabilities": [
+        "doc.design"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -379,7 +452,9 @@
       "version": "1.0.0",
       "description": "代码质量检查与错误预防",
       "category": "engineering",
-      "capabilities": ["code.qa"],
+      "capabilities": [
+        "code.qa"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -391,7 +466,9 @@
       "version": "1.0.0",
       "description": "多语言代码映射与翻译",
       "category": "code",
-      "capabilities": ["code.translate"],
+      "capabilities": [
+        "code.translate"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -403,7 +480,10 @@
       "version": "1.0.0",
       "description": "通用工程技能（代码生成/审查/优化）",
       "category": "engineering",
-      "capabilities": ["code.generate", "code.review"],
+      "capabilities": [
+        "code.generate",
+        "code.review"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -415,7 +495,11 @@
       "version": "1.0.0",
       "description": "自动技能发现与安装引擎——一句话需求自动找 SkillHub/装/注册/即用，含安全沙箱与回滚（被 src/api/autoskill_api.py 消费）",
       "category": "meta",
-      "capabilities": ["skill.discover", "skill.install", "skill.rollback"],
+      "capabilities": [
+        "skill.discover",
+        "skill.install",
+        "skill.rollback"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -427,7 +511,10 @@
       "version": "1.0.0",
       "description": "一句话全自动智能体——意图分析 + 缺技能自动装 + 编排执行 + 诚实展示用了什么技能（被 src/api/autoskill_api.py 消费）",
       "category": "agent",
-      "capabilities": ["agent.orchestrate", "skill.autofit"],
+      "capabilities": [
+        "agent.orchestrate",
+        "skill.autofit"
+      ],
       "runtime": "brain.py",
       "status": "active"
     },
@@ -439,8 +526,26 @@
       "version": "1.0.0",
       "description": "SkillHub CLI 适配器——接入 7.9 万+ AI 技能商店（搜索/安装/优先源策略/优雅降级；被 src/api/autoskill_api.py 与 autoskill_engine.py 消费）",
       "category": "meta",
-      "capabilities": ["skill.search.remote", "skill.install.remote"],
+      "capabilities": [
+        "skill.search.remote",
+        "skill.install.remote"
+      ],
       "runtime": "brain.py",
+      "status": "active"
+    },
+    {
+      "id": "bidding-agent",
+      "name": "Bidding Agent",
+      "module": "skills.bidding_agent",
+      "class": "BiddingAgent",
+      "version": "0.1.0",
+      "description": "投标文件智能分析：解析招标PDF，提取核心需求，匹配资质，识别合规风险，生成投标策略建议",
+      "category": "business",
+      "capabilities": [
+        "bidding.analyze",
+        "bidding.compliance"
+      ],
+      "runtime": "standalone",
       "status": "active"
     }
   ],
