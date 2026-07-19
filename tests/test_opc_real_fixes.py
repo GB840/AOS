@@ -51,24 +51,40 @@ def test_verdict_short_text_still_partial():
 
 
 # ---------------------------------------------------------------------------
-# bug 2: _looks_like_markdown_text 防御
+# bug 2: _looks_like_text_not_code 防御（扩展版，拦 Markdown + 中文段落）
 # ---------------------------------------------------------------------------
-def test_looks_like_markdown_text_title():
+def test_looks_like_text_not_code_title():
     """以 Markdown 标题开头的纯文档 → 判为非代码文本。"""
-    assert ap._looks_like_markdown_text("# 2026年AI Agent框架研报\n## 一、架构差异\nLangGraph 是...")
-    assert ap._looks_like_markdown_text("## 章节标题\n内容段落")
+    assert ap._looks_like_text_not_code("# 2026年AI Agent框架研报\n## 一、架构差异\nLangGraph 是...")
+    assert ap._looks_like_text_not_code("## 章节标题\n内容段落")
 
 
-def test_not_markdown_when_has_code_syntax():
-    """Markdown 标题但含代码语法 → 不拦（可能是带注释的代码）。"""
-    assert not ap._looks_like_markdown_text("# 注释\nprint('hello')")
-    assert not ap._looks_like_markdown_text("# 安装\npip install requests")
+def test_looks_like_text_not_code_chinese_paragraph():
+    """LLM 拒答的中文段落(>100字) → 判为非代码文本。"""
+    refusal = (
+        "由于您未在输入中提供具体的参考材料内容（如公司背景、行业领域、"
+        "现有数据或初步想法），我无法直接为您生成针对特定业务的研报正文。"
+    )
+    assert ap._looks_like_text_not_code(refusal)
 
 
-def test_not_markdown_plain_text():
-    """非标题开头的纯文本 → 不拦（交给其他闸门）。"""
-    assert not ap._looks_like_markdown_text("这是一段普通文本，没有标题")
-    assert not ap._looks_like_markdown_text("winget install ffmpeg")
+def test_looks_like_text_not_code_cn_starter():
+    """以常见中文段落开头词 → 判为非代码文本。"""
+    assert ap._looks_like_text_not_code("为了协助您完成这项工作，我为您构建了一个标准框架")
+    assert ap._looks_like_text_not_code("以下是基于一人公司特性的研报结构建议")
+
+
+def test_not_text_when_has_code_syntax():
+    """含代码语法特征 → 不拦（可能是带注释的代码）。"""
+    assert not ap._looks_like_text_not_code("# 注释\nprint('hello')")
+    assert not ap._looks_like_text_not_code("# 安装\npip install requests")
+
+
+def test_not_text_short_or_code():
+    """短文本或明显代码 → 不拦。"""
+    assert not ap._looks_like_text_not_code("winget install ffmpeg")
+    assert not ap._looks_like_text_not_code("print('hi')")
+    assert not ap._looks_like_text_not_code("短文本")
 
 
 def test_extract_cmd_rejects_markdown_report():
@@ -81,6 +97,16 @@ def test_extract_cmd_rejects_markdown_report():
     )
     cmd = ap._extract_cmd_from_text(report)
     assert cmd == "", f"研报 Markdown 不应被当命令，实际: {cmd[:50]}"
+
+
+def test_extract_cmd_rejects_llm_refusal():
+    """反思产的 code_exec 步若 in 字段是 LLM 拒答段落 → 返回空。"""
+    refusal = (
+        "由于您未在输入中提供具体的参考材料内容（如公司背景、行业领域、"
+        "现有数据或初步想法），我无法直接为您生成针对特定业务的研报正文。"
+    )
+    cmd = ap._extract_cmd_from_text(refusal)
+    assert cmd == "", f"LLM 拒答段落不应被当命令，实际: {cmd[:50]}"
 
 
 # ---------------------------------------------------------------------------

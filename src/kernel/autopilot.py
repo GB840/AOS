@@ -796,6 +796,9 @@ def _extract_cmd_from_text(text: str) -> str:
         return ""
     text = text.strip()
     if "\n" not in text and len(text) < 500:
+        # 单行短文本也要过防御检查——防反思把 LLM 拒答短段落当命令
+        if _looks_like_text_not_code(text):
+            return ""
         return text
 
     cmd_prefixes = [
@@ -823,38 +826,59 @@ def _extract_cmd_from_text(text: str) -> str:
         return start_match
     if inline_match:
         return inline_match
-    # 没找到命令前缀 → 检查文本是否像 Markdown 文档而非代码
-    # 防反思重设计把 LLM 产出的研报/文档文本当 code_exec 代码丢给 sandbox
-    # （真机验证暴露：反思产 code_exec 步把研报 Markdown 当 Bash 执行→死循环）
-    if _looks_like_markdown_text(text):
-        return ""  # 返回空 → 触发"缺少可执行命令"错误，不把文档丢给 sandbox
+    # 没找到命令前缀 → 检查文本是否像文档/段落而非代码
+    # 防反思重设计把 LLM 产出的研报/拒答文本当 code_exec 代码丢给 sandbox
+    # （真机验证暴露：反思产 code_exec 步把研报 Markdown / LLM 拒答段落当 Bash 执行→死循环）
+    if _looks_like_text_not_code(text):
+        return ""  # 返回空 → 触发"缺少可执行命令"错误，不把文本丢给 sandbox
     # 没找到 → 返回原文本（让 code_exec 自己试）
     return text
 
 
-def _looks_like_markdown_text(text: str) -> bool:
-    """检测文本是否像 Markdown 文档而非可执行代码。
+def _looks_like_text_not_code(text: str) -> bool:
+    """检测文本是否像文档/段落而非可执行代码。
 
-    防反思重设计把 LLM 产出的研报/文档文本当 code_exec 代码丢给 sandbox。
-    判据：以 Markdown 标题（#/##/###）开头，且不含任何代码语法特征。
+    防反思重设计把 LLM 产出的研报/拒答文本当 code_exec 代码丢给 sandbox。
+    三种判据（任一命中即判为非代码）：
+    1. 以 Markdown 标题（#/##/###）开头且不含代码语法
+    2. 以中文开头 + 长度>100 + 不含代码语法（如 LLM 拒答段落、研报正文）
+    3. 以常见中文段落开头词（由于/为了/以下/如下/随着/根据）开头且不含代码语法
     """
     if not text:
         return False
     stripped = text.strip()
     if not stripped:
         return False
-    first_line = stripped.split("\n", 1)[0].lstrip()
-    if not first_line.startswith(("# ", "## ", "### ")):
-        return False
-    # 含代码语法特征 → 可能是带注释的代码块，不拦
+
+    # 代码语法特征——含任一即不拦（可能是带注释的代码）
     code_hints = (
         "def ", "import ", "from ", "print(", "pip ", "winget ", "npm ",
         "python ", "py ", "echo ", "git ", "curl ", "wget ", "bash ", "sh ",
         "mkdir ", "cp ", "mv ", "rm ", "cat ", "ls ", "cd ", "= ", "()",
-        "func ", "var ", "let ", "const ", "return ",
+        "func ", "var ", "let ", "const ", "return ", "->", "=>",
     )
     text_low = stripped.lower()
-    return not any(h in text_low for h in code_hints)
+    has_code_syntax = any(h in text_low for h in code_hints)
+    if has_code_syntax:
+        return False
+
+    first_line = stripped.split("\n", 1)[0].lstrip()
+
+    # 判据1: Markdown 标题开头（无长度限制——标题就是标题）
+    if first_line.startswith(("# ", "## ", "### ")):
+        return True
+
+    # 判据3: 常见中文段落开头词（无长度限制——开头词本身够特征）
+    cn_paragraph_starters = ("由于", "为了", "以下", "如下", "随着", "根据",
+                              "基于", "通过", "关于", "针对", "本次", "当前")
+    if any(first_line.startswith(s) for s in cn_paragraph_starters):
+        return True
+
+    # 判据2: 以中文开头 + 长度>100（LLM 拒答长段落、研报正文）
+    if len(stripped) > 100 and first_line and "\u4e00" <= first_line[0] <= "\u9fff":
+        return True
+
+    return False
 
 
 def _guess_language(code: str) -> str:
