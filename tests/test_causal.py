@@ -70,3 +70,44 @@ def test_from_distiller_lifts_whitebox_stats():
     m = CausalModel().from_distiller(d)
     e = m.effect_of("web.search", "bing")
     assert e["samples"] == 10 and abs(e["success_rate"] - 0.8) < 1e-9
+
+
+def test_effect_of_wilson_ci_within_bounds():
+    # D4：输出 Wilson 95% 置信区间，且落在 [0,1] 并与点估计自洽。
+    m = CausalModel()
+    _fill(m, "web.search", "bing", 8, 1)
+    e = m.effect_of("web.search", "bing")
+    assert 0.0 <= e["ci_low"] <= e["success_rate"] <= e["ci_high"] <= 1.0
+    assert e["ci_high"] - e["ci_low"] > 0  # 非零区间，不确定度被显式交出去
+
+
+def test_effect_of_labels_observational_and_confidence():
+    # D4：明确标注「观测相关、非已证因果」，并带置信级别。
+    m = CausalModel()
+    _fill(m, "web.search", "bing", 9, 1)
+    e = m.effect_of("web.search", "bing")
+    assert e["inference_type"] == "observational_association"
+    assert e["confidence"] in ("low", "medium", "high")
+
+
+def test_best_action_weighted_prefers_cheaper():
+    # D5：带权决策下，「成功率稍低但更便宜」的动作胜出（默认退化为比成功率）。
+    m = CausalModel()
+    _fill(m, "c", "expensive", 9, 1)  # 0.9 成功率，成本 5
+    _fill(m, "c", "cheap", 7, 3)      # 0.7 成功率，成本 0
+    best = m.best_action("c", ["expensive", "cheap"],
+                         weights={"rate": 1.0, "cost": 1.0, "latency": 0.0},
+                         costs={"expensive": 5.0, "cheap": 0.0})
+    assert best is not None and best["action"] == "cheap"
+    assert best["utility"] < 0.9  # 计入成本惩罚后效用低于裸成功率
+
+
+def test_counterfactual_utility_flips_with_costs():
+    # D5：成功率更高 ≠ 更值；注入成本后反事实效用可能反转（autopilot 降本依据）。
+    m = CausalModel()
+    _fill(m, "c", "actual", 2, 8)  # 0.2
+    _fill(m, "c", "alt", 9, 1)     # 0.9
+    cf = m.counterfactual("c", "actual", "alt", costs={"alt": 0.8, "actual": 0.0})
+    assert cf["delta"] > 0                 # 成功率：alt 更高
+    assert cf["utility_delta"] < 0         # 算上成本：actual 更值
+    assert cf["verdict"] == "actual_better"

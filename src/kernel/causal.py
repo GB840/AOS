@@ -20,9 +20,10 @@
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from kernel.evolution_distiller import EvolutionDistiller  # 复用既有白盒蒸馏统计
 
@@ -40,6 +41,20 @@ class Intervention:
     outcome: bool          # 是否成功（真实闸门判定）
     value: float = 1.0     # 可选量化指标（如置信分）；默认 1.0
     timestamp: float = field(default_factory=time.time)
+
+
+def _wilson_ci(success: int, n: int, z: float = 1.96) -> Tuple[float, float]:
+    """Wilson 95% 置信区间（小样本也稳健，避免 Wald 在极端比率下越界）。
+
+    D4：样本量小 → 区间宽 → 置信低，把「不确定度」显式交出去，而非报一个假精确比率。
+    """
+    if n <= 0:
+        return (0.0, 0.0)
+    p = success / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return (max(0.0, center - margin), min(1.0, center + margin))
 
 
 class CausalModel:
@@ -64,56 +79,112 @@ class CausalModel:
         return self._data.get((context, action), [])
 
     def effect_of(self, context: str, action: str) -> Dict[str, Any]:
-        """干预认知（第二层）：估计「在 context 下采取 action 的预期成功率」。"""
+        """干预认知（第二层）：估计「在 context 下采取 action 的预期成功率」。
+
+        D4 关键修正：返回 **观测相关**（observational_association）而非「已证因果」——
+        路由成败吸收了大量未控混淆变量（prompt 复杂度/模型版本/时段/负载），本模块做的是
+        Pearl 之梯**第一层关联**，不是 do-intervention。同时输出 Wilson 95% 置信区间与
+        置信级别，样本不足仍诚实 unknown，杜绝 5 样本就敢报确定比率（理念6 量化置信）。
+        """
         s = self._series(context, action)
         n = len(s)
         if n < self.MIN_SAMPLES:
             return {
                 "action": action, "context": context, "samples": n,
-                "success_rate": None, "verdict": "unknown",
+                "success_rate": None,
+                "ci_low": None, "ci_high": None,
+                "inference_type": "observational_association",
+                "verdict": "unknown",
+                "confidence": "insufficient_samples",
                 "reason": f"样本不足（{n}/{self.MIN_SAMPLES}），不瞎估（理念9 事前可验证）",
             }
         succ = sum(1 for x in s if x.outcome)
         rate = succ / n
+        ci_low, ci_high = _wilson_ci(succ, n)
+        width = ci_high - ci_low
+        # 置信级别随区间宽度下降（区间越宽越不确定）。
+        conf = "low" if width > 0.4 else ("medium" if width > 0.25 else "high")
         return {
             "action": action, "context": context, "samples": n,
             "success_rate": rate,
+            "ci_low": round(ci_low, 4), "ci_high": round(ci_high, 4),
+            "inference_type": "observational_association",
             "verdict": "reliable" if rate >= 0.5 else "unreliable",
-            "reason": f"{succ}/{n} 次成功",
+            "confidence": conf,
+            "reason": f"{succ}/{n} 次成功，95% 置信区间[{ci_low:.2f},{ci_high:.2f}]"
+                      f"（此为观测相关，非已证因果，吸收未控混淆变量）",
         }
 
     def counterfactual(self, context: str, actual_action: str,
-                       alt_action: str) -> Dict[str, Any]:
-        """反事实认知（第三层）：估计「若当初换做 alt_action，会比实际 actual_action 好多少」。"""
+                       alt_action: str,
+                       costs: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """反事实认知（第三层）：估计「若当初换做 alt_action，会比实际 actual_action 如何」。
+
+        D5 决策论层：除成功率差（delta）外，额外给出**效用差**（utility_delta）——
+        当注入各动作成本（costs）后，「成功率更高」未必「更值」。autopilot 反思可据此
+        选择「次优成功率但更省成本」的动作，而非盲目追最高准确率。
+        """
+        costs = costs or {}
         actual = self.effect_of(context, actual_action)
         alt = self.effect_of(context, alt_action)
         if actual["success_rate"] is None or alt["success_rate"] is None:
             return {
                 "context": context, "actual": actual, "alt": alt,
-                "delta": None, "verdict": "unknown",
+                "delta": None, "utility_delta": None, "verdict": "unknown",
                 "reason": "实际或备选动作样本不足，无法做反事实复盘",
             }
         delta = round(alt["success_rate"] - actual["success_rate"], 4)
+        util_actual = actual["success_rate"] - costs.get(actual_action, 0.0)
+        util_alt = alt["success_rate"] - costs.get(alt_action, 0.0)
+        util_delta = round(util_alt - util_actual, 4)
         return {
             "context": context,
             "actual": actual, "alt": alt,
             "delta": delta,
-            "verdict": ("alt_better" if delta > 0 else
-                        "actual_better" if delta < 0 else "parity"),
+            "utility_actual": round(util_actual, 4),
+            "utility_alt": round(util_alt, 4),
+            "utility_delta": util_delta,
+            "verdict": ("alt_better" if util_delta > 0 else
+                        "actual_better" if util_delta < 0 else "parity"),
             "reason": f"备选 {alt_action} 成功率 {alt['success_rate']:.2f} "
                       f"vs 实际 {actual_action} {actual['success_rate']:.2f} "
-                      f"(Δ={delta:+.2f})",
+                      f"(Δ成功={delta:+.2f}, Δ效用={util_delta:+.2f})",
         }
 
-    def best_action(self, context: str, actions: List[str]) -> Optional[Dict[str, Any]]:
-        """在候选动作里挑预期成功率最高且样本充足的；都不足则返回 None（诚实）。"""
+    def best_action(self, context: str, actions: List[str],
+                    weights: Optional[Dict[str, float]] = None,
+                    costs: Optional[Dict[str, float]] = None,
+                    latencies: Optional[Dict[str, float]] = None,
+                    scorer: Optional[Callable[[Dict[str, Any], str], float]] = None
+                    ) -> Optional[Dict[str, Any]]:
+        """在候选动作里挑预期效用最高且样本充足的；都不足则返回 None（诚实）。
+
+        D5 决策论层（默认退化为「比成功率」，向后兼容）：
+        - weights: 决策权重 {rate, cost, latency}，utility = rate·成功率 − cost·成本 − latency·时延
+        - costs/latencies: {action: 数值}
+        - scorer: 自定义打分函数 (effect_dict, action) -> float，优先级最高
+        返回的是 effect dict（含 success_rate/ci/confidence），并附 utility 字段。
+        """
+        if weights is None:
+            weights = {"rate": 1.0, "cost": 0.0, "latency": 0.0}
+        costs = costs or {}
+        latencies = latencies or {}
         best: Optional[Dict[str, Any]] = None
+        best_util: Optional[float] = None
         for a in actions:
             e = self.effect_of(context, a)
             if e["success_rate"] is None:
                 continue
-            if best is None or e["success_rate"] > best["success_rate"]:
-                best = e
+            if scorer is not None:
+                util = scorer(e, a)
+            else:
+                util = (e["success_rate"] * weights.get("rate", 1.0)
+                        - costs.get(a, 0.0) * weights.get("cost", 0.0)
+                        - latencies.get(a, 0.0) * weights.get("latency", 0.0))
+            if best_util is None or util > best_util:
+                best_util = util
+                best = dict(e)
+                best["utility"] = round(util, 4)
         return best
 
     def from_distiller(self, distiller: EvolutionDistiller) -> "CausalModel":
