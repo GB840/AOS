@@ -72,3 +72,33 @@ def test_fabrichub_register_refuses_non_localhost():
     assert eid == "ida-pro-mcp"
     provs = hb._registry.providers_for(Capability.RE_IDA, "high")
     assert any(p.engine_id == "ida-pro-mcp" for p in provs)
+
+
+def test_invoke_refuses_write_without_optin():
+    # D3：写操作（rename/comment...）默认只读红线拦截，需显式 read_only=False。
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    r = ad.invoke(InvokeRequest(capability=Capability.RE_IDA,
+                                payload={"tool": "rename", "arguments": {"address": 1, "new_name": "x"}}))
+    assert r.ok is False and "read_only" in (r.error or "")
+
+
+def test_invoke_allows_write_with_optin():
+    # D3：显式 read_only=False 后写操作放行。
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    r = ad.invoke(InvokeRequest(capability=Capability.RE_IDA,
+                                payload={"tool": "rename", "arguments": {}, "read_only": False}))
+    assert r.ok is True
+
+
+def test_invoke_refuses_dbg_unsafe():
+    # D3：调试类 unsafe 工具（dbg_*）即便显式 opt-in 也永久拒绝。
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    r = ad.invoke(InvokeRequest(capability=Capability.RE_IDA, payload={"tool": "dbg_breakpoint"}))
+    assert r.ok is False and "unsafe" in (r.error or "")
+
+
+def test_invoke_records_read_only_mode():
+    # D3：默认只读，返回数据标注 read_only 供上层审计。
+    ad = IdaProMcpAdapter(server_url="http://localhost:13337/mcp", transport_fn=_fake_rpc)
+    r = ad.invoke(InvokeRequest(capability=Capability.RE_IDA, payload={"tool": "get_metadata"}))
+    assert r.ok and r.data.get("read_only") is True

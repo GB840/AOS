@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROTOCOL = "2025-06-18"
 _LOCALHOST_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
+# D3：写操作需显式 opt-in（payload read_only=False）才放行；调试类 unsafe 工具永远拒绝。
+_WRITE_TOOLS = frozenset({
+    "rename", "rename_global", "comment", "set_comment",
+    "set_function_prototype", "set_local_variable_name",
+    "set_struct_member_name", "add_struct", "add_enum",
+})
+_UNSAFE_PREFIX = "dbg_"
+
 
 def _host_of(url: str) -> str:
     """从 URL 里抠出 host（小写），供 localhost 校验。"""
@@ -170,6 +178,7 @@ class IdaProMcpAdapter(BaseAgentAdapter):
 
     # ---- 执行 -----------------------------------------------------
     def invoke(self, req: InvokeRequest) -> InvokeResult:
+        # D3 红线纵深：每次调用入口再校验 localhost（注册时校验不够，防运行时 url 漂移）。
         if not self.is_localhost:
             return InvokeResult(
                 ok=False,
@@ -178,6 +187,21 @@ class IdaProMcpAdapter(BaseAgentAdapter):
             )
         payload = req.payload or {}
         tool = payload.get("tool") or payload.get("name") or "get_metadata"
+        # D3：调试类 unsafe 工具（dbg_*）永远拒绝，即便显式 opt-in 也不放行。
+        if tool.startswith(_UNSAFE_PREFIX):
+            return InvokeResult(
+                ok=False,
+                error=f"ida-pro-mcp 拒绝调试类 unsafe 工具 {tool!r}（红线：默认且永久不触发调试器）",
+                data={"tool": tool, "blocked_reason": "unsafe_debug_tool"},
+            )
+        # D3：默认只读（read_only=True）；写操作（rename/comment/...）需显式 read_only=False。
+        read_only = payload.get("read_only", True)
+        if tool in _WRITE_TOOLS and read_only:
+            return InvokeResult(
+                ok=False,
+                error=f"写操作 {tool!r} 需显式 payload read_only=False 才能执行（默认只读红线）",
+                data={"tool": tool, "blocked_reason": "read_only_default"},
+            )
         arguments = payload.get("arguments", payload.get("params", {}))
         try:
             if not self._initialized:
@@ -190,7 +214,7 @@ class IdaProMcpAdapter(BaseAgentAdapter):
                 error=f"ida-pro-mcp tools/call {tool} 失败: {e!r}",
             )
         if not isinstance(res, dict):
-            return InvokeResult(ok=True, data={"raw": res})
+            return InvokeResult(ok=True, data={"raw": res, "read_only": read_only})
         is_err = res.get("isError", False)
         content = res.get("content", []) or []
         text = "\n".join(
@@ -198,6 +222,6 @@ class IdaProMcpAdapter(BaseAgentAdapter):
             if isinstance(c, dict) and c.get("type") == "text"
         ).strip()
         if is_err:
-            return InvokeResult(ok=False, data={"raw": res, "tool": tool},
+            return InvokeResult(ok=False, data={"raw": res, "tool": tool, "read_only": read_only},
                                 error=text or "ida-pro-mcp 工具返回错误")
-        return InvokeResult(ok=True, data={"text": text, "raw": res, "tool": tool})
+        return InvokeResult(ok=True, data={"text": text, "raw": res, "tool": tool, "read_only": read_only})
