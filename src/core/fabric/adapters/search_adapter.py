@@ -35,6 +35,7 @@ import requests
 
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from core.fabric.capability import Capability
+from kernel.confidence import assess_search
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,10 @@ class SearchAdapter(BaseAgentAdapter):
                 res = fn(query, max_results)
                 # 不弄虚：必须有真实结果（带 URL 的条目）才算成功
                 if res and res.get("count", 0) > 0:
-                    return InvokeResult(ok=True, data={**res, "engine": name})
+                    # 理念6：搜索结果条数 → 三级量化置信，随结果一并输出（可复核）。
+                    data = {**res, "engine": name,
+                            "confidence": assess_search(res.get("count", 0))}
+                    return InvokeResult(ok=True, data=data)
                 logger.warning("%s 返回但无真实搜索结果，跳过", name)
                 errors.append(f"{name}: 返回无真实结果（模型拒绝/未联网/被墙）")
             except Exception as e:  # 单源失败 → 跳下一个，不中断

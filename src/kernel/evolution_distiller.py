@@ -12,6 +12,7 @@
   - 持久化：可选落盘 JSONL，进程重启后经验不丢（有界、可复核）。
 """
 import os
+import time
 import json
 import logging
 from collections import defaultdict
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 # 沉底阈值：引擎在 >= MIN_SAMPLES 次出现且失败率 >= SINK_FAIL_RATE 时建议沉底
 MIN_SAMPLES = 5
 SINK_FAIL_RATE = 0.5
+# 运行时从路由 outcome 喂样本时的落盘节流间隔（秒），避免热路径每条都写盘。
+SAVE_INTERVAL_SEC = 30
 
 
 @dataclass
@@ -49,6 +52,7 @@ class EvolutionDistiller:
     def __init__(self, store_path: Optional[str] = None):
         self.store_path = store_path
         self.stats: Dict[str, EngineStat] = {}
+        self._last_save = 0.0
         self._load()
 
     def _key(self, capability: str, engine: str) -> str:
@@ -73,6 +77,24 @@ class EvolutionDistiller:
                 st.last_error = (step.get("error") or "")[:200]
             self.stats[key] = st
         self._save()
+
+    def record_outcome(self, capability: str, engine: str, ok: bool,
+                       error: str = "") -> None:
+        """运行时从路由 outcome 增量喂样本（节流落盘，热路径安全）。
+
+        与 ingest() 等价地累加单引擎统计，但落盘经 _maybe_save 节流，
+        避免 route() 每条请求都重写整份 JSONL。
+        """
+        key = self._key(capability, engine)
+        st = self.stats.get(key) or EngineStat(engine=engine, capability=capability)
+        st.total += 1
+        if ok:
+            st.ok += 1
+        else:
+            st.fail += 1
+            st.last_error = (error or "")[:200]
+        self.stats[key] = st
+        self._maybe_save()
 
     def distill(self) -> List[Dict[str, Any]]:
         """蒸馏出沉底建议：不可靠引擎（高失败率 + 样本充足）。"""
@@ -116,6 +138,11 @@ class EvolutionDistiller:
             logger.warning("加载蒸馏记忆失败: %s", e)
 
     def _save(self) -> None:
+        """立即落盘（ingest 调用；同时刷新节流时间戳）。"""
+        self._last_save = time.time()
+        self._write()
+
+    def _write(self) -> None:
         if not self.store_path:
             return
         try:
@@ -125,3 +152,12 @@ class EvolutionDistiller:
                     f.write(json.dumps(asdict(st), ensure_ascii=False) + "\n")
         except Exception as e:  # noqa: BLE001
             logger.warning("保存蒸馏记忆失败: %s", e)
+
+    def _maybe_save(self) -> None:
+        """运行时喂样本节流落盘：距上次写盘 < SAVE_INTERVAL_SEC 则跳过。"""
+        if not self.store_path:
+            return
+        now = time.time()
+        if self._last_save and (now - self._last_save) < SAVE_INTERVAL_SEC:
+            return
+        self._save()

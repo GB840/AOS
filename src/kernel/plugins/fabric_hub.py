@@ -52,6 +52,7 @@ from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
 from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
+from kernel.evolution_distiller import EvolutionDistiller
 
 _LOG = logging.getLogger("aos.fabric.hub")
 
@@ -191,7 +192,8 @@ class FabricHub:
     # 避免同一引擎既进程内又隔离地双注册。
     DEFAULT_ADAPTERS = _ADAPTERS
 
-    def __init__(self, adapters: Optional[tuple] = None) -> None:
+    def __init__(self, adapters: Optional[tuple] = None,
+                 distiller: Optional["EvolutionDistiller"] = None) -> None:
         # best-effort 加载仓库根 .env：让依赖远程 key 的引擎（agnes/litellm）
         # 在任何调用路径都通电。mem0 默认走本地零成本配置（不依赖 key），本步
         # 对 mem0 非必需，仅为兼容远程 key 模式。必须在注册 adapters 之前执行。
@@ -212,6 +214,19 @@ class FabricHub:
         self._failure_monitor: Optional[Any] = None  # MAST 失败监控器，下方 try 链 best-effort 接入
         self._errors: Dict[str, str] = {}
         self._missing_capability_hooks: List[Callable] = []  # 能力缺失时触发的钩子（AutoSkill 等）
+        # 白盒蒸馏路由（opt-in，理念8 闭环消费端）：把 EvolutionDistiller 的
+        # 沉底建议接入 route()，让不可靠引擎在运行时被排到末尾（有备选才跳过）。
+        # 默认关闭；设 AOS_DISTILLER_ROUTE=1 自动加载蒸馏记忆，清 env 即退回原路由。
+        self._distiller = distiller
+        self._distill_drop = os.environ.get("AOS_DISTILLER_DROP") == "1"
+        if self._distiller is None and os.environ.get("AOS_DISTILLER_ROUTE") == "1":
+            try:
+                store = (os.environ.get("AOS_DISTILLER_STORE")
+                         or "data/workspaces/fabric/distill.jsonl")
+                self._distiller = EvolutionDistiller(store_path=store)
+            except Exception as e:  # noqa: BLE001 - 蒸馏接电失败不拖垮枢纽
+                _LOG.warning("蒸馏路由接电失败(将关闭): %s", e)
+                self._distiller = None
         # 已隔离进子进程的引擎：engine_id -> IsolatedEngineHost。
         # 被隔离引擎同时以 IsolatedAdapterProxy 注册进 _registry（参与路由），
         # 但 invoke/health 全部走子进程。recover() 对它们直接 respawn 子进程。
@@ -406,6 +421,9 @@ class FabricHub:
             if self._run_missing_capability_hooks(capability, payload):
                 # 钩子成功补充了能力，重新获取 providers
                 providers = self._registry.providers_for(req.capability, req.tier)
+        # 白盒蒸馏沉底：把被蒸馏器判为不可靠的引擎排到末尾（有可靠备选才跳过）。
+        if self._distiller is not None:
+            providers = self._reorder_by_distiller(capability, providers)
         if not providers:
             return InvokeResult(ok=False, error=f"no live provider for {capability}")
         last_res: InvokeResult | None = None
@@ -422,11 +440,13 @@ class FabricHub:
                 self._errors[eid] = f"invoke failed: {e!r}"
                 _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", eid, e)
                 self._registry.record_outcome(cap_str, eid, eff_tier, False, dt, error=repr(e))
+                self._feed_distiller(cap_str, eid, False, repr(e))
                 attempts.append(f"{eid} raised: {e!r}")
                 continue
             dt = (time.perf_counter() - t0) * 1000.0
             if res.ok:
                 self._registry.record_outcome(cap_str, eid, eff_tier, True, dt)
+                self._feed_distiller(cap_str, eid, True, None)
                 if fm is not None:
                     try:
                         fm.record_success()
@@ -446,6 +466,7 @@ class FabricHub:
                 cap_str, eid, eff_tier, False, dt,
                 error=res.error if not res.ok else None,
             )
+            self._feed_distiller(cap_str, eid, False, res.error)
             attempts.append(f"{eid}: {res.error}")
             last_res = res
             last_eid = eid
@@ -478,6 +499,36 @@ class FabricHub:
             },
             error=f"all providers raised [{capability}]: " + " | ".join(attempts),
         )
+
+    # ---- 白盒蒸馏路由（理念8/2.5 闭环消费端） --------------------
+    def _reorder_by_distiller(self, capability: str, providers: list) -> list:
+        """把被蒸馏器判不可靠的引擎排到末尾；有可靠备选且 AOS_DISTILLER_DROP=1
+        时才硬跳过（诚实：无备选仍保留兜底，绝不静默丢弃能力）。"""
+        if not providers:
+            return providers
+        try:
+            sunk = {s["engine"] for s in self._distiller.distill()
+                    if s.get("capability") == capability}
+        except Exception:  # noqa: BLE001
+            return providers
+        if not sunk:
+            return providers
+        kept, moved = [], []
+        for a in providers:
+            (moved if a.engine_id in sunk else kept).append(a)
+        if self._distill_drop and kept:
+            return kept  # 有可靠备选才跳过沉底引擎
+        return kept + moved
+
+    def _feed_distiller(self, capability: str, engine: str, ok: bool,
+                        error: Optional[str]) -> None:
+        """把单次路由 outcome 喂给蒸馏器（best-effort，异常不影响路由）。"""
+        if self._distiller is None:
+            return
+        try:
+            self._distiller.record_outcome(capability, engine, ok, error or "")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- MAST 失败监控埋点（best-effort，绝不影响主路由） ----
     def _record_failure(self, capability: str, error: Optional[str],

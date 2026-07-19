@@ -73,8 +73,8 @@ AOS 不只是"又一个 agent 框架"。它的真正差异化是：**把"失败�
 | 记忆生命周期 TTL / 分层淘汰 | ✅ 已落地 | `memory/lifecycle.py`（`_maybe_prune` 机会式触发） |
 | 统一内核 + 芯粒故障隔离 | ✅ 已落地 | `kernel/wiring.py`、`fabric_hub.py` |
 | 派发边界鉴权 PolicyEngine | ✅ 已落地 | `kernel/compliance.py` |
-| 诚实量化置信 + Trace 证据 | 🟡 部分（搜索/路由已带，待全链路统一） | 各适配器 `InvokeResult` |
-| 白盒蒸馏 → 沉底引擎 独立组件 | ✅ 已落地 | `kernel/evolution_distiller.py` + `examples/evolution_distiller_demo.py` |
+| 诚实量化置信（理念6） | 🟡 已起头（共享 helper `kernel/confidence.py` + 搜索面接挂 `confidence` 字段，tests 覆盖；持续收口全链路） | `src/kernel/confidence.py`、`core/fabric/adapters/search_adapter.py` |
+| 白盒蒸馏 → 沉底引擎 + 实时路由接入 | ✅ 已落地 | `kernel/evolution_distiller.py`（含运行时喂样本）+ `fabric_hub.py`（`_reorder_by_distiller` opt-in）+ `tests/test_distiller_routing.py` |
 | 端到端自进化演示闭环 | ✅ 已落地 | `examples/self_evolving_demo.py` + `tests/test_self_evolving_loop.py` |
 | 抗复合失败基准测试 | ✅ 已落地 | `examples/resilience_benchmark.py` + `tests/test_resilience_gate.py` |
 
