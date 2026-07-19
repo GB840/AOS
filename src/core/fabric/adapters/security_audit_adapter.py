@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -46,6 +47,10 @@ class Advisory:
     detect_parse: str = ""      # 从命令输出里抓版本的正则/关键字提示（展示用）
     references: List[str] = field(default_factory=list)
     verified: bool = True       # True=已分配 CVE 且防御方复现；False=未核实线索
+    # 自愈（opt-in）：安全可自动执行的修复命令 + 人工修复说明。
+    # remediation_cmd 留空 = 该漏洞不适合/不安全自动修复，仅给人工建议。
+    remediation_cmd: Optional[str] = None
+    remediation_note: str = ""
 
 
 # ── 已核实漏洞知识库（公开 CVE 元数据，来源见 references，均可复核）─────────────
@@ -122,6 +127,21 @@ ADVISORIES: List[Advisory] = [
     ),
 ]
 
+# ── 自愈修复指令（opt-in AOS_SELF_HEAL=1 才执行；默认仅展示，绝不自动跑）──────
+# 仅收录「安全可自动执行」的修复命令（allowlist 见 _HEAL_*）；其余仅给人工建议。
+# 自动化修复是**重大动作**，故双重门控：① 环境变量 AOS_SELF_HEAL=1；② 调用方
+# payload 显式 self_heal=True。任一门未开则只产出修复建议，绝不偷偷执行。
+for _adv in ADVISORIES:
+    if _adv.remediation_cmd is None:
+        if _adv.product == "libssh2":
+            _adv.remediation_cmd = "winget upgrade --id Git.Git"
+            _adv.remediation_note = ("libssh2 多随 Git/curl 捆绑分发；升级 Git 通常带回补丁版 libssh2。"
+                                     "执行后本适配器会复探测确认版本是否已含修复。")
+        elif _adv.product.startswith("Gitea"):
+            _adv.remediation_cmd = "docker pull gitea/gitea:1.26.3"
+            _adv.remediation_note = ("拉取已修复镜像后需重启容器、轮换凭据并审查 token/管理员会话。"
+                                     "执行后本适配器会复探测确认版本。")
+
 # ── 未核实线索（exploitarium 点名但无 CVE / 多为 AI 模糊测试噪声）──────────────
 # 诚实标注：仅作排查线索，须以待厂商/研究者复核后的官方公告为准，不计入「受影响」判定。
 WATCHLIST: List[Dict[str, str]] = [
@@ -176,7 +196,12 @@ class SecurityAuditAdapter(BaseAgentAdapter):
             )
         include_watch = bool(payload.get("include_watchlist", False))
         findings = self._audit(include_watch=include_watch)
-        report = self._build_report(findings, include_watch)
+        heal_results: Dict[str, Any] = {}
+        # 自愈双重门控：① AOS_SELF_HEAL=1；② 调用方显式 self_heal=True。
+        # 仅对「受影响 + 有安全修复指令」的项自动执行白名单命令并复验。
+        if payload.get("self_heal") and os.environ.get("AOS_SELF_HEAL") == "1":
+            heal_results = self._self_heal(findings)
+        report = self._build_report(findings, include_watch, heal_results)
         # 整体置信：能真实探测到的组件数越多，结论越可信（延续理念6 三级量化）。
         detectable = sum(1 for f in findings if f["status"] != "not_present")
         conf = assess(detectable, reason_fmt=lambda n: f"本机真实探测到 {n} 个相关组件：置信随可观测样本数上升")
@@ -199,6 +224,91 @@ class SecurityAuditAdapter(BaseAgentAdapter):
         except Exception as e:  # noqa: BLE001 - 探测失败不影响整体（诚实标 unknown）
             logger.debug("security.audit 探测 %s 失败: %s", cmd, e)
             return None
+
+    # ── 自愈执行器（重大动作，双重门控 + allowlist + 复验）─────────────────────
+    # 仅允许「升级/安装补丁类」命令，且二进制与子命令都必须在白名单内；任何
+    # 其它命令（含 rm / 任意写）一律拒绝执行，诚实回报「不允许自动修复」。
+    _HEAL_SAFE_BINARIES = {
+        "pip": {"install"}, "winget": {"upgrade"}, "choco": {"upgrade"},
+        "apt-get": {"install"}, "apt": {"upgrade", "install"},
+        "docker": {"pull"}, "brew": {"upgrade"},
+    }
+
+    def _heal_allowed(self, cmd: str) -> bool:
+        """白名单校验：二进制+子命令都必须命中，杜绝任意命令自动执行。"""
+        parts = cmd.split()
+        if not parts:
+            return False
+        bin_name = os.path.basename(parts[0])
+        # 允许 `python -m pip install ...` 这类前缀：先处理，避免被下方
+        # `_HEAL_SAFE_BINARIES` 守卫（python 不在表里）误杀。
+        if bin_name in ("python", "python3", "py"):
+            return (len(parts) >= 4 and parts[1] == "-m" and parts[2] == "pip"
+                    and "install" in parts[3:])
+        subs = self._HEAL_SAFE_BINARIES.get(bin_name)
+        if not subs:
+            return False
+        # 普通二进制：第二个 token 必须是允许的子命令
+        return len(parts) >= 2 and parts[1] in subs
+
+    def _heal_run(self, cmd: str, timeout: float = 120.0) -> Dict[str, Any]:
+        """执行一条白名单内的修复命令，返回 {ok, allowed, exit_code, stdout, stderr}。"""
+        if not self._heal_allowed(cmd):
+            return {"ok": False, "allowed": False,
+                    "error": f"自愈命令不在白名单，拒绝自动执行：{cmd!r}"}
+        try:
+            proc = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            )
+            return {
+                "ok": proc.returncode == 0,
+                "allowed": True,
+                "exit_code": proc.returncode,
+                "stdout": (proc.stdout or "")[:2000],
+                "stderr": (proc.stderr or "")[:2000],
+            }
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "allowed": True, "error": f"自愈命令超时（>{timeout}s）：{cmd!r}"}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "allowed": True, "error": f"自愈命令执行异常: {e!r}"}
+
+    def _self_heal(self, findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """对受影响且具备安全修复指令的项尝试自愈，并复验确认。
+
+        返回 {cve: {attempted, command, run, reaudit_version, reaudit_status, healed}}。
+        诚实：复验仍受影响 → healed=False（绝不谎报修复成功）；命令不允许/失败 →
+        如实记录，不动该组件。
+        """
+        results: Dict[str, Any] = {}
+        adv_by_cve = {a.cve: a for a in ADVISORIES}
+        for f in findings:
+            cve = f.get("cve")
+            if f.get("status") != "affected" or not cve or cve not in adv_by_cve:
+                continue
+            adv = adv_by_cve[cve]
+            cmd = adv.remediation_cmd
+            if not cmd:
+                results[cve] = {"attempted": False, "reason": "无安全自动修复指令，仅人工处置"}
+                continue
+            run = self._heal_run(cmd)
+            # 复验：重新探测该组件版本并判定
+            present, version = self._detect(adv)
+            re_status = "unknown"
+            if present and version and adv.affected_max is not None:
+                det = _parse_version(version)
+                re_status = "patched" if (det is not None and det > adv.affected_max) else "affected"
+            elif present and version:
+                re_status = "affected"
+            healed = bool(run.get("ok")) and re_status == "patched"
+            results[cve] = {
+                "attempted": True,
+                "command": cmd,
+                "run": run,
+                "reaudit_version": version,
+                "reaudit_status": re_status,
+                "healed": healed,
+            }
+        return results
 
     def _detect(self, adv: Advisory) -> Tuple[bool, Optional[str]]:
         """返回 (是否安装, 抓到的版本文本)。detect_cmd 为空或探测失败→(False, None)。"""
@@ -250,6 +360,8 @@ class SecurityAuditAdapter(BaseAgentAdapter):
                 "fixed": adv.fixed,
                 "summary": adv.summary,
                 "recommendation": note,
+                "remediation_cmd": adv.remediation_cmd,
+                "remediation_note": adv.remediation_note or adv.fixed,
                 "references": adv.references,
                 "verified": adv.verified,
             })
@@ -271,20 +383,32 @@ class SecurityAuditAdapter(BaseAgentAdapter):
                 })
         return findings
 
-    def _build_report(self, findings: List[Dict[str, Any]], include_watch: bool) -> Dict[str, Any]:
+    def _build_report(self, findings: List[Dict[str, Any]], include_watch: bool,
+                      heal_results: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         counts: Dict[str, int] = {}
         for f in findings:
             counts[f["status"]] = counts.get(f["status"], 0) + 1
+        heal_enabled = bool(heal_results)
+        healed_n = sum(1 for v in (heal_results or {}).values()
+                       if isinstance(v, dict) and v.get("healed"))
         return {
             "capability": "security.audit",
             "scope": "localhost",
             "mode": "defensive-only / read-only / no exploit code",
+            "self_heal": {
+                "enabled": heal_enabled,
+                "attempted": sum(1 for v in (heal_results or {}).values()
+                                 if isinstance(v, dict) and v.get("attempted")),
+                "healed": healed_n,
+            } if heal_enabled else None,
+            "heal_details": heal_results or None,
             "generated_at": _now_iso(),
             "summary": counts,
             "findings": findings,
             "disclaimer": "纯防御性本地自查：仅使用公开 CVE 元数据，不含/不下载/不运行任何 "
                           "exploit 或 PoC 代码；外部目标一律拒绝。情报源于公开安全公告，"
-                          "建议以厂商官方公告为最终处置依据。",
+                          "建议以厂商官方公告为最终处置依据。自愈为 opt-in（AOS_SELF_HEAL=1 "
+                          "+ 调用方 self_heal），仅对白名单内升级命令自动执行并复验，绝不谎报修复。",
         }
 
 
