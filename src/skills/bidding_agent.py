@@ -110,32 +110,44 @@ def parse_bidding_pdf(pdf_path: str) -> Dict[str, Any]:
     except ImportError:
         return {"error": "pymupdf 未安装，请 pip install pymupdf", "pages": 0}
 
-    path = Path(pdf_path)
+    if not pdf_path or not pdf_path.strip():
+        return {"error": "pdf_path 不能为空", "pages": 0}
+
+    path = Path(pdf_path).resolve()
     if not path.exists():
         return {"error": f"文件不存在: {pdf_path}", "pages": 0}
+    if not path.is_file():
+        return {"error": f"路径不是文件: {pdf_path}", "pages": 0}
+    if path.suffix.lower() not in (".pdf", ".PDF"):
+        return {"error": f"非 PDF 文件（扩展名 {path.suffix}）: {pdf_path}", "pages": 0}
 
-    doc = fitz.open(str(path))
+    try:
+        doc = fitz.open(str(path))
+    except Exception as e:
+        return {"error": f"PDF 打开失败（可能损坏/加密）: {e}", "pages": 0}
+
     pages_text: List[str] = []
     sections: List[Dict[str, Any]] = []
     tables_hint = 0
 
-    for page_num, page in enumerate(doc, 1):
-        text = page.get_text("text")
-        pages_text.append(text)
+    try:
+        for page_num, page in enumerate(doc, 1):
+            text = page.get_text("text")
+            pages_text.append(text)
 
-        # 简单结构检测：以"第X章"/"X、"/数字编号开头的行视为章节标题
-        for line in text.split("\n"):
-            line = line.strip()
-            if re.match(r"^(第[一二三四五六七八九十]+[章节]|[一二三四五六七八九十]+、|\d+[.、])", line):
-                if len(line) < 80:  # 标题通常不长
-                    sections.append({"title": line, "content": "", "page": page_num})
+            # 简单结构检测：以"第X章"/"X、"/数字编号开头的行视为章节标题
+            for line in text.split("\n"):
+                line = line.strip()
+                if re.match(r"^(第[一二三四五六七八九十]+[章节]|[一二三四五六七八九十]+、|\d+[.、])", line):
+                    if len(line) < 80:  # 标题通常不长
+                        sections.append({"title": line, "content": "", "page": page_num})
 
-        # 表格检测：连续多行含多个制表符/多空格分隔
-        table_lines = [l for l in text.split("\n") if l.count("\t") >= 2 or len(re.findall(r"\s{3,}", l)) >= 2]
-        if len(table_lines) > 3:
-            tables_hint += 1
-
-    doc.close()
+            # 表格检测：连续多行含多个制表符/多空格分隔
+            table_lines = [l for l in text.split("\n") if l.count("\t") >= 2 or len(re.findall(r"\s{3,}", l)) >= 2]
+            if len(table_lines) > 3:
+                tables_hint += 1
+    finally:
+        doc.close()
 
     full_text = "\n".join(pages_text)
 
@@ -256,40 +268,44 @@ class BiddingAgent(Skill):
 
         full_text = parsed["full_text"]
 
-        # Step 2: 需求提取（结构化正则 + 关键词）
-        self._log.info("Step 2: 提取招标核心需求")
-        requirements = self._extract_requirements(full_text, parsed)
-        trace_steps.append({
-            "step": "requirements_extract", "ok": True,
-            "items_found": len(requirements),
-        })
-
-        # Step 3: 合规检查（结构化规则引擎）
-        self._log.info("Step 3: 执行合规检查（%d 条规则）", len(COMPLIANCE_RULES))
-        compliance = run_compliance_checks(full_text)
-        critical_risks = [c for c in compliance if c["severity"] == "critical" and c["mentioned_in_doc"]]
-        trace_steps.append({
-            "step": "compliance_check", "ok": True,
-            "rules_checked": len(compliance),
-            "critical_risks": len(critical_risks),
-        })
-
-        # Step 4: 资质匹配（如果提供了企业信息）
-        match_result = {}
-        if company:
-            self._log.info("Step 4: 资质匹配")
-            match_result = self._match_qualifications(requirements, company)
+        try:
+            # Step 2: 需求提取（结构化正则 + 关键词）
+            self._log.info("Step 2: 提取招标核心需求")
+            requirements = self._extract_requirements(full_text, parsed)
             trace_steps.append({
-                "step": "qualification_match", "ok": True,
-                "matched": match_result.get("matched", 0),
-                "missing": match_result.get("missing", 0),
+                "step": "requirements_extract", "ok": True,
+                "items_found": len(requirements),
             })
 
-        # Step 5: 策略建议（基于规则 + 历史教训）
-        self._log.info("Step 5: 生成投标策略建议")
-        lessons = self._load_lessons()
-        strategy = self._generate_strategy(requirements, compliance, match_result, lessons)
-        trace_steps.append({"step": "strategy", "ok": True})
+            # Step 3: 合规检查（结构化规则引擎）
+            self._log.info("Step 3: 执行合规检查（%d 条规则）", len(COMPLIANCE_RULES))
+            compliance = run_compliance_checks(full_text)
+            critical_risks = [c for c in compliance if c["severity"] == "critical" and c["mentioned_in_doc"]]
+            trace_steps.append({
+                "step": "compliance_check", "ok": True,
+                "rules_checked": len(compliance),
+                "critical_risks": len(critical_risks),
+            })
+
+            # Step 4: 资质匹配（如果提供了企业信息）
+            match_result = {}
+            if company:
+                self._log.info("Step 4: 资质匹配")
+                match_result = self._match_qualifications(requirements, company)
+                trace_steps.append({
+                    "step": "qualification_match", "ok": True,
+                    "matched": match_result.get("matched", 0),
+                    "missing": match_result.get("missing", 0),
+                })
+
+            # Step 5: 策略建议（基于规则 + 历史教训）
+            self._log.info("Step 5: 生成投标策略建议")
+            lessons = self._load_lessons()
+            strategy = self._generate_strategy(requirements, compliance, match_result, lessons)
+            trace_steps.append({"step": "strategy", "ok": True})
+        except Exception as e:
+            self._log.error("分析过程异常: %s", e, exc_info=True)
+            return {"ok": False, "error": f"分析过程异常: {e}", "trace": {"steps": trace_steps}}
 
         elapsed = round(time.time() - t0, 2)
         self._log.info("分析完成，耗时 %.2fs", elapsed)
@@ -321,6 +337,7 @@ class BiddingAgent(Skill):
     def _extract_requirements(self, text: str, parsed: Dict) -> List[Dict[str, str]]:
         """从招标文件文本中提取核心需求条目。"""
         requirements = []
+        _seen: set = set()  # O(1) 去重
 
         # 1. 资质要求
         qual_patterns = [
@@ -331,7 +348,8 @@ class BiddingAgent(Skill):
         for pat in qual_patterns:
             for m in re.finditer(pat, text):
                 req = m.group(0).strip()
-                if len(req) > 5 and req not in [r["detail"] for r in requirements]:
+                if len(req) > 5 and req not in _seen:
+                    _seen.add(req)
                     requirements.append({"type": "资质", "detail": req[:200]})
 
         # 2. 业绩要求
@@ -343,7 +361,8 @@ class BiddingAgent(Skill):
         for pat in perf_patterns:
             for m in re.finditer(pat, text):
                 req = m.group(0).strip()
-                if req not in [r["detail"] for r in requirements]:
+                if req not in _seen:
+                    _seen.add(req)
                     requirements.append({"type": "业绩", "detail": req[:200]})
 
         # 3. 技术要求
@@ -354,7 +373,8 @@ class BiddingAgent(Skill):
         for pat in tech_patterns:
             for m in re.finditer(pat, text):
                 req = m.group(0).strip()
-                if req not in [r["detail"] for r in requirements]:
+                if req not in _seen:
+                    _seen.add(req)
                     requirements.append({"type": "技术", "detail": req[:200]})
 
         # 4. 商务要求（工期、付款、质保）
@@ -366,7 +386,8 @@ class BiddingAgent(Skill):
         for pat in biz_patterns:
             for m in re.finditer(pat, text):
                 req = m.group(0).strip()
-                if req not in [r["detail"] for r in requirements]:
+                if req not in _seen:
+                    _seen.add(req)
                     requirements.append({"type": "商务", "detail": req[:200]})
 
         # 5. 关键时间节点（从 keywords_found 补充）
@@ -455,19 +476,36 @@ class BiddingAgent(Skill):
         try:
             for line in self._lessons_path.read_text(encoding="utf-8").strip().split("\n"):
                 if line.strip():
-                    lessons.append(json.loads(line))
-        except Exception:
-            pass
+                    try:
+                        lessons.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        self._log.warning("教训文件含损坏行，已跳过: %.40s", line)
+        except Exception as e:
+            self._log.warning("教训文件读取失败: %s", e)
         return lessons[-20:]  # 只保留最近 20 条
 
+    _MAX_LESSONS = 50  # 有界轮转上限
+
     def save_lesson(self, lesson: str, context: str = ""):
-        """保存一条投标教训（反思闭环写入）。"""
-        self._lessons_path.parent.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "lesson": lesson,
-            "context": context,
-            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        with open(self._lessons_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        """保存一条投标教训（反思闭环写入，有锁+有界）。"""
+        import threading
+        if not hasattr(self, "_write_lock"):
+            self._write_lock = threading.Lock()
+        with self._write_lock:
+            self._lessons_path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "lesson": lesson[:500],  # 限制单条长度
+                "context": context[:200],
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            with open(self._lessons_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            # 有界轮转：超过上限时只保留最近 N 条
+            try:
+                lines = self._lessons_path.read_text(encoding="utf-8").strip().split("\n")
+                if len(lines) > self._MAX_LESSONS:
+                    keep = lines[-self._MAX_LESSONS:]
+                    self._lessons_path.write_text("\n".join(keep) + "\n", encoding="utf-8")
+            except Exception:
+                pass
         self._log.info("教训已保存: %s", lesson[:50])

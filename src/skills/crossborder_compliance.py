@@ -184,6 +184,14 @@ class CrossBorderAgent(Skill):
         if not dest:
             return {"ok": False, "error": "缺少目的国（destination）"}
 
+        # 目的国验证
+        _SUPPORTED = {"DE", "US", "UK", "JP", "AU"}
+        dest_warning = ""
+        if dest not in _SUPPORTED:
+            dest_warning = (f"目的国 {dest} 暂无专属规则库，仅返回通用要求。"
+                            f"当前支持：{', '.join(sorted(_SUPPORTED))}")
+            self._log.warning(dest_warning)
+
         # Step 1: 商品品类识别
         self._log.info("Step 1: 识别商品品类: %s", product[:50])
         categories = self._identify_categories(product)
@@ -226,6 +234,7 @@ class CrossBorderAgent(Skill):
             "ok": True,
             "product": product,
             "destination": dest,
+            "warning": dest_warning,
             "categories": categories,
             "requirements": [self._item_to_dict(i) for i in applicable],
             "gaps": [self._item_to_dict(i) for i in gaps],
@@ -283,28 +292,50 @@ class CrossBorderAgent(Skill):
             applicable.append(item)
         return applicable
 
+    # 资质→规则 ID 显式映射（避免子串误匹配）
+    _CERT_RULE_MAP = {
+        "CE": {"EU01"},
+        "FCC": {"US01"},
+        "ROHS": {"EU07"},
+        "UL": {"US02"},
+        "PSE": {"JP01"},
+        "TELEC": {"JP02"},
+        "GITEKI": {"JP02"},
+        "UKCA": {"UK01"},
+        "RCM": {"AU01"},
+        "ACMA": {"AU03"},
+        "WEEE": {"EU02"},
+        "REACH": {"EU08"},
+        "UN38.3": {"EU05"},
+        "CPC": {"US06"},
+        "CPSIA": {"US06"},
+        "FDA": {"US04"},
+        "EPA": {"US07"},
+        "ISO9001": set(),  # 通用资质，不直接满足特定规则
+        "ISO27001": set(),
+        "PMP": set(),
+    }
+
     def _analyze_gaps(self, applicable: List[ComplianceItem],
                       existing: set) -> List[ComplianceItem]:
-        """找出尚未满足的合规要求。"""
+        """找出尚未满足的合规要求（显式映射，非子串匹配）。"""
+        # 计算已有资质覆盖的规则 ID 集合
+        covered_rules: set = set()
+        for cert in existing:
+            cert_upper = cert.upper().strip()
+            if cert_upper in self._CERT_RULE_MAP:
+                covered_rules.update(self._CERT_RULE_MAP[cert_upper])
+            else:
+                # 未知资质：仅当完整匹配规则 requirement 中的关键词时才覆盖
+                for item in applicable:
+                    if cert_upper == item.requirement.upper().split("（")[0].strip():
+                        covered_rules.add(item.item_id)
+
         gaps = []
         for item in applicable:
-            # 简单匹配：已有资质名称包含在要求中
-            already = False
-            for cert in existing:
-                if cert in item.requirement.upper() or cert in item.item_id:
-                    already = True
-                    break
-                # CE 匹配 EU01, FCC 匹配 US01 等
-                if cert == "CE" and "CE" in item.requirement:
-                    already = True
-                    break
-                if cert == "FCC" and "FCC" in item.requirement:
-                    already = True
-                    break
-                if cert == "ROHS" and "RoHS" in item.requirement:
-                    already = True
-                    break
-            if not already and item.severity in ("mandatory", "conditional"):
+            if item.item_id in covered_rules:
+                continue
+            if item.severity in ("mandatory", "conditional"):
                 gaps.append(item)
         return gaps
 
@@ -403,19 +434,35 @@ class CrossBorderAgent(Skill):
         try:
             for line in self._lessons_path.read_text(encoding="utf-8").strip().split("\n"):
                 if line.strip():
-                    lessons.append(json.loads(line))
-        except Exception:
-            pass
+                    try:
+                        lessons.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        self._log.warning("教训文件含损坏行，已跳过: %.40s", line)
+        except Exception as e:
+            self._log.warning("教训文件读取失败: %s", e)
         return lessons[-20:]
 
+    _MAX_LESSONS = 50
+
     def save_lesson(self, lesson: str, context: str = ""):
-        """保存跨境合规教训。"""
-        self._lessons_path.parent.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "lesson": lesson,
-            "context": context,
-            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        with open(self._lessons_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        """保存跨境合规教训（有锁+有界）。"""
+        import threading
+        if not hasattr(self, "_write_lock"):
+            self._write_lock = threading.Lock()
+        with self._write_lock:
+            self._lessons_path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "lesson": lesson[:500],
+                "context": context[:200],
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            with open(self._lessons_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            try:
+                lines = self._lessons_path.read_text(encoding="utf-8").strip().split("\n")
+                if len(lines) > self._MAX_LESSONS:
+                    keep = lines[-self._MAX_LESSONS:]
+                    self._lessons_path.write_text("\n".join(keep) + "\n", encoding="utf-8")
+            except Exception:
+                pass
         self._log.info("教训已保存: %s", lesson[:50])
