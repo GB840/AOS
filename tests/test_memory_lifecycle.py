@@ -8,8 +8,11 @@
 - TTL 环境变量覆盖与未超 TTL 不淘汰
 - 批量访问记录
 - 与 MemoryManager 的 opt-in 集成
+- **机会式 prune 经真实 add / search 路径触发**（概念2『记忆有生有灭』闭环，非只记录不淘汰）
+- MemoryManager.prune_lifecycle() 委派
 """
 import os
+import time
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -188,3 +191,91 @@ def test_memory_manager_lifecycle_integration(monkeypatch, tmp_path):
         ).fetchone()["category"] == CATEGORY_FAILURE
     finally:
         mm.close()
+
+
+def _insert_expired(bridge, conn, row_id, category=CATEGORY_FAILURE, age_days=40, tier=TIER_FULL):
+    old = (datetime.now() - timedelta(days=age_days)).isoformat()
+    conn.execute(
+        "INSERT INTO memory_lifecycle (scope, row_id, category, access_count, tier, created_at) "
+        "VALUES ('conversations', ?, ?, 1, ?, ?)",
+        (row_id, category, tier, old),
+    )
+    conn.commit()
+
+
+def test_opportunistic_prune_fires_via_record_add():
+    """概念2 真闭环：add 路径上过期记忆被自动 prune（分层降级），而非只记不删。"""
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    _insert_expired(bridge, conn, 9001)  # 40 天前的 failure（TTL 7天），冷门
+    bridge._last_prune_ts = 0.0  # 强制节流放行
+
+    bridge.record_add("conversations", 99999, CATEGORY_GENERAL)  # 触发 _maybe_prune
+
+    assert conn.execute("SELECT tier FROM memory_lifecycle WHERE row_id=9001").fetchone()["tier"] == TIER_SUMMARIZED
+
+
+def test_opportunistic_prune_throttled_within_interval():
+    """节流：距上次 prune 不足间隔时不扫表，过期记忆保持原 tier。"""
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    _insert_expired(bridge, conn, 9002)
+    bridge._last_prune_ts = time.time()  # 刚 prune 过，节流未过
+
+    bridge.record_add("conversations", 99998, CATEGORY_GENERAL)
+
+    assert conn.execute("SELECT tier FROM memory_lifecycle WHERE row_id=9002").fetchone()["tier"] == TIER_FULL
+
+
+def test_opportunistic_prune_fires_via_record_access_many():
+    """search 热路径（record_access_many）同样触发机会式 prune。"""
+    conn = _conn()
+    bridge = MemoryLifecycleBridge(conn, enabled=True)
+    _insert_expired(bridge, conn, 9003)
+    bridge._last_prune_ts = 0.0
+
+    bridge.record_access_many("conversations", [123, 124, 125])
+
+    assert conn.execute("SELECT tier FROM memory_lifecycle WHERE row_id=9003").fetchone()["tier"] == TIER_SUMMARIZED
+
+
+def test_memory_manager_prune_lifecycle_delegates(monkeypatch, tmp_path):
+    """MemoryManager.prune_lifecycle() 委派到桥接层；禁用态返回 {"enabled": False}。"""
+    from memory import memory as memory_module
+    from memory.memory import MemoryManager
+    from utils.config import config
+
+    monkeypatch.setattr(memory_module, "CHROMADB_AVAILABLE", False)
+    monkeypatch.setattr(memory_module, "ZVEC_AVAILABLE", False)
+    monkeypatch.setattr(config, "SQLITE_DB_PATH", str(tmp_path / "mem2.db"))
+    monkeypatch.setattr(config, "CHROMADB_PERSIST_DIR", str(tmp_path / "chroma2"))
+    monkeypatch.setattr(config, "VECTOR_COLLECTION_NAME", "test_mem2")
+    monkeypatch.setenv("AOS_MEMORY_LIFECYCLE", "1")
+
+    mm = MemoryManager()
+    try:
+        # 写入一条过期失败记忆，显式 prune 应分层降级
+        mm.lifecycle.conn.execute(
+            "INSERT INTO memory_lifecycle (scope, row_id, category, access_count, tier, created_at) "
+            "VALUES ('conversations', 7001, 'failure', 1, 0, ?)",
+            ((datetime.now() - timedelta(days=40)).isoformat(),),
+        )
+        mm.lifecycle.conn.commit()
+        stats = mm.prune_lifecycle()
+        assert stats.get("promoted_to_summary", 0) >= 1
+        assert mm.lifecycle.conn.execute(
+            "SELECT tier FROM memory_lifecycle WHERE row_id=7001"
+        ).fetchone()["tier"] == TIER_SUMMARIZED
+    finally:
+        mm.close()
+
+    # 禁用态（AOS_MEMORY_LIFECYCLE=0）：bridge 仍存在但 enabled=False，
+    # prune_lifecycle 返回 {"enabled": False} 且不触碰任何表
+    monkeypatch.setenv("AOS_MEMORY_LIFECYCLE", "0")
+    mm2 = MemoryManager()
+    try:
+        assert mm2.lifecycle is not None
+        assert mm2.lifecycle.is_enabled() is False
+        assert mm2.prune_lifecycle() == {"enabled": False}
+    finally:
+        mm2.close()

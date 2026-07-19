@@ -288,6 +288,22 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"关闭MemoryManager时出错: {e}")
 
+    def prune_lifecycle(self, now=None) -> Dict[str, Any]:
+        """显式触发记忆生命周期 prune（理念2『记忆有生有灭』）。
+
+        仅当 AOS_MEMORY_LIFECYCLE=1（self.lifecycle 已启用）时生效；关闭时返回
+        {"enabled": False} 且不触碰任何表。运行时也由桥接层在 add / search 路径上
+        机会式自触发（见 MemoryLifecycleBridge._maybe_prune），本方法供运维 / 测试
+        / 定时任务显式调用。
+        """
+        if self.lifecycle is None or not self.lifecycle.is_enabled():
+            return {"enabled": False}
+        try:
+            return self.lifecycle.prune(now)
+        except Exception as exc:
+            logger.warning("prune_lifecycle 失败: %s", exc)
+            return {"enabled": True, "error": str(exc)}
+
     def _init_vector_store(self):
         """初始化向量存储，优先使用 Zvec，其次 ChromaDB"""
         if ZVEC_AVAILABLE:

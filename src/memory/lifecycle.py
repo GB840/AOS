@@ -22,6 +22,7 @@
 - general    通用：默认 30 天
 """
 import os
+import time
 import logging
 import sqlite3
 from datetime import datetime, timedelta
@@ -38,6 +39,10 @@ CATEGORY_PREFERENCE = "preference"
 CATEGORY_GENERAL = "general"
 
 _VALID_SCOPES = ("conversations", "knowledge", "tasks")
+
+# 机会式 prune 节流：相邻两次真实 prune 至少间隔这么久（秒），避免每次 add/search 都扫全表。
+# 仅在 AOS_MEMORY_LIFECYCLE=1（enabled）时生效；关闭时记录钩子本就是 no-op。
+_PRUNE_INTERVAL_SECONDS = int(os.environ.get("AOS_MEMORY_PRUNE_INTERVAL_SECONDS", "3600"))
 
 # 各分类默认 TTL（天）。preference 实际永不淘汰（仅受极长 TTL 保护语义）。
 _DEFAULT_TTL_DAYS = {
@@ -73,6 +78,7 @@ class MemoryLifecycleBridge:
     def __init__(self, conn: sqlite3.Connection, enabled: bool = False):
         self.conn = conn
         self.enabled = bool(enabled)
+        self._last_prune_ts = 0.0  # 上次真实 prune 的 epoch 秒，用于机会式节流
         if self.enabled:
             try:
                 self._ensure_table()
@@ -135,6 +141,7 @@ class MemoryLifecycleBridge:
             self.conn.commit()
         except Exception as exc:
             logger.warning("record_add 失败(%s:%s): %s", scope, row_id, exc)
+        self._maybe_prune()
 
     def record_access(self, scope: str, row_id: int, category: str = CATEGORY_GENERAL) -> None:
         if not self.enabled or scope not in _VALID_SCOPES:
@@ -184,6 +191,29 @@ class MemoryLifecycleBridge:
             self.conn.commit()
         except Exception as exc:
             logger.warning("record_access_many 失败(%s): %s", scope, exc)
+        self._maybe_prune()
+
+    # ------------------------------------------------------------------ #
+    # 机会式 prune（运行时自触发，无需独立常驻调度）
+    # ------------------------------------------------------------------ #
+    def _maybe_prune(self) -> None:
+        """在真实 add / search 路径上机会式触发 ``prune``。
+
+        设计：时间节流（_PRUNE_INTERVAL_SECONDS，默认 1h 至多一次真实 prune），
+        仅在 enabled 时执行，全程故障隔离。这样概念2『记忆有生有灭』在运行时
+        自然闭环——记录热度后过期记忆会被 TTL 淘汰 / 分层降级，而非只记不删。
+        关闭（AOS_MEMORY_LIFECYCLE!=1）时记录钩子本就是 no-op，此处直接 return。
+        """
+        if not self.enabled:
+            return
+        now_ts = time.time()
+        if now_ts - self._last_prune_ts < _PRUNE_INTERVAL_SECONDS:
+            return
+        self._last_prune_ts = now_ts
+        try:
+            self.prune()
+        except Exception as exc:  # 故障隔离：prune 异常绝不冒泡到主记忆路径
+            logger.warning("opportunistic prune 失败(已忽略): %s", exc)
 
     # ------------------------------------------------------------------ #
     # TTL / 分层降级
