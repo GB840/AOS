@@ -562,6 +562,24 @@
       ],
       "runtime": "standalone",
       "status": "active"
+    },
+    {
+      "id": "content-flywheel",
+      "name": "Content Flywheel",
+      "module": "skills.content_flywheel_skill",
+      "class": "ContentFlywheelSkill",
+      "version": "1.0.0",
+      "description": "小团队内容自动化飞轮：Forge->Cast->Echo->Refine 循环 + 跨会话反思学习闭环",
+      "category": "business",
+      "capabilities": [
+        "content.produce",
+        "content.publish",
+        "content.feedback",
+        "content.optimize"
+      ],
+      "runtime": "standalone",
+      "fabric_capability": "content.produce",
+      "status": "active"
     }
   ],
   "counts": {
