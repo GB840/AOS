@@ -3,16 +3,16 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '922ab4d2-a342-4501-be7b-f23805873a61'
-  PropagateID: '922ab4d2-a342-4501-be7b-f23805873a61'
-  ReservedCode1: 'e3957bd8-985a-4a16-8b0d-1e0c6c1a0b7b'
-  ReservedCode2: 'e3957bd8-985a-4a16-8b0d-1e0c6c1a0b7b'
+  ProduceID: 'd49bad1f-3eee-453e-a720-95c809672e51'
+  PropagateID: 'd49bad1f-3eee-453e-a720-95c809672e51'
+  ReservedCode1: 'b4193372-29b4-45b1-b7d8-99ff7b58cb91'
+  ReservedCode2: 'b4193372-29b4-45b1-b7d8-99ff7b58cb91'
 ---
 
 # AOS 项目状态总地图（STATUS）
 
 > 这是一份**导航索引**，不是技术文档。每次大状态变动更新这里。
-> 最后更新：**2026-07-19**（TD-3 修订：纠正旧文「5 路由文件 / 26 适配器」的低估——实测 **16 API 路由文件 / 29 适配器类**）。
+> 最后更新：**2026-07-19**（数字纠偏：实测 **29 适配器类 / 30 文件 · 955 测试函数 / 139 测试文件 · 16 API 路由文件 · 11 内核子包 + 35 内核顶层模块**）。
 
 ---
 
@@ -20,7 +20,7 @@ AIGC:
 
 AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器）** 为干净运行时，统一持有路由/记忆/上下文主权并调度各芯粒适配器；legacy 的 `brain.py` 仍作 `/api/chat` 灰度兜底（双轨尚未合流）。在此之上新增了**内容飞轮平台**（Studio/Hub/Pulse/Evolve + 5 适配器 + SkillHub/AutoSkill 集成），端到端已真跑通（搜索→LLM 写脚本→本地 ffmpeg+edge-tts 生成视频）。
 
-**规模（实测，非记忆）：29 适配器类 / 30 文件 · 702 测试函数 / 109 文件 · 33 技能（manifest）· 7 内核子包 + 31 内核顶层模块 · 16 个 API 路由文件。**
+**规模（实测，非记忆，2026-07-19 真机核对）：29 适配器类 / 30 文件 · 955 测试函数 / 139 测试文件 · 33 技能（manifest）· 11 内核子包 + 35 内核顶层模块 · 16 个 API 路由文件。**
 
 ---
 
@@ -55,7 +55,7 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
                   │   能力注册 · 健康门控 · 全局高中低三级路由     │
                   └─────────────────────────────────────────────┘
               ┌──────────────┬──────────────┬───────────────┬──────────────┐
-        29 芯粒适配器   内核子包(7)      内容飞轮平台      外部生态
+        29 芯粒适配器   内核子包(11)     内容飞轮平台      外部生态
         (adapters/)  (kernel/*/)   (studio/hub/pulse/   (SkillHub 7.9万
                                   evolve + 5适配器)      技能 / IMA / WeKnora)
 ```
@@ -95,7 +95,7 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 
 ## 4. 内核结构（`src/kernel/`）
 
-**7 个子包：**
+**11 个子包：**
 | 子包 | 职责 |
 |---|---|
 | `plugins/` | FabricHub 主路由 + content_flywheel 编排 + 插件登记 |
@@ -105,8 +105,12 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 | `evolve/` | 智能体自动进化引擎 |
 | `layers/` | v1.0 四层结构落地（ModelGateway/AgentRuntime/UI/FallbackChain） |
 | `isolation/` | 子进程隔离（B 路线 PoC） |
+| `approval/` | Human-in-the-Loop 审批存储与状态机（`/api/approvals` 后端） |
+| `context/` | 运行时上下文工程（`/api/context` 后端） |
+| `eval/` | 评估框架（`/api/eval` 后端，Task 3） |
+| `kernel`根 | 内核顶层 35 个 .py（不在子包内） |
 
-**31 个顶层模块（节选关键）：**
+**35 个顶层模块（节选关键）：**
 - 物种动能：`evolution.py` / `immunity.py` / `ecology.py` / `live.py`
 - 可信记忆：`hippo_scroll.py` / `memory_compression.py` / `memory_distiller.py`（常驻提炼 Agent）
 - 横切：`compliance.py`（ContentGuard/PolicyEngine）/ `events.py` / `auth_bridge.py` / `hotswap.py` / `versioning.py` / `skills_bridge.py`
@@ -167,15 +171,15 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 ```
 src\
   core\fabric\           接线板：capability/registry/protocols + adapters/(29)
-  kernel\                v1.0 内核：7 子包 + 31 顶层模块
+  kernel\                v1.0 内核：11 子包 + 35 顶层模块
   api\                   16 路由文件（main/security/gateway/chat_routing/product_flywheel/autoskill/review/approval/eval/replay/context/kanban/memory_control/video/vlm/self_harness）
   skills\                manifest.json(33技能) + autoskill + skillhub_integration
   hermes\                LLM 桥（AOS_FABRIC_LLM=1 走 FabricHub）
   subagents\             IMA 等子智能体
-  mcp\                   对外 MCP server（B 路线）
+  aos_mcp\               对外 MCP server（B 路线；2026-07 从 `mcp/` 重命名以避官方 mcp SDK 命名遮蔽）
 web\studio\index.html    内容飞轮前端
-tests\                   109 测试文件 / 702 测试函数
-scripts\                 15 个验证脚本（test_* 手动跑，非 pytest 套件）
+tests\                   139 测试文件 / 955 测试函数
+scripts\                 74 个验证脚本（test_* 手动跑，非 pytest 套件）
 ```
 
 ---
@@ -194,7 +198,10 @@ C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe script
 C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe -m py_compile <file>
 ```
 
-- 测试全绿基线：本批次 47 飞轮相关用例 + 既有 655 → 合计 **702 函数** 全绿。
+- 测试基线（2026-07-19 真机实测）：`tests/` 共 **139 文件 / 955 个 test_ 函数**。
+  近端绿绿回归套：`test_causal.py` 10/10、`test_mcp_fabric_exposure.py` 6/6、
+  `test_approvals_routes.py` 1/1、`verify_step_review.py` 21/0、`verify_hitl.py` 100/100。
+  全量套需在主机以 `pytest tests/ -q --timeout=60` 跑（沙箱 120s 超时能力不足以跑全）。
 - FabricHub 空构造较重（~分钟级），测试用 module 级 fixture 复用。
 
 ---
