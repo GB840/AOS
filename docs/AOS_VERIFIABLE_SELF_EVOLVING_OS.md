@@ -77,7 +77,9 @@ AOS 不只是"又一个 agent 框架"。它的真正差异化是：**把"失败�
 | 白盒蒸馏 → 沉底引擎 + 实时路由接入 | ✅ 已落地 | `kernel/evolution_distiller.py`（含运行时喂样本）+ `fabric_hub.py`（`_reorder_by_distiller` opt-in）+ `tests/test_distiller_routing.py` |
 | 端到端自进化演示闭环 | ✅ 已落地 | `examples/self_evolving_demo.py` + `tests/test_self_evolving_loop.py` |
 | 抗复合失败基准测试 | ✅ 已落地 | `examples/resilience_benchmark.py` + `tests/test_resilience_gate.py` |
-| 防御型本地漏洞自查（security.audit） | ✅ 已落地 | `core/fabric/adapters/security_audit_adapter.py` + 能力 `security.audit` 接入路由 + `tests/test_security_audit_adapter.py`；把公开 CVE 情报转译成**对自家环境的只读巡检**（不含/不运行任何 exploit，外部目标拒绝） |
+| 防御型本地漏洞自查（security.audit） | ✅ 已落地（含自愈） | `core/fabric/adapters/security_audit_adapter.py` + 能力 `security.audit` 接入路由 + `tests/test_security_audit_adapter.py`；把公开 CVE 情报转译成**对自家环境的只读巡检**（不含/不运行任何 exploit，外部目标拒绝）。**自愈**：opt-in(`AOS_SELF_HEAL=1`+调用方`self_heal`) 对白名单内升级命令自动执行并复验，复验仍受影响则诚实 `healed=False`（绝不谎报）；`tests/test_security_audit_selfheal.py` |
+| 本机逆向工程（re.ida / ida-pro-mcp） | ✅ 已落地（opt-in） | `core/fabric/adapters/ida_pro_mcp_adapter.py` + 能力 `re.ida`；把 mrexodia/ida-pro-mcp（真实开源逆向 MCP）经本机 MCP server 接入供给面，**localhost-only 红线**（非本机 URL 拒绝注册/调用），仅静态只读分析。FabricHub 在 `IDA_PRO_MCP_URL` 为 localhost 时自动注册；`tests/test_ida_pro_mcp_adapter.py` |
+| 因果世界模型推理层 | ✅ 已落地 | `kernel/causal.py`：把珀尔三层因果阶梯落地为可单测经验因果模型——`effect_of`(干预认知)、`counterfactual`(反事实认知)、样本不足诚实 `unknown`(事前可验证)；`from_distiller` 复用白盒蒸馏统计。映射中数睿智 WAIC2026 蓝皮书，详见 `docs/AOS_CAUSAL_WORLD_MODEL.md`；`tests/test_causal.py` |
 
 ---
 
