@@ -261,7 +261,7 @@ def _invoke_3d(prompt: str) -> dict:
 def _route_hub(capability: str, payload: dict) -> dict:
     """经 FabricHub 路由层（端云合作）。仅 chat/search 用；3D 不走这里。"""
     try:
-        from mcp.protocol import _get_hub
+        from aos_mcp.protocol import _get_hub
         hub = _get_hub()
         res = hub.route(capability, payload)
         if res and getattr(res, "ok", False):

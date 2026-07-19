@@ -31,10 +31,10 @@ Endpoints:
   POST /api/lnn/predict       {"series":[floats]|"demo":true,"horizon"?,"epochs"?} -> {forecast, engine, final_loss}
   GET  /api/lnn/info          LNN/LFM2 引擎可用性探测（诚实：numpy 永远 live，LFM2 需权重）
 
-The HTTP MCP path reuses src.mcp.protocol.MCPProtocol verbatim, so FabricHub
+The HTTP MCP path reuses aos_mcp.protocol.MCPProtocol verbatim, so FabricHub
 instantly gains an HTTP MCP surface that mirrors v5's /api/mcp shape — the two
 runtimes become interoperable WITHOUT duplicating any tool logic. Both routes
-share the very same FabricHub singleton (via mcp.protocol._get_hub), honouring
+share the very same FabricHub singleton (via aos_mcp.protocol._get_hub), honouring
 the architecture-first principle: one kernel owns routing/memory/context.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # HTTP MCP surface and the /api/chat route share ONE kernel. The underscore
 # import is intentional: we deliberately bind to the protocol layer's already
 # validated singleton rather than spinning up a second FabricHub.
-from mcp.protocol import MCPProtocol, _get_hub
+from aos_mcp.protocol import MCPProtocol, _get_hub
 from core.fabric.adapter import InvokeRequest
 
 __all__ = ["serve", "FabricHubHTTPHandler"]
@@ -364,7 +364,7 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
 
     def _post_mcp(self, body: dict) -> None:
         try:
-            from mcp.protocol import MCPMessage
+            from aos_mcp.protocol import MCPMessage
             msg = MCPMessage.from_json(json.dumps(body, ensure_ascii=False))
             reply = _MCP.handle_message(msg)
             return self._send_json(reply.to_dict())

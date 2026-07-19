@@ -1610,7 +1610,7 @@ _hub_instance: Optional[FabricHub] = None
 def get_fabric_hub() -> FabricHub:
     """获取 FabricHub 单例（完整装配实例）。
 
-    与 build_default_kernel / mcp.protocol 使用的实例一致——统一走 build_fabric_hub
+    与 build_default_kernel / aos_mcp.protocol 使用的实例一致——统一走 build_fabric_hub
     的全局装配（含编排芯粒 + 隔离引擎），消除此前「裸 FabricHub()」与「完整装配 hub」
     并存导致的多实例不一致（AutoSkill 缺失能力钩子挂在一份、/api/chat 走另一份）。
 

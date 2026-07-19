@@ -201,7 +201,7 @@ class MeetingAgent:
 
         # 经 OrchestrationChiplet 跑流水线（多 Agent 编排：STT 芯粒 + LLM 芯粒）
         try:
-            from mcp.protocol import _get_hub
+            from aos_mcp.protocol import _get_hub
             hub = _get_hub()
             res = hub.route("system.workflow", spec)
         except Exception as e:

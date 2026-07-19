@@ -5,10 +5,10 @@
 stdio 连接 AOS。
 
 已知约束（重要，已按"验证够再定性"纪律核实，勿遗漏）：
-1. **命名冲突**：AOS 自有 `src/mcp/` 包与官方 `mcp` SDK 同名。在 AOS 运行时（PYTHONPATH 含 src）
-   下 `import mcp` 解析到 AOS 本地包，官方 SDK 被遮蔽；且 `src/api/main.py`、`src/core/brain.py`
-   共 3 处 `from mcp import ...` 依赖本地包。因此本服务端用本地 `MCPProtocol` + 自研 stdio 循环，
-   而非官方 `mcp.server` SDK。彻底解决需将 `src/mcp` 重命名为 `src/aos_mcp` 并更新这 3 处引用
+1. **命名冲突**：AOS 自有 `src/aos_mcp/` 包与官方 `mcp` SDK 同名。在 AOS 运行时（PYTHONPATH 含 src）
+   下 `import aos_mcp` 解析到 AOS 本地包，官方 SDK 被遮蔽；且 `src/api/main.py`、`src/core/brain.py`
+   共 3 处 `from aos_mcp import ...` 依赖本地包。因此本服务端用本地 `MCPProtocol` + 自研 stdio 循环，
+   而非官方 `mcp.server` SDK。彻底解决需将 `src/aos_mcp` 重命名为 `src/aos_mcp` 并更新这 3 处引用
    （已记录为待办 #140）。
 2. **stdout 纯净**：MCP stdio 要求 stdout 仅含 JSON-RPC。真实工具（openclaw / gui / office /
    RAG / agency）在调用时会 `import core` 或 `import skills`，触发 AOS 启动日志/警告刷屏污染流。

@@ -862,7 +862,7 @@ class UnifiedBrain:
     
     def _init_mcp_protocol(self):
         """步骤7: MCP协议"""
-        from mcp import MCPProtocol
+        from aos_mcp import MCPProtocol
         self.mcp = MCPProtocol()
         logger.info("MCP protocol ready")
     

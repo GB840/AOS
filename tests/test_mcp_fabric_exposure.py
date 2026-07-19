@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from unittest.mock import patch, MagicMock
 
-from mcp.protocol import MCPProtocol, MCPMessage
+from aos_mcp.protocol import MCPProtocol, MCPMessage
 
 
 def _new_proto() -> MCPProtocol:
@@ -40,7 +40,7 @@ def test_aos_tools_registered():
 def test_aos_route_handler_translates_invokeresult():
     fake = MagicMock()
     fake.route.return_value = MagicMock(ok=True, data={"reply": "hi"}, error=None)
-    with patch("mcp.protocol._get_hub", return_value=fake):
+    with patch("aos_mcp.protocol._get_hub", return_value=fake):
         proto = _new_proto()
         res = _call(proto, "aos_route",
                     {"capability": "inference.llm", "payload": {"x": 1}})
@@ -52,7 +52,7 @@ def test_aos_route_handler_translates_invokeresult():
 
 def test_aos_route_missing_capability():
     fake = MagicMock()
-    with patch("mcp.protocol._get_hub", return_value=fake):
+    with patch("aos_mcp.protocol._get_hub", return_value=fake):
         proto = _new_proto()
         res = _call(proto, "aos_route", {})
     content = json.loads(res["content"][0]["text"])
@@ -63,7 +63,7 @@ def test_aos_route_missing_capability():
 def test_aos_list_engines_handler():
     fake = MagicMock()
     fake.health_report.return_value = {"total": 3, "live": 2, "adapters": {}}
-    with patch("mcp.protocol._get_hub", return_value=fake):
+    with patch("aos_mcp.protocol._get_hub", return_value=fake):
         proto = _new_proto()
         res = _call(proto, "aos_list_engines", {})
     content = json.loads(res["content"][0]["text"])
@@ -73,7 +73,7 @@ def test_aos_list_engines_handler():
 def test_aos_invoke_engine_handler():
     fake = MagicMock()
     fake.invoke_engine.return_value = MagicMock(ok=True, data={"out": 1}, error=None)
-    with patch("mcp.protocol._get_hub", return_value=fake):
+    with patch("aos_mcp.protocol._get_hub", return_value=fake):
         proto = _new_proto()
         res = _call(proto, "aos_invoke_engine",
                     {"engine_id": "agnes", "capability": "inference.llm"})
@@ -84,7 +84,7 @@ def test_aos_invoke_engine_handler():
 
 def test_aos_invoke_engine_missing_id():
     fake = MagicMock()
-    with patch("mcp.protocol._get_hub", return_value=fake):
+    with patch("aos_mcp.protocol._get_hub", return_value=fake):
         proto = _new_proto()
         res = _call(proto, "aos_invoke_engine", {})
     content = json.loads(res["content"][0]["text"])

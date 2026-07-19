@@ -43,7 +43,7 @@ async def resume_run(run_id: str):
     """
     try:
         from kernel.approval.review_gate import get_review_gate
-        from mcp.protocol import _get_hub
+        from aos_mcp.protocol import _get_hub
         from core.fabric.capability import Capability
 
         gate = get_review_gate()

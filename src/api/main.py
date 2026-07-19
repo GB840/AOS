@@ -37,7 +37,7 @@ from kernel.plugins.code_team import (
     supported_languages,
 )
 from kernel.compliance import QualityGate
-from mcp import MCPMessage
+from aos_mcp import MCPMessage
 from core.pool import initialize_pools, close_pools
 from api.security import (
     APISecurityMiddleware,
@@ -520,7 +520,7 @@ async def startup_event():
     # best-effort，失败不阻断启动。
     try:
         from kernel.plugins.content_director import get_content_director
-        from mcp.protocol import _get_hub
+        from aos_mcp.protocol import _get_hub
         app.state.content_director = get_content_director(
             route_fn=lambda cap, payload: _get_hub().route(cap, payload))
         logger.info("content director mounted")
@@ -1671,7 +1671,7 @@ async def orchestrator_run(req: OrchestratorRunRequest):
     流水线逻辑在 OrchestrationChiplet，路由复用 FabricHub（单一可信源）。
     """
     try:
-        from mcp.protocol import _get_hub
+        from aos_mcp.protocol import _get_hub
         from core.fabric.capability import Capability
         hub = _get_hub()
         # 编排芯粒已在 build_fabric_hub 注册；此处幂等确保存在
@@ -1710,7 +1710,7 @@ async def orchestrator_render(req: OrchestratorRunRequest):
     降级为错误 surface，不伪造成功报告。流水线逻辑同 /api/orchestrator/run。
     """
     try:
-        from mcp.protocol import _get_hub
+        from aos_mcp.protocol import _get_hub
         from core.fabric.capability import Capability
         from kernel.plugins.orchestration_chiplet import render_orchestration_result
         hub = _get_hub()
@@ -1749,7 +1749,7 @@ async def route_predictor_diagnostics():
     对应 AOS 第 9 条「可验证即真理」——路由学了什么必须可查、不黑盒。
     """
     try:
-        from mcp.protocol import _get_hub
+        from aos_mcp.protocol import _get_hub
         hub = _get_hub()
         return hub._registry.predictor_diagnostics()
     except Exception as e:
