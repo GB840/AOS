@@ -96,6 +96,12 @@ _KEYWORD_CAP_MAP: List[Tuple[str, str]] = [
     ("分析", "cognition.reasoning"),
     ("规划", "cognition.planning"),
     ("总结", "inference.llm"),
+    ("汇总", "inference.llm"),
+    ("归纳", "inference.llm"),
+    ("概括", "inference.llm"),
+    ("整理", "inference.llm"),
+    ("生成报告", "inference.llm"),
+    ("写报告", "inference.llm"),
     ("写", "inference.llm"),
     ("起草", "inference.llm"),
     ("文本", "inference.llm"),
@@ -360,6 +366,13 @@ _SEQ_CONNECTIVES = {
     "and then", "after that", "afterwards", "then", "next", "finally",
 }
 
+# 收尾/汇总结束类动词：语义上必须吃前序结果、放在最后，绝不并入并行组。
+# 即便前面以「并/并且/and」连接，也强制为顺序步（如「搜索A、B、C 并汇总」→ 汇总顺序）。
+_FINALIZE_VERBS = ("汇总", "总结", "归纳", "概括", "整理", "生成报告", "写报告", "输出报告")
+
+# 列举量词尾巴（如「三个主题」「这几个」），拼到末项搜索词上无意义，剥掉让查询干净。
+_QUANTIFIER_RE = re.compile(r"(三个主题|这几个主题|这些主题|三个问题|几个方面|相关内容)$")
+
 # 边界分词：捕获顺序 + 并列两类连词。**长词在前**（"之后再">"之后"、
 # "and then">"and"、"并行地">"并行">"并且">"并"），避免被短词抢先匹配。
 _BOUNDARY_RE = re.compile(
@@ -400,10 +413,13 @@ def _split_with_boundaries(task: str) -> List[Dict[str, Any]]:
             pending_kind = "seq" if (pending_kind == "seq" or k == "seq") else "par"
             continue
         text = (tok or "").strip(" .;，。、\t")
+        text = _QUANTIFIER_RE.sub("", text).strip(" .;，。、\t")
         if not text:
             # 仅跳过空/纯标点碎片；单字列举项（如 "搜索A、B、C" 里的 B/C）是合法步骤
             continue
-        parts.append({"text": text, "kind": pending_kind})
+        # 收尾动词（汇总/总结…）强制顺序步：必须吃前序结果、放最后，不进并行组。
+        kind = "seq" if any(v in text for v in _FINALIZE_VERBS) else pending_kind
+        parts.append({"text": text, "kind": kind})
         pending_kind = None
     return parts
 

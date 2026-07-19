@@ -171,3 +171,30 @@ def test_autopilot_parallel_flag_on_activates(monkeypatch):
     assert planner == "heuristic"
     for i in groups[0]:
         assert "in" in steps[i] and "in_from" not in steps[i]
+
+
+def test_finalize_verb_breaks_parallel_run():
+    """收尾动词（汇总/总结）强制顺序：并行游程在它之前断掉，且汇总步是
+    inference.llm（非 web.search）、顺序衔接——『搜索A、B、C 并汇总』应是
+    [0,1,2] 并发 + 汇总顺序，而非把汇总错并进并行组。"""
+    steps, groups = plan_with_parallelism("分别搜索A、B、C 并汇总", _CAPS)
+    assert groups == [[0, 1, 2]]
+    # 并行组内均为 web.search 且独立输入（无并发竞态）
+    for i in groups[0]:
+        assert steps[i]["capability"] == "web.search"
+        assert "in" in steps[i]
+    # 余部（汇总/桥接）必为 inference.llm 且顺序衔接，绝不 web.search
+    tail = steps[3:]
+    assert tail
+    assert all(s["capability"] == "inference.llm" and s.get("in_from") == "previous"
+               for s in tail)
+    assert not any(s["capability"] == "web.search" for s in tail)
+
+
+def test_quantifier_phrase_stripped_from_search_term():
+    """列举量词尾巴（『三个主题』）从末项搜索词剥掉，查询干净。"""
+    steps, _g = plan_with_parallelism(
+        "分别搜索 人工智能、量子计算、区块链 三个主题并汇总", _CAPS)
+    search_steps = [s for s in steps if s["capability"] == "web.search"]
+    assert len(search_steps) == 3
+    assert all("三个主题" not in s["in"]["task"] for s in search_steps)
