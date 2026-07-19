@@ -1,13 +1,14 @@
-"""autopilot ↔ FabricHub 融合测试（双轨债⑤）。
+"""autopilot ↔ FabricHub 融合测试（双轨统一路由）。
 
 验证：
-- 默认（AOS_AUTOPILOT_USE_FABRICHUB 未设）_get_hub() 返回 None，走本地适配器；
-- 启用后 _route 的真实适配器调用改经 FabricHub.route() 统一派发
+- 默认启用 FabricHub 统一路由（_AUTOPILOT_USE_HUB=True），所有适配器调用经 hub 派发；
+- 显式关闭（AOS_AUTOPILOT_USE_FABRICHUB=0）时 _get_hub() 返回 None，走本地适配器；
+- _route 的真实适配器调用经 FabricHub.route() 统一派发
   （web.search / action.code_exec / inference.llm 三类）；
 - cognition.* 在 hub 路径归并到 inference.llm；
 - hub 不可用时 _dispatch 本地兜底仍调用对应惰性适配器。
 
-两种路径返回 InvokeResult(.data 同构)，autopilot 真实闸门/指标逻辑不受影响。
+两条路径返回 InvokeResult(.data 同构)，autopilot 真实闸门/指标逻辑不受影响。
 """
 from unittest import mock
 

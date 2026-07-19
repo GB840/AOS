@@ -82,7 +82,7 @@ _HUB_ATTEMPTED = False  # 避免重复尝试构造（失败后不再重试）
 
 
 def _get_hub():
-    """返回 FabricHub 单例（默认启用）；构造失败或显式关闭时返回 None（走本地适配器）。"""
+    """返回 FabricHub 单例；构造失败或显式关闭时返回 None（走本地适配器）。"""
     global _HUB, _HUB_ATTEMPTED
     if not _AUTOPILOT_USE_HUB:
         return None
@@ -109,7 +109,7 @@ def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
         # cognition.* 在 hub 注册表里统一归到 inference.llm 派发
         cap = "inference.llm" if capability in ("cognition.reasoning", "cognition.planning") else capability
         return hub.route(cap, payload)
-    # 本地兜底（默认）：保持零依赖 FabricHub 全量构造的快启动设计
+    # 本地兜底：hub 构造失败或显式关闭（AOS_AUTOPILOT_USE_FABRICHUB=0）时走此路径
     if capability == "web.search":
         return _get_search().invoke(InvokeRequest(capability=capability, payload={
             "query": payload.get("query") or payload.get("task") or payload.get("instruction") or "",
@@ -958,6 +958,10 @@ MAX_REFLECT_MEDIUM = 4   # 3-6 关键词
 MAX_REFLECT_COMPLEX = 8  # >6 关键词
 MAX_REFLECT = MAX_REFLECT_SIMPLE  # 默认/兼容引用（run() 会按任务复杂度覆盖）
 
+# 成本硬停：防止任务无限烧资源（时间 + LLM 调用次数双上限）
+MAX_DURATION_SEC = float(os.environ.get("AOS_AUTOPILOT_MAX_DURATION", "600"))  # 默认 10 分钟
+MAX_LLM_CALLS = int(os.environ.get("AOS_AUTOPILOT_MAX_LLM_CALLS", "20"))  # 默认 20 次
+
 
 def _max_reflect_for(task: str) -> int:
     """按任务复杂度算反思预算（关键词数近似任务难度）。"""
@@ -1063,6 +1067,21 @@ def _plan(task: str, planner: str):
         used_planner = "heuristic"
         plan_text = None
 
+    # 出门检：过滤掉 hub 实际未通电的能力步（避免执行必失败的步浪费反思轮次）
+    hub = _get_hub()
+    if hub is not None and steps:
+        try:
+            live_caps = set(hub._known_capabilities())
+            before = len(steps)
+            steps = [s for s in steps
+                     if s.get("capability") in live_caps
+                     or s.get("capability") in _CAPS]  # _CAPS 是 autopilot 自有能力，保留
+            filtered = before - len(steps)
+            if filtered:
+                logger.info("出门检：过滤 %d 个 hub 未通电能力步", filtered)
+        except Exception:  # noqa: BLE001
+            pass  # 出门检失败不阻塞规划
+
     if parallel_groups:
         parallel_groups = _cap_parallel_groups(parallel_groups, _max_parallel())
         if parallel_groups:
@@ -1093,6 +1112,20 @@ def _execute(task: str, steps: List[Dict[str, Any]], seed_context: Optional[Dict
         if isinstance(res, InvokeResult) and res.ok and isinstance(res.data, dict):
             if (res.data.get("real_metrics") or {}).get("is_real"):
                 recorded.append({"capability": capability, "out": res.data})
+                # 中间对齐检查：每 3 步验一次方向（纯本地计算，零延迟）
+                if len(recorded) % 3 == 0:
+                    acc_text = " ".join(
+                        str((r.get("out") or {}).get("content", ""))[:200]
+                        for r in recorded[-3:]
+                    )
+                    task_toks = _tokenize(task)
+                    out_toks = _tokenize(acc_text)
+                    if task_toks:
+                        overlap = len(task_toks & out_toks) / len(task_toks)
+                        if overlap < 0.05:
+                            logger.warning(
+                                "autopilot: 第 %d 步后方向可能偏了"
+                                "（关键词重叠 %.2f）", len(recorded), overlap)
         # 因果反思闭环：把每步真实成败+引擎喂进白盒蒸馏器（opt-in）
         _feed_distiller(capability, res)
         return res
@@ -1384,8 +1417,10 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
             steps = parse_plan_to_steps(text, _CAPS)
             if steps:
                 _attach_engine_hints(steps, causal_hints)
-                return _finalize_reflect(task, failed, text.strip(), steps, "ag2",
-                                         causal_hints=causal_hints)
+                if _is_meaningful_redesign(steps, failed, causal_hints):
+                    return _finalize_reflect(task, failed, text.strip(), steps, "ag2",
+                                             causal_hints=causal_hints)
+                logger.warning("ag2 反思产出假重设计，降级 ollama")
     except Exception as e:  # noqa: BLE001
         logger.warning("反思 ag2 失败，降级 ollama: %s", e)
     # 2) 本地 ollama（ag2 dead / 无 key 时的真实 LLM 反思后端）
@@ -1394,8 +1429,10 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
         steps = parse_plan_to_steps(text, _CAPS) if text else []
         if steps:
             _attach_engine_hints(steps, causal_hints)
-            return _finalize_reflect(task, failed, text.strip(), steps, "ollama",
-                                     causal_hints=causal_hints)
+            if _is_meaningful_redesign(steps, failed, causal_hints):
+                return _finalize_reflect(task, failed, text.strip(), steps, "ollama",
+                                         causal_hints=causal_hints)
+            logger.warning("ollama 反思产出假重设计，降级 heuristic")
     except Exception as e:  # noqa: BLE001
         logger.warning("反思 ollama 失败，降级 heuristic 重试: %s", e)
     # 3) heuristic 兜底：重试上轮失败步（不编造新计划，仅重发失败能力）
@@ -1406,6 +1443,29 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
                                  causal_hints=causal_hints)
     logger.warning("反思三后端均不可用且无失败步可重试，停止避免空转")
     return None
+
+
+def _is_meaningful_redesign(steps: List[Dict[str, Any]], failed: List[str],
+                            causal_hints: Dict[str, Any]) -> bool:
+    """检查重设计是否真的换了做法（防"换说法不换做法"的假反思）。
+
+    规则：新计划首步的 capability 若与某失败步相同，且无 engine_hint
+    （因果模型没建议换引擎），则判定为"原地重试伪装成反思"→ 拒绝。
+    有 engine_hint 说明因果模型选了不同引擎 → 放行（真换了做法）。
+    """
+    if not steps or not failed:
+        return True
+    # 从 failed 文本提取失败的 capability（格式："步骤N[cap] 失败/空转：..."）
+    failed_caps = set()
+    for f in failed:
+        m = re.match(r"步骤\d+\[([^\]]+)\]", f)
+        if m:
+            failed_caps.add(m.group(1))
+    first_cap = steps[0].get("capability", "")
+    if first_cap in failed_caps and "engine_hint" not in steps[0]:
+        logger.info("反思拒绝：首步 [%s] 与失败步相同且无引擎切换，判定为假反思", first_cap)
+        return False
+    return True
 
 
 def _finalize_reflect(task, failed, plan_text, steps, engine,
@@ -1591,6 +1651,15 @@ def _advance_cycle(s: _RunState) -> bool:
     """
     global _LAST_TEXT
     s.cycle += 1
+    # 成本硬停：超时间预算立即停止（防无限烧资源）
+    elapsed = time.time() - s.start
+    if elapsed > MAX_DURATION_SEC:
+        logger.warning("autopilot: 超时间预算 %.0fs > %.0fs，硬停", elapsed, MAX_DURATION_SEC)
+        s.reflection_log.append({
+            "cycle": s.cycle, "action": "budget_stop",
+            "reason": f"超时间预算 {elapsed:.0f}s > {MAX_DURATION_SEC:.0f}s",
+        })
+        return False
     _LAST_TEXT = ""  # 每轮重置占位符上下文（每轮独立执行）
     # 带上轮已成功产出作为起点（seed_context）
     seed = None
@@ -1831,6 +1900,44 @@ def _score_confidence(data: dict, steps: list, trace: list) -> dict:
     }
 
 
+def _check_goal_relevance(task: str, trace: list, threshold: float = 0.08) -> tuple:
+    """检查最终产出与原始目标的相关性（防"每步都成功但方向错了"）。
+
+    策略：从 trace 提取最终产出文本，与任务文本做关键词重叠度打分。
+    重叠度低于 threshold → 判定相关性不足（不是"完成"，是"做成了但做错了"）。
+    纯本地计算，不调 LLM，零额外延迟。
+
+    Returns: (is_relevant: bool, score: float)
+    """
+    # 提取最终产出文本
+    final_text = ""
+    for t in reversed(trace):
+        rm = t.get("real_metrics") or {}
+        is_real = rm.get("is_real")
+        if is_real is None:
+            is_real = t.get("real")
+        if not (is_real and t.get("ok")):
+            continue
+        out = t.get("out") or t.get("output") or {}
+        if isinstance(out, dict):
+            final_text = str(out.get("content") or out.get("output") or "")
+        else:
+            final_text = str(out)
+        if len(final_text.strip()) > 20:
+            break
+    if not final_text.strip():
+        return (True, 1.0)  # 无产出文本可判 → 不拦（交给其他闸门）
+
+    # 分词：任务关键词 vs 产出文本
+    task_tokens = _tokenize(task)
+    out_tokens = _tokenize(final_text[:2000])
+    if not task_tokens:
+        return (True, 1.0)
+    overlap = len(task_tokens & out_tokens)
+    score = overlap / len(task_tokens)
+    return (score >= threshold, round(score, 3))
+
+
 def _verdict(task: str, data: dict, trace: list, confidence: dict) -> dict:
     """求是引擎式完成判定：明确「完成 / 部分完成 / 未完成」，不模棱两可。
 
@@ -1856,6 +1963,12 @@ def _verdict(task: str, data: dict, trace: list, confidence: dict) -> dict:
 
     # 无明确产物要求：按真实步占比判定
     if fail == 0 and real_steps > 0:
+        # P0 闸门：每步都成功 ≠ 方向对。检查产出与目标的相关性。
+        relevant, rel_score = _check_goal_relevance(task, trace)
+        if not relevant:
+            return {"status": "部分完成 ⚠️", "deliverable": deliverable,
+                    "reason": f"所有步骤均成功，但产出与目标相关性低"
+                              f"（关键词重叠 {rel_score}），可能方向偏了"}
         return {"status": "完成 ✅", "deliverable": deliverable, "reason": ""}
     if real_steps > 0:
         return {"status": "部分完成 ⚠️", "deliverable": deliverable,
