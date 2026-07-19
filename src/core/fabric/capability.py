@@ -100,6 +100,9 @@ class Capability(str, Enum):
     BENCH_ISOLATE = "bench.isolate"    # 崩溃隔离专用合成能力（tests + gate_check）
     WORKFLOW_EXECUTE = "system.workflow"  # 编排芯粒：把多芯粒串成流水线（Day15-21）
     CONTENT_PRODUCE = "content.produce"   # 自主内容生产流水线（检索→分析→剧本→导演→工具→审核→发布）
+    # 防御型本地漏洞自查（只读、仅本机；仅用公开 CVE 元数据，绝不携带/运行 exploit）。
+    # 把「exploitarium 式零日情报」转化为对**自己环境**的巡检能力，而非攻击能力。
+    SECURITY_AUDIT = "security.audit"
 
 
 # ============================================================================
@@ -158,6 +161,8 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     # 内容生产导演：一句话目标 → 自主跑完整条内容生产链路（复用 hub 路由，
     # 本地优先/零成本；审核为 human-in-the-loop 停点，approve 才发布）。
     "content-director": [Capability.CONTENT_PRODUCE],
+    # security-audit：防御型本地漏洞自查（仅本机、只读、用公开 CVE 元数据）
+    "security-audit": [Capability.SECURITY_AUDIT],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -189,6 +194,8 @@ ENGINE_TIER: dict[str, str] = {
     "comfyui": TIER_HIGH,
     # content-director：本地编排（复用 hub 路由，零成本）→ 高档
     "content-director": TIER_HIGH,
+    # security-audit：本地只读漏洞自查（零成本/最强隐私/纯防御）→ 高档
+    "security-audit": TIER_HIGH,
 }
 
 

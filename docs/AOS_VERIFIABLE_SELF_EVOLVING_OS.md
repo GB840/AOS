@@ -77,6 +77,7 @@ AOS 不只是"又一个 agent 框架"。它的真正差异化是：**把"失败�
 | 白盒蒸馏 → 沉底引擎 + 实时路由接入 | ✅ 已落地 | `kernel/evolution_distiller.py`（含运行时喂样本）+ `fabric_hub.py`（`_reorder_by_distiller` opt-in）+ `tests/test_distiller_routing.py` |
 | 端到端自进化演示闭环 | ✅ 已落地 | `examples/self_evolving_demo.py` + `tests/test_self_evolving_loop.py` |
 | 抗复合失败基准测试 | ✅ 已落地 | `examples/resilience_benchmark.py` + `tests/test_resilience_gate.py` |
+| 防御型本地漏洞自查（security.audit） | ✅ 已落地 | `core/fabric/adapters/security_audit_adapter.py` + 能力 `security.audit` 接入路由 + `tests/test_security_audit_adapter.py`；把公开 CVE 情报转译成**对自家环境的只读巡检**（不含/不运行任何 exploit，外部目标拒绝） |
 
 ---
 

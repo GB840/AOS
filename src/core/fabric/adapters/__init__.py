@@ -123,6 +123,11 @@ try:
 except Exception:  # noqa: BLE001
     RemotionAdapter = None
 
+try:
+    from .security_audit_adapter import SecurityAuditAdapter
+except Exception:  # noqa: BLE001 - 缺依赖则跳过，不拖垮内核
+    SecurityAuditAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -148,6 +153,7 @@ __all__ = [
         "VLMAdapter",
         "VideoMakerAdapter",
         "RemotionAdapter",
+        "SecurityAuditAdapter",
     )
     if globals().get(n) is not None
 ]

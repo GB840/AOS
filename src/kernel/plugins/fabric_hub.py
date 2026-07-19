@@ -47,6 +47,7 @@ from core.fabric.adapters import (
     VLMAdapter,
     VideoMakerAdapter,
     RemotionAdapter,
+    SecurityAuditAdapter,
 )
 from core.fabric.capability import Capability
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
@@ -147,6 +148,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         VLMAdapter,            # 视觉理解（VISION_UNDERSTAND）：云端视觉 API / 本地 ollama MiniCPM-V-2
         VideoMakerAdapter,     # 本地视频生成（MEDIA_VIDEO）：edge-tts + PIL + ffmpeg，零成本
         RemotionAdapter,       # 高质量数据可视化视频渲染（video.remotion）：Remotion CLI 胶水
+        SecurityAuditAdapter,  # 防御型本地漏洞自查（security.audit）：只读、仅本机、用公开 CVE 元数据
     )
     if a is not None
 )
