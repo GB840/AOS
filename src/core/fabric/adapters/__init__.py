@@ -74,6 +74,11 @@ except Exception:  # noqa: BLE001
     WebFetchAdapter = None
 
 try:
+    from .crawl4ai_adapter import Crawl4AIAdapter
+except Exception:  # noqa: BLE001 - 缺依赖（crawl4ai）则跳过，不拖垮内核
+    Crawl4AIAdapter = None
+
+try:
     from .threejs_adapter import ThreejsAdapter
 except Exception:  # noqa: BLE001
     ThreejsAdapter = None
@@ -176,6 +181,7 @@ __all__ = [
         "RefineAdapter",
         "SearchAdapter",
         "WebFetchAdapter",
+        "Crawl4AIAdapter",
         "ThreejsAdapter",
         "STTAdapter",
         "TTSAdapter",

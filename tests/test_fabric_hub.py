@@ -37,19 +37,30 @@ _EXPECTED_ENGINES = {
     "code-exec",
     "file-io",
     "web-fetch",
+    "web-crawl",       # crawl4ai 网页转 LLM 友好 Markdown（需 pip install crawl4ai）
     "orchestrator",
     "codebase-memory-mcp",
-    "threejs",     # 交互式 3D 场景
-    "stt",         # 语音识别
-    "tts",         # 语音合成
-    "lnn",         # 液态神经网络
-    "lfm2",        # LFM2 轻量 LLM
-    "scripts",     # 动态脚本执行
-    "minicpm_o",  # 全双工全模态适配器（VOICE_OMNI，高中低三级档位）
-    "vlm",          # 视觉理解适配器（a7ef9b2 注册）
-    "desktop-touch",  # 桌面触控 MCP
-    "omni-video",   # 全模态视频适配器
-    "video-use",    # 视频操作 MCP
+    "threejs",
+    "stt",
+    "tts",
+    "lnn",
+    "lfm2",
+    "scripts",
+    "minicpm_o",
+    "vlm",
+    "desktop-touch",
+    "omni-video",
+    "video-use",
+    "cast",
+    "code-team",
+    "comfyui",
+    "content-director",
+    "content-marketer",
+    "echo",
+    "refine",
+    "remotion",
+    "security-audit",
+    "video-maker",
 }
 
 

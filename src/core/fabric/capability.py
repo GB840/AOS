@@ -65,6 +65,7 @@ class Capability(str, Enum):
     # Search (key-free web search plane, e.g. DuckDuckGo / ddgs)
     WEB_SEARCH = "web.search"
     WEB_FETCH = "web.fetch"  # fetch & extract content from a URL
+    WEB_CRAWL = "web.crawl"  # 网页爬取并转 LLM 友好 Markdown（crawl4ai）
 
     # Voice I/O (方案三：语音作为内核的一个可替换芯粒，而非独立助手)
     # 引擎无关：whisper.cpp / faster-whisper / Web Speech API 都可服务 STT；
@@ -205,6 +206,7 @@ ENGINE_TIER: dict[str, str] = {
     # 低：轻量兜底（免费 / 最小依赖）
     "web-search": TIER_LOW,      # 含免费搜索源（兜底，质量一般）
     "web-fetch": TIER_LOW,
+    "web-crawl": TIER_MEDIUM,    # crawl4ai 网页转 Markdown（本地 chromium，质量高于纯 fetch）
     # minicpm_o 由适配器实例按配置返回自身档位（覆盖此默认）
     "minicpm_o": TIER_MEDIUM,
     # vlm：视觉理解平面。无 GPU 时默认云端（中档），本地 ollama 为未来/兜底（高档零成本）

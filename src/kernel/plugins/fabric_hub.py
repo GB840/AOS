@@ -20,7 +20,7 @@ import json
 import time
 from pathlib import Path
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from core.fabric import FabricRegistry
 from core.fabric.route_runtime import build_route_runtime
@@ -37,6 +37,7 @@ from core.fabric.adapters import (
     OpenClawAdapter,
     SearchAdapter,
     WebFetchAdapter,
+    Crawl4AIAdapter,
     ThreejsAdapter,
     STTAdapter,
     TTSAdapter,
@@ -136,6 +137,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         LangfuseAdapter,
         SearchAdapter,       # 免 key 真实联网搜索（DuckDuckGo / ddgs，"dgg 库"）
         WebFetchAdapter,     # URL 内容抓取（stdlib urllib，零依赖）
+        Crawl4AIAdapter,     # 网页爬取转 LLM 友好 Markdown（crawl4ai，需 pip install）
         AgnesAdapter,        # OpenAI-compatible 多模态平面：文本/图像/视频（需 AGNES_API_KEY）
         CodeExecutionAdapter,  # 本地沙箱代码执行（subprocess 隔离，零依赖）
         FileAdapter,           # 文件读写（workspace 内，路径遍历防护）
