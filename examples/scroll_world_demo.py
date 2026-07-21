@@ -104,12 +104,35 @@ def load_scenes(args) -> list[dict]:
     return build_scenes(args.theme or "未来城市", max(1, args.scenes))
 
 
-def gen_asset(hub, capability: str, payload: dict, timeout: int = 240) -> dict:
-    """经 FabricHub 路由调 media-gen，返回 InvokeResult.data（含 url）。"""
-    res = hub.route(capability, payload)
+def _extract_url(data, is_video: bool):
+    """从适配器返回里兼容提取资产 URL（兼容 media-gen 的 data.url 及其他后端形状）。"""
+    if not isinstance(data, dict):
+        return None
+    for key in ("url", "image_url", "video_url"):
+        if data.get(key):
+            return data[key]
+    nested = data.get("data")
+    if isinstance(nested, list) and nested and isinstance(nested[0], dict):
+        item = nested[0]
+        return item.get("url") or item.get("image_url") or item.get("video_url")
+    return None
+
+
+def gen_asset(hub, capability: str, payload: dict, engine: str = "media-gen") -> str:
+    """经 FabricHub 直打 media-gen（国产智谱），返回资产 URL 字符串。
+
+    钉死 engine=media-gen，避免 route() 按档位误选 agnes 等外部引擎
+    （其返回结构无 url 字段会致 KeyError）。缺 key / 失败如实抛错。
+    """
+    if hub is None:
+        raise RuntimeError("dry-run 模式不会调用 gen_asset")
+    res = hub.invoke_engine(engine, capability, payload)
     if not res.ok:
-        raise RuntimeError(f"{capability} 生成失败: {res.error}")
-    return res.data
+        raise RuntimeError(f"{capability} 生成失败({engine}): {res.error}")
+    url = _extract_url(res.data, is_video=(capability == CAP_VIDEO))
+    if not url:
+        raise RuntimeError(f"{capability} 返回成功但无 url({engine}): {res.data}")
+    return url
 
 
 def _asset_ext(url: str, default: str = "png") -> str:
@@ -153,39 +176,49 @@ def generate_assets(hub, scenes: list[dict], out_dir: str,
     assets_dir = os.path.join(out_dir, "assets")
     os.makedirs(assets_dir, exist_ok=True)
     rendered = []
+    n = len(scenes)
+    fails = 0
     for i, sc in enumerate(scenes):
         rel_img = f"assets/scene_{i+1}.png"
         img_path = os.path.join(out_dir, rel_img)
         if dry_run:
             _placeholder_svg(img_path, i, sc.get("title", f"Scene {i+1}"))
         else:
-            print(f"[图] 场景 {i+1}/{len(scenes)}: {sc['image_prompt'][:40]}...")
-            data = gen_asset(hub, CAP_IMAGE, {
-                "mode": "image",
-                "prompt": sc["image_prompt"],
-                "size": DEFAULT_IMAGE_SIZE,
-            })
-            ext = _asset_ext(data["url"])
-            rel_img = f"assets/scene_{i+1}.{ext}"
-            img_path = os.path.join(out_dir, rel_img)
-            download(data["url"], img_path)
-            print(f"     -> {rel_img}")
+            try:
+                print(f"[图] 场景 {i+1}/{n}: {sc['image_prompt'][:38]}...")
+                url = gen_asset(hub, CAP_IMAGE, {
+                    "mode": "image",
+                    "prompt": sc["image_prompt"],
+                    "size": DEFAULT_IMAGE_SIZE,
+                })
+                ext = _asset_ext(url)
+                rel_img = f"assets/scene_{i+1}.{ext}"
+                img_path = os.path.join(out_dir, rel_img)
+                download(url, img_path)
+                print(f"     -> {rel_img}")
+            except Exception as e:
+                fails += 1
+                print(f"     ⚠️ 出图失败: {e}（用占位图续跑）")
+                _placeholder_svg(img_path, i, sc.get("title", f"Scene {i+1}") + " · 出图失败")
 
         rel_vid = None
         if (not dry_run) and (with_video or sc.get("video")):
-            print(f"[视频] 场景 {i+1}: {sc['video_prompt'][:40]}...")
-            vdata = gen_asset(hub, CAP_VIDEO, {
-                "mode": "video",
-                "prompt": sc["video_prompt"],
-                "size": DEFAULT_VIDEO_SIZE,
-                "quality": "speed",
-                "duration": 5,
-                "with_audio": False,
-                "poll_timeout": 240,
-            })
-            rel_vid = f"assets/scene_{i+1}.mp4"
-            download(vdata["url"], os.path.join(out_dir, rel_vid))
-            print(f"     -> {rel_vid}")
+            try:
+                print(f"[视频] 场景 {i+1}/{n}: {sc['video_prompt'][:38]}...")
+                vurl = gen_asset(hub, CAP_VIDEO, {
+                    "mode": "video",
+                    "prompt": sc["video_prompt"],
+                    "size": DEFAULT_VIDEO_SIZE,
+                    "quality": "speed",
+                    "duration": 5,
+                    "with_audio": False,
+                    "poll_timeout": 240,
+                })
+                rel_vid = f"assets/scene_{i+1}.mp4"
+                download(vurl, os.path.join(out_dir, rel_vid))
+                print(f"     -> {rel_vid}")
+            except Exception as e:
+                print(f"     ⚠️ 出视频失败: {e}（本幕仅用图）")
 
         rendered.append({
             "title": sc.get("title", f"第{i+1}幕"),
@@ -193,6 +226,10 @@ def generate_assets(hub, scenes: list[dict], out_dir: str,
             "image": rel_img,
             "video": rel_vid,
         })
+
+    if fails:
+        print(f"\n⚠️ 有 {fails} 个场景出图失败（已用占位图），请检查 ZHIPU_API_KEY / 配额 / 网络。")
+
     return rendered
 
 
@@ -333,10 +370,10 @@ def main() -> int:
         _load_dotenv(os.path.join(_ROOT, ".env"))
         from kernel.plugins.fabric_hub import FabricHub
         hub = FabricHub()
-        # 静态探测：media.image 是否有 live 供给方（不触发网络请求）
-        if hub.resolve_engine(CAP_IMAGE) is None and not os.environ.get("ZHIPU_API_KEY"):
+        # 钉死 media-gen（国产智谱），其 live 前提是有 ZHIPU_API_KEY
+        if not os.environ.get("ZHIPU_API_KEY"):
             print("[警告] 未检测到 ZHIPU_API_KEY，media-gen 不可用。"
-                  "请先配置 .env，或用 --dry-run 离线验证。", file=sys.stderr)
+                  "请先在 .env 配置，或用 --dry-run 离线验证。", file=sys.stderr)
             return 2
     else:
         hub = None  # 占位，dry-run 不调用
