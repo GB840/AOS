@@ -154,7 +154,12 @@ def load_scenes(args) -> list[dict]:
 
 
 def _extract_url(data, is_video: bool):
-    """从适配器返回里兼容提取资产 URL（兼容 media-gen 的 data.url 及其他后端形状）。"""
+    """从适配器返回里兼容提取资产 URL（统一收敛 media 四态契约）。
+
+    优先级 url → image_url → video_url → data[].url → output(本地) → output_path(本地)，
+    与 core.fabric.adapter.extract_media_url 同策略，避免某 provider 返回形状不同导致
+    KeyError / 静默 None。
+    """
     if not isinstance(data, dict):
         return None
     for key in ("url", "image_url", "video_url"):
@@ -164,6 +169,10 @@ def _extract_url(data, is_video: bool):
     if isinstance(nested, list) and nested and isinstance(nested[0], dict):
         item = nested[0]
         return item.get("url") or item.get("image_url") or item.get("video_url")
+    # 兼容 video-maker 的 output / comfyui 的 output_path（统一契约降级）
+    for key in ("output", "output_path"):
+        if data.get(key):
+            return data[key]
     return None
 
 

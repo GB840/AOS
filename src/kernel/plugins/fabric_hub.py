@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from core.fabric import FabricRegistry
 from core.fabric.route_runtime import build_route_runtime
-from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult, normalize_media_data
 from core.fabric.adapters import (
     AG2Adapter,
     AgnesAdapter,
@@ -466,13 +466,17 @@ class FabricHub:
                         fm.record_success()
                     except Exception:  # noqa: BLE001
                         pass
+                # 媒体能力统一契约投影：保证 data 同时含 url/output/output_path
+                # 三键（与 core.fabric.adapter.normalize_media_data 一致），使所有
+                # 消费方只需读 `url` 一个键即可，根除历史四态分裂导致的静默失败。
+                res_data = normalize_media_data(res.data) if cap_str.startswith("media.") else res.data
                 # 回填真实执行引擎 id（理念6：诚实呈现「哪个引擎跑的」）。
                 # 优先采纳适配器回报的 engine_id——当某适配器内部回落到别的
                 # 引擎（如 code-exec 离线回落 code-team）时，被回填的是真正
                 # 干活的引擎，而非 route 选中的派发壳；适配器未标注时才退回
                 # route 选中的 eid。下游 trace / A2UI / 预测器观测据此拿真相。
                 return InvokeResult(
-                    ok=True, data=res.data, error=res.error,
+                    ok=True, data=res_data, error=res.error,
                     engine_id=res.engine_id or eid)
             self._failures[eid] = time.perf_counter()
             self._errors[eid] = res.error or "ok=False"

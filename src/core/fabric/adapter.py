@@ -151,3 +151,65 @@ def extract_text(out: Any) -> str:
         if urls:
             text = "\n".join(f"链接: {u}" for u in dict.fromkeys(urls))
     return text
+
+
+def extract_media_url(out: Any) -> str:
+    """从 media.image / media.video 产出中提取 web 可引用地址。
+
+    统一收敛历史上四态分裂的 media 返回契约：
+      - video-maker  → data["output"]      （本地绝对路径）
+      - comfyui      → data["output_path"]  （本地绝对路径）
+      - media-gen    → data["url"]          （远端 url）
+      - agnes        → data["url"]          （远端 url）
+    消费方统一调用本函数，不再因契约不同而静默失败。
+    优先级：url → image_url → video_url → data[].url → output → output_path。
+    返回空串表示确实无媒体地址（调用方应诚实失败，而非编造）。
+    """
+    if out is None:
+        return ""
+    data = out.data if hasattr(out, "data") else out
+    if not isinstance(data, dict):
+        return ""
+    for key in ("url", "image_url", "video_url"):
+        v = data.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    nested = data.get("data")
+    if isinstance(nested, list):
+        for item in nested[:8]:
+            if isinstance(item, dict) and item.get("url"):
+                return item["url"]
+    for key in ("output", "output_path"):
+        v = data.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def normalize_media_data(data: dict | None) -> dict:
+    """把任一 media 适配器的原生 data 投影成统一契约（加键不删键）。
+
+    保证返回 dict 同时含 `url` / `output` / `output_path` 三键：
+      - url：web 可引用地址优先，无则用本地路径降级（消费方若为本地脚本可直用）
+      - output / output_path：本地路径优先，无则用 url 兜底
+    原始字段全部保留，下游按自身需要读任意键。供 FabricHub.route 出口对
+    MEDIA_* 结果统一投影，使所有消费方只需读 `url` 一个键即可。
+    """
+    data = dict(data or {})
+    url = (
+        data.get("url")
+        or data.get("image_url")
+        or data.get("video_url")
+        or next(
+            (it.get("url") for it in data.get("data", []) if isinstance(it, dict) and it.get("url")),
+            None,
+        )
+    )
+    local = data.get("output") or data.get("output_path")
+    if not data.get("url"):
+        data["url"] = url or local or ""
+    if not data.get("output"):
+        data["output"] = local or url or ""
+    if not data.get("output_path"):
+        data["output_path"] = local or url or ""
+    return data

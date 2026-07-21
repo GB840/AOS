@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult, extract_media_url
 from core.fabric.capability import Capability, TIER_HIGH
 
 logger = logging.getLogger(__name__)
@@ -249,9 +249,35 @@ class ContentMarketerAdapter(BaseAgentAdapter):
                 "size": size,
             })
             data = self._unwrap(res)
-            if data.get("output"):
-                return data.get("output", ""), float(data.get("duration", 0))
+            # 统一契约读取：兼容 media-gen(url) / video-maker(output) /
+            # comfyui(output_path) 四态分裂，不再因落到非 video-maker 而静默失败。
+            addr = extract_media_url(data)
+            if addr:
+                local = self._localize_video(addr, task_id)
+                if local:
+                    return local, float(data.get("duration", 0))
         except Exception as e:
             logger.warning("视频生成失败: %s", e)
 
         return "", 0.0
+
+    def _localize_video(self, addr: str, task_id: str) -> str:
+        """把媒体地址落地本地：http(s) 下载到统一 content 目录；本地路径原样返回。
+
+        消除 media-gen 远端临时 url 的 404 风险，并确保 content-marketer 的最终
+        交付物是一段本地视频文件（而非可能过期的外链）。
+        """
+        if addr.startswith(("http://", "https://")):
+            import urllib.request
+            dest = os.path.join(_output_dir(), f"content_{task_id}.mp4")
+            try:
+                urllib.request.urlretrieve(addr, dest)
+                if os.path.getsize(dest) > 0:
+                    return dest
+            except Exception as e:  # noqa: BLE001
+                logger.warning("下载视频失败: %s", e)
+            return ""
+        # 本地路径：存在即可用
+        if os.path.exists(addr):
+            return addr
+        return ""
