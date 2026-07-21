@@ -297,6 +297,10 @@ class ContentGuard:
             "email":        lambda m: m.group()[0] + "***@" + m.group().split("@")[-1],
             "api_key_bearer": lambda m: m.group()[:8] + "..." + m.group()[-4:],
             "qq_number":    lambda m: m.group()[:3] + "****" + m.group()[-2:],
+            # 以下两项此前仅在 SENSITIVE_PATTERNS 检测、却未进 replacements，
+            # 导致 check() 报敏感但 _redact() 不遮、明文残留于 redacted 字段（PII 泄露）。
+            "ip_address":   lambda m: m.group().rsplit(".", 1)[0] + ".***",
+            "wechat_id":    lambda m: m.group()[:5] + "****" + m.group()[-4:],
         }
         for name, pattern in self._sensitive.items():
             if name in replacements:
