@@ -53,6 +53,7 @@ from core.fabric.adapters import (
     IdaProMcpAdapter,
 )
 from core.fabric.capability import Capability
+from .zhipu_chat import zhipu_chat
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
 from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
@@ -1422,6 +1423,15 @@ class FabricHub:
                     messages.append({"role": "assistant", "content": h["response"][:2000]})
             messages.append({"role": "user", "content": message})
 
+            # 通电优先：智谱直连（已验证可用，秒级返回），保证主聊天可用；
+            # 不依赖可能 hang/未部署的外部推理路由（openclaw 网关/litellm/agnes）。
+            zr = zhipu_chat(messages, max_tokens)
+            if zr:
+                history.append({"task": message, "response": zr})
+                _save_session(session_id, history)
+                return {"response": zr, "session_id": session_id,
+                        "engine": "zhipu-direct", "ok": True}
+
             # 路由到推理引擎（复用现有 inference.llm 芯粒，级联兜底）
             res = self.route("inference.llm", {
                 "messages": messages,
@@ -1455,6 +1465,14 @@ class FabricHub:
                     "engine": engine, "ok": True}
         except Exception as e:
             _LOG.warning("FabricHub.chat 失败: %s", e)
+            # 末级诚实兜底：路由抛异常时同样尝试智谱直连，保证主聊天可用。
+            try:
+                zr = zhipu_chat(messages, max_tokens)
+                if zr:
+                    return {"response": zr, "session_id": session_id,
+                            "engine": "zhipu-fallback", "ok": True}
+            except Exception:
+                pass
             return {"response": f"[FabricHub chat error: {e}]",
                     "session_id": session_id, "engine": None, "ok": False}
 
