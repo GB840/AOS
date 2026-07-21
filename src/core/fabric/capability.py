@@ -167,8 +167,6 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     # route to by capability when configured with AGNES_API_KEY.
     "agnes": [
         Capability.LLM_GATEWAY,
-        Capability.MEDIA_IMAGE,
-        Capability.MEDIA_VIDEO,
     ],
     # VLM 视觉理解平面：云端视觉 API 或本地 ollama MiniCPM-V-2（无 GPU 时走云端）
     "vlm": [Capability.VISION_UNDERSTAND],

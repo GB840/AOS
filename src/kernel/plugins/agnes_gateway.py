@@ -4,7 +4,7 @@
 使 Agnes 的 agnes-2.0-flash 可作为内核聊天后端挂入（与 litellm 平级）。
 内核零依赖，本文件才 import 具体实现。
 
-注意：Agnes 的「图像/视频」能力走 fabric 能力路由（media.image / media.video），
+注意：Agnes 现为纯 LLM Gateway（仅 chat/inference.llm），图像/视频已退出 fabric 能力路由、改由 media-gen（国产）/comfyui（本地）服务；
 本网关只覆盖 chat 平面（inference.llm）。
 """
 from __future__ import annotations

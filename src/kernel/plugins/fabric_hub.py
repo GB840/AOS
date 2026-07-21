@@ -997,8 +997,8 @@ class FabricHub:
         """把本地 ComfyUI 视觉生产引擎接成可路由芯粒（media.image / media.video）。
 
         此前 ComfyUI 只在 legacy brain 栈里是个 Skill，FabricHub 新栈的
-        media.image/media.video 只路由给云端 agnes，本地那台 ComfyUI 没被新栈
-        看见。接进来后：
+        media.image/media.video 路由给本地 ComfyUI（HIGH 优先）与国产 media-gen（MEDIUM 兜底），
+        本地那台 ComfyUI 已被新栈看见并优先。接进来后：
         - ``hub.route("media.image", {prompt})`` 一句话可达、自动出图；
         - health_report 列出 comfyui 为 live（探 /system_info，没起如实 False）；
         - 真实流量喂路由预测器；享引擎透明化（engine_id="comfyui"）；

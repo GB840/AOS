@@ -57,7 +57,7 @@ def _derive_result_url(base: str, explicit: Optional[str]) -> str:
 
 
 class AgnesAdapter(BaseAgentAdapter):
-    """OpenAI-compatible 多模态适配器：文本 / 图像 / 视频。"""
+    """OpenAI-compatible LLM 适配器：文本为主（图像/视频便捷方法保留但未注册为路由能力，图/视频改由 media-gen/comfyui 服务）。"""
 
     # 隔离进子进程时，必须显式回灌的密钥类环境变量（subprocess_iso 默认全剥离）。
     # 单一事实源：和 __init__ 里的 os.environ.get 读取保持一致，新增 key 改这一处。
@@ -84,7 +84,7 @@ class AgnesAdapter(BaseAgentAdapter):
         return "agnes"
 
     def advertise_capabilities(self) -> list[Capability]:
-        return [Capability.LLM_GATEWAY, Capability.MEDIA_IMAGE, Capability.MEDIA_VIDEO]
+        return [Capability.LLM_GATEWAY]
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         cap = req.capability.value if hasattr(req.capability, "value") else str(req.capability)

@@ -2,7 +2,7 @@
 AOS 能力路由枢纽。
 
 此前 ComfyUI 只是 legacy brain 栈里的一个 Skill（src/skills/comfyui.py），
-FabricHub 新栈里 ``media.image`` / ``media.video`` 只路由给云端 agnes，
+FabricHub 新栈里 ``media.image`` / ``media.video`` 路由给本地 ComfyUI（HIGH 优先）与国产 media-gen（MEDIUM 兜底），不再默认走云端 agnes，
 本地那台已经跑起来的 ComfyUI 根本没被新栈看见、也没法被一句话自动调起。
 
 本适配器让：

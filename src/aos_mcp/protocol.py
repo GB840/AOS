@@ -252,7 +252,7 @@ class MCPProtocol:
         self.register_tool(
             MCPTool(
                 name="aos_route",
-                description="按能力(capability)把任务委派给首个 live 引擎，如 inference.llm→agnes/litellm, media.image→agnes, memory.semantic→mem0。对应 FabricHub.route()。",
+                description="按能力(capability)把任务委派给首个 live 引擎，如 inference.llm→agnes/litellm, media.image→media-gen/comfyui（国产/本地，不再默认 agnes）, memory.semantic→mem0。对应 FabricHub.route()。",
                 input_schema={
                     "type": "object",
                     "properties": {
