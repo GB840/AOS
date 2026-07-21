@@ -14,7 +14,7 @@ sys.path.insert(0, "D:/AOS/src")
 import core.fabric.adapters.agnes_adapter as mod
 from core.fabric.adapters.agnes_adapter import AgnesAdapter, AGNES_DEFAULTS
 from core.fabric.adapter import InvokeRequest
-from core.fabric.capability import Capability
+from core.fabric.capability import Capability, ENGINE_CAPABILITY_MAP
 
 
 def _resp(json_body: dict, status: int = 200):
@@ -61,33 +61,19 @@ def test_chat_builds_correct_request():
     assert kwargs["json"]["messages"] == [{"role": "user", "content": "你好"}]
 
 
-def test_image_returns_items():
-    M = _req_mock()
+def test_generate_image_rejected_after_media_exit():
+    """收圆后 agnes 已退出 media 供给，便捷方法应诚实拒绝而非连不可达云端。"""
     a = AgnesAdapter(api_key="sk-test")
-    with mock.patch.object(mod, "_requests", return_value=M):
-        r = a.generate_image("一只猫", model="agnes-image-2.0-flash")
-    assert r.ok
-    assert r.data["images"] == [{"url": "https://img/1.png"}]
-    args, kwargs = M.post.call_args
-    assert args[0].endswith("/images/generations")
-    assert kwargs["json"]["model"] == "agnes-image-2.0-flash"
-    assert kwargs["json"]["prompt"] == "一只猫"
+    r = a.generate_image("一只猫", model="agnes-image-2.0-flash")
+    assert r.ok is False
+    assert "已退出 media" in (r.error or "")
 
 
-def test_video_async_poll():
-    M = _req_mock()
+def test_generate_video_rejected_after_media_exit():
     a = AgnesAdapter(api_key="sk-test")
-    with mock.patch.object(mod, "_requests", return_value=M):
-        r = a.generate_video("海上日出")
-    assert r.ok
-    assert r.data["video_id"] == "vid_abc"
-    assert r.data["url"] == "https://vid/1.mp4"
-    # 先 POST /videos，再 GET 结果端点
-    assert M.post.called
-    assert M.get.called
-    get_args, get_kwargs = M.get.call_args
-    assert "video_id" in get_kwargs["params"]
-    assert get_kwargs["params"]["video_id"] == "vid_abc"
+    r = a.generate_video("海上日出")
+    assert r.ok is False
+    assert "已退出 media" in (r.error or "")
 
 
 def test_health_no_key_is_dead(monkeypatch):
@@ -118,23 +104,37 @@ def test_unsupported_capability_isolated():
     assert r.ok is False
 
 
-def test_advertises_three_capabilities():
+def test_advertises_only_llm_gateway():
+    """收圆后 agnes 只声明 LLM Gateway，不再声明 media.image / media.video。"""
     a = AgnesAdapter(api_key="sk-test")
     caps = {c.value if hasattr(c, "value") else str(c) for c in a.advertise_capabilities()}
-    assert caps == {"inference.llm", "media.image", "media.video"}
+    assert caps == {"inference.llm"}
 
 
-def test_registered_in_fabric_hub():
-    """Agnes 作为能力枢纽引擎被登记，且可按 media.image 路由到它。"""
-    with mock.patch.object(AgnesAdapter, "health", return_value=True):
-        from kernel.plugins.fabric_hub import FabricHub
-        hub = FabricHub(adapters=(AgnesAdapter,))
-        advertised = hub.advertised()
-        assert "agnes" in advertised
-        assert "media.image" in advertised["agnes"]
-        assert "media.video" in advertised["agnes"]
-        assert hub.resolve_engine("media.image") == "agnes"
-        assert hub.resolve_engine("media.video") == "agnes"
+def test_invoke_media_rejected():
+    """invoke 直打 media 能力应诚实拒绝（而非连不可达 agnes 云端 503 假活）。"""
+    a = AgnesAdapter(api_key="sk-test")
+    r = a.invoke(InvokeRequest(capability=Capability.MEDIA_IMAGE, payload={"prompt": "x"}))
+    assert r.ok is False
+    assert "已退出 media" in (r.error or "")
+    r2 = a.invoke(InvokeRequest(capability=Capability.MEDIA_VIDEO, payload={"prompt": "x"}))
+    assert r2.ok is False
+    assert "已退出 media" in (r2.error or "")
+
+
+def test_registered_in_fabric_hub_no_media():
+    """agnes 在能力枢纽里只登记 LLM Gateway，不登记 media（收圆结论）。
+
+    用静态 ENGINE_CAPABILITY_MAP 校验——它正是 fabric_hub 路由的依据，
+    无需拉起完整 FabricHub（其重型 import 会让单测跑 ~2 分钟，见 cognee/
+    litellm/google.genai 等依赖加载）。test_media_routing 也守同一结论，
+    此处从 agnes 适配器视角再断言一次，避免误把 media 能力加回。
+    """
+    caps = ENGINE_CAPABILITY_MAP["agnes"]
+    assert Capability.LLM_GATEWAY in caps
+    # 收圆后 agnes 不再声明 media 能力
+    assert Capability.MEDIA_IMAGE not in caps
+    assert Capability.MEDIA_VIDEO not in caps
 
 
 def test_agnes_is_default_gateway_when_key_present():
