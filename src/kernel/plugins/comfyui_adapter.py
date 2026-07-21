@@ -21,7 +21,8 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any
+import shutil
+from typing import Any, Optional
 
 import requests
 
@@ -107,11 +108,15 @@ class ComfyUIAdapter(BaseAgentAdapter):
 
             ok = bool(out.get("success", False))
             result = out.get("result") or {}
+            # 资产落地：ComfyUI 输出在它私有目录（相对 cwd 且有歧义），
+            # 拷贝到 AOS 拥有的 out/comfyui/，让网页/下游能稳定引用。
+            output_path = self._localize_asset(result.get("output_path"))
             # 调用方直接拿 output_path，无需扒两层嵌套。
             data = {
                 "action": action,
                 "action_name": out.get("action_name"),
-                "output_path": result.get("output_path"),
+                "output_path": output_path,
+                "url": output_path,
                 "mode": out.get("mode"),
                 "comfyui_available": out.get("comfyui_available"),
                 "detail": result,
@@ -128,6 +133,30 @@ class ComfyUIAdapter(BaseAgentAdapter):
                 error=f"comfyui invoke failed: {type(e).__name__}: {e}",
                 engine_id=self.engine_id,
             )
+
+    @staticmethod
+    def _localize_asset(src_path: Optional[str]) -> Optional[str]:
+        """把 ComfyUI 私有目录的输出落地到 AOS 拥有的 out/comfyui/。
+
+        返回 AOS 目录下的绝对路径（网页/下游可稳定引用）；src 不存在或拷贝
+        失败时退回原始路径的 abspath，不静默丢资产。I/O 全程隔离（芯粒崩溃
+        不传染），不阻塞主流程。
+        """
+        if not src_path:
+            return src_path
+        src = os.path.abspath(src_path)
+        if not os.path.exists(src):
+            return src
+        try:
+            dest_dir = os.path.join("out", "comfyui")
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.abspath(os.path.join(dest_dir, os.path.basename(src)))
+            if dest != src:
+                shutil.copy2(src, dest)
+            return dest
+        except Exception as e:  # noqa: BLE001
+            logger.warning("comfyui 资产落地失败，退回原始路径: %s", e)
+            return src
 
 
 __all__ = ["ComfyUIAdapter"]
