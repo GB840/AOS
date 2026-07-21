@@ -22,6 +22,13 @@
     # 真机（需 .env 配 ZHIPU_API_KEY）
     python examples/scroll_world_demo.py --theme "国风山水" --scenes 5 --out out/landing
 
+    # 多视频混排：左右分屏 / 2x2 网格
+    python examples/scroll_world_demo.py --theme "未来都市" --scenes 4 --video --layout split
+    python examples/scroll_world_demo.py --theme "未来都市" --scenes 3 --video --layout grid
+
+    # 显式指定配色（否则按 --theme 关键词自动匹配）
+    python examples/scroll_world_demo.py --theme "未来都市" --palette cyber
+
     # 用自定义场景（显式 prompt + 可选 video）
     python examples/scroll_world_demo.py --scenes-file scenes.json
 """
@@ -45,6 +52,48 @@ CAP_VIDEO = "media.video"
 
 DEFAULT_IMAGE_SIZE = "1024x1024"
 DEFAULT_VIDEO_SIZE = "1280x720"
+
+# ---- 配色主题（按 --theme 关键词自动匹配，或 --palette 显式指定） ----
+PALETTES = {
+    "cyber":   {"label": "赛博朋克", "grad_a": "#00f0ff", "grad_b": "#ff00e5",
+                "overlay": "rgba(8,2,24,.55)", "accent": "#00f0ff",
+                "font": "'Courier New', 'PingFang SC', monospace"},
+    "guofeng": {"label": "国风", "grad_a": "#c0392b", "grad_b": "#e8b647",
+                "overlay": "rgba(30,12,6,.5)", "accent": "#e8b647",
+                "font": "'STKaiti','KaiTi','PingFang SC', serif"},
+    "future":  {"label": "未来都市", "grad_a": "#4facfe", "grad_b": "#00f2fe",
+                "overlay": "rgba(4,12,30,.5)", "accent": "#7fe7ff",
+                "font": "'PingFang SC','Microsoft YaHei', sans-serif"},
+    "nature":  {"label": "自然", "grad_a": "#11998e", "grad_b": "#38ef7d",
+                "overlay": "rgba(4,20,10,.5)", "accent": "#7dffb0",
+                "font": "'PingFang SC', sans-serif"},
+    "noir":    {"label": "暗夜", "grad_a": "#434343", "grad_b": "#bdbdbd",
+                "overlay": "rgba(0,0,0,.62)", "accent": "#e0e0e0",
+                "font": "'PingFang SC', serif"},
+    "sunset":  {"label": "落日", "grad_a": "#ff5f6d", "grad_b": "#ffc371",
+                "overlay": "rgba(30,10,4,.5)", "accent": "#ffd28a",
+                "font": "'PingFang SC', sans-serif"},
+}
+# 主题关键词 -> 调色板（不区分大小写包含匹配）
+THEME_KEYWORDS = {
+    "赛博": "cyber", "cyber": "cyber", "霓虹": "cyber", "机甲": "cyber",
+    "国风": "guofeng", "古风": "guofeng", "山水": "guofeng", "水墨": "guofeng",
+    "未来": "future", "都市": "future", "科技": "future", "城市": "future",
+    "自然": "nature", "森林": "nature", "海": "nature", "风景": "nature",
+    "夜": "noir", "暗": "noir", "黑": "noir",
+    "落日": "sunset", "黄昏": "sunset", "晚霞": "sunset",
+}
+
+
+def pick_palette(theme: str, override: str | None = None) -> dict:
+    """按主题关键词自动选调色板；--palette 可强制覆盖；都无命中用 future。"""
+    if override and override in PALETTES:
+        return PALETTES[override]
+    t = (theme or "").lower()
+    for kw, key in THEME_KEYWORDS.items():
+        if kw.lower() in t:
+            return PALETTES[key]
+    return PALETTES["future"]
 
 
 def _load_dotenv(path: str) -> None:
@@ -170,13 +219,21 @@ def _placeholder_svg(path: str, idx: int, title: str) -> None:
         f.write(svg)
 
 
+LAYOUT_VIDEO_COUNT = {"full": 1, "split": 2, "grid": 4}
+
+
 def generate_assets(hub, scenes: list[dict], out_dir: str,
-                    dry_run: bool, with_video: bool) -> list[dict]:
-    """逐场景出图（/视频），落盘到 out_dir/assets，返回带本地路径的场景。"""
+                    dry_run: bool, with_video: bool, layout: str = "full") -> list[dict]:
+    """逐场景出图（/视频混排），落盘到 out_dir/assets，返回带本地路径的场景。
+
+    layout 控制每幕视频路数：full=1（整屏）、split=2（左右）、grid=4（2x2）。
+    无论几路视频，共用当幕一张海报图（image）作 poster，控制智谱 API 成本。
+    """
     assets_dir = os.path.join(out_dir, "assets")
     os.makedirs(assets_dir, exist_ok=True)
     rendered = []
     n = len(scenes)
+    vid_count = LAYOUT_VIDEO_COUNT.get(layout, 1)
     fails = 0
     for i, sc in enumerate(scenes):
         rel_img = f"assets/scene_{i+1}.png"
@@ -185,7 +242,7 @@ def generate_assets(hub, scenes: list[dict], out_dir: str,
             _placeholder_svg(img_path, i, sc.get("title", f"Scene {i+1}"))
         else:
             try:
-                print(f"[图] 场景 {i+1}/{n}: {sc['image_prompt'][:38]}...")
+                print(f"[图] 场景 {i+1}/{n}: {sc['image_prompt'][:34]}...")
                 url = gen_asset(hub, CAP_IMAGE, {
                     "mode": "image",
                     "prompt": sc["image_prompt"],
@@ -199,32 +256,45 @@ def generate_assets(hub, scenes: list[dict], out_dir: str,
             except Exception as e:
                 fails += 1
                 print(f"     ⚠️ 出图失败: {e}（用占位图续跑）")
-                _placeholder_svg(img_path, i, sc.get("title", f"Scene {i+1}") + " · 出图失败")
+                _placeholder_svg(img_path, i,
+                                 (sc.get("title") or f"Scene {i+1}") + " · 出图失败")
 
-        rel_vid = None
-        if (not dry_run) and (with_video or sc.get("video")):
-            try:
-                print(f"[视频] 场景 {i+1}/{n}: {sc['video_prompt'][:38]}...")
-                vurl = gen_asset(hub, CAP_VIDEO, {
-                    "mode": "video",
-                    "prompt": sc["video_prompt"],
-                    "size": DEFAULT_VIDEO_SIZE,
-                    "quality": "speed",
-                    "duration": 5,
-                    "with_audio": False,
-                    "poll_timeout": 240,
-                })
-                rel_vid = f"assets/scene_{i+1}.mp4"
-                download(vurl, os.path.join(out_dir, rel_vid))
-                print(f"     -> {rel_vid}")
-            except Exception as e:
-                print(f"     ⚠️ 出视频失败: {e}（本幕仅用图）")
+        videos = []
+        want_video = (not dry_run) and (with_video or sc.get("video"))
+        if want_video:
+            for vj in range(vid_count):
+                suffix = f" 视角{vj+1}" if vid_count > 1 else ""
+                try:
+                    print(f"[视频 {vj+1}/{vid_count}] 场景 {i+1}/{n}: "
+                          f"{sc['video_prompt'][:28]}{suffix}...")
+                    vurl = gen_asset(hub, CAP_VIDEO, {
+                        "mode": "video",
+                        "prompt": sc["video_prompt"] + suffix,
+                        "size": DEFAULT_VIDEO_SIZE,
+                        "quality": "speed",
+                        "duration": 5,
+                        "with_audio": False,
+                        "poll_timeout": 240,
+                    })
+                    rel_vid = f"assets/scene_{i+1}_v{vj+1}.mp4"
+                    download(vurl, os.path.join(out_dir, rel_vid))
+                    print(f"     -> {rel_vid}")
+                    videos.append(rel_vid)
+                except Exception as e:
+                    print(f"     ⚠️ 出视频{vj+1}失败: {e}（本路跳过）")
+        elif dry_run and (with_video or sc.get("video")):
+            for vj in range(vid_count):
+                ph = f"assets/scene_{i+1}_v{vj+1}.png"
+                _placeholder_svg(os.path.join(out_dir, ph), i * 10 + vj,
+                                 f"{(sc.get('title') or '')} · 视频位{vj+1}")
+                videos.append(ph)
 
         rendered.append({
             "title": sc.get("title", f"第{i+1}幕"),
             "caption": sc.get("caption", ""),
             "image": rel_img,
-            "video": rel_vid,
+            "videos": videos,
+            "video": videos[0] if videos else None,
         })
 
     if fails:
@@ -233,27 +303,40 @@ def generate_assets(hub, scenes: list[dict], out_dir: str,
     return rendered
 
 
-def render_html(scenes: list[dict], out_dir: str) -> str:
+def render_html(scenes: list[dict], out_dir: str, palette: dict, dry_run: bool) -> str:
     n = len(scenes)
     scene_divs = []
     for i, sc in enumerate(scenes):
-        media = ""
-        if sc.get("video"):
-            media = (
-                f'<video class="bg" data-scrub muted playsinline preload="auto" '
-                f'poster="{sc["image"]}" src="{sc["video"]}"></video>'
-            )
+        videos = sc.get("videos") or []
+        if videos:
+            cnt = len(videos)
+            cls = {1: "full", 2: "split", 4: "grid"}.get(cnt, "grid")
+            tiles = ""
+            for v in videos:
+                if dry_run:
+                    tiles += f'<img class="tile" src="{v}" alt="">'
+                else:
+                    tiles += (f'<video class="tile" data-scrub muted playsinline preload="auto" '
+                              f'poster="{sc["image"]}" src="{v}"></video>')
+            media = f'<div class="media {cls}">{tiles}</div>'
         else:
-            media = f'<img class="bg" src="{sc["image"]}" alt="{sc["title"]}" />'
+            media = f'<img class="bg" src="{sc["image"]}" alt="{sc["title"]}">'
         scene_divs.append(
             f'<section class="scene" data-i="{i}">'
             f'{media}'
             f'<div class="overlay"></div>'
-            f'<div class="caption"><h1>{sc["title"]}</h1>'
-            f'<p>{sc["caption"]}</p></div>'
+            f'<div class="caption">'
+            f'<span class="chap">第 {i+1} 幕 / 共 {n} 幕</span>'
+            f'<h1>{sc["title"]}</h1>'
+            f'<p>{sc["caption"]}</p>'
+            f'</div>'
             f'</section>'
         )
     scenes_html = "\n".join(scene_divs)
+    dots_html = "".join(
+        f'<button class="dot" data-i="{k}" aria-label="跳到第 {k+1} 幕"></button>'
+        for k in range(n)
+    )
 
     html = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -261,28 +344,58 @@ def render_html(scenes: list[dict], out_dir: str) -> str:
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Scroll-World · 国产 scrub-engine</title>
+<style id="palette">
+  :root{
+    --grad-a: __GRAD_A__;
+    --grad-b: __GRAD_B__;
+    --overlay: __OVERLAY__;
+    --accent: __ACCENT__;
+    --font: __FONT__;
+  }
+</style>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { background: #000; color: #fff; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
-  #progress { position: fixed; top: 0; left: 0; height: 4px; width: 0%;
-    background: linear-gradient(90deg,#ff5f6d,#ffc371); z-index: 100; transition: width .05s linear; }
-  #stage { position: sticky; top: 0; height: 100vh; overflow: hidden; }
-  .scene { position: absolute; inset: 0; opacity: 0; will-change: opacity; }
-  .scene .bg { position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: cover; transform: scale(1.1); will-change: transform; }
-  .overlay { position: absolute; inset: 0;
-    background: radial-gradient(ellipse at center, rgba(0,0,0,.15), rgba(0,0,0,.65)); }
-  .caption { position: absolute; left: 8vw; bottom: 18vh; max-width: 80vw;
-    transform: translateY(40px); text-shadow: 0 4px 24px rgba(0,0,0,.6); }
-  .caption h1 { font-size: clamp(28px, 5vw, 64px); letter-spacing: 2px; }
-  .caption p { margin-top: 12px; font-size: clamp(14px, 2vw, 22px); opacity: .85; }
-  #hint { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-    font-size: 13px; opacity: .5; z-index: 100; animation: blink 2s infinite; }
-  @keyframes blink { 0%,100%{opacity:.5} 50%{opacity:.15} }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { background:#000; color:#fff; font-family: var(--font); }
+  #progress { position:fixed; top:0; left:0; height:4px; width:0%;
+    background: linear-gradient(90deg, var(--grad-a), var(--grad-b));
+    z-index:200; box-shadow:0 0 12px var(--grad-a); }
+  #stage { position:sticky; top:0; height:100vh; overflow:hidden; }
+  .scene { position:absolute; inset:0; opacity:0; will-change:opacity; }
+  .scene .bg, .media { position:absolute; inset:0; width:100%; height:100%; }
+  .media { display:grid; overflow:hidden; }
+  .media.full  { grid-template-columns:1fr; }
+  .media.split { grid-template-columns:1fr 1fr; }
+  .media.grid  { grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; }
+  .media .tile { width:100%; height:100%; object-fit:cover; transform:scale(1.06);
+    border-right:1px solid rgba(255,255,255,.08); border-bottom:1px solid rgba(255,255,255,.08); }
+  .scene .bg { object-fit:cover; transform:scale(1.12); will-change:transform; }
+  .overlay { position:absolute; inset:0;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,.08), var(--overlay)); }
+  .caption { position:absolute; left:8vw; bottom:16vh; max-width:80vw;
+    border-left:3px solid var(--accent); padding-left:20px;
+    text-shadow:0 4px 24px rgba(0,0,0,.6); }
+  .caption .chap { display:inline-block; color:var(--accent); font-size:13px;
+    letter-spacing:3px; opacity:0; }
+  .caption h1 { font-size:clamp(28px,5vw,64px); letter-spacing:2px; opacity:0; }
+  .caption p { margin-top:12px; font-size:clamp(14px,2vw,22px); opacity:0; color:#f2f2f2; }
+  .scene.active .caption .chap { animation: rise .5s ease .05s both; }
+  .scene.active .caption h1   { animation: rise .6s ease .14s both; }
+  .scene.active .caption p    { animation: rise .6s ease .26s both; }
+  @keyframes rise { from{opacity:0; transform:translateY(30px);} to{opacity:1; transform:translateY(0);} }
+  #dots { position:fixed; right:20px; top:50%; transform:translateY(-50%);
+    z-index:200; display:flex; flex-direction:column; gap:14px; }
+  .dot { width:11px; height:11px; padding:0; border-radius:50%;
+    border:1px solid var(--accent); background:transparent; cursor:pointer; transition:all .25s; }
+  .dot.current { background:var(--accent); box-shadow:0 0 12px var(--accent); transform:scale(1.35); }
+  #hint { position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
+    font-size:13px; letter-spacing:2px; color:var(--accent); opacity:.7; z-index:200;
+    animation: blink 2.2s infinite; }
+  @keyframes blink { 0%,100%{opacity:.7} 50%{opacity:.2} }
 </style>
 </head>
 <body>
 <div id="progress"></div>
+<nav id="dots">__DOTS__</nav>
 <div id="stage">
 __SCENES__
 </div>
@@ -294,6 +407,7 @@ __SCENES__
   var track = document.getElementById('track');
   var scenes = Array.prototype.slice.call(stage.querySelectorAll('.scene'));
   var progress = document.getElementById('progress');
+  var dots = Array.prototype.slice.call(document.querySelectorAll('#dots .dot'));
   var n = scenes.length;
   var ticking = false;
 
@@ -315,40 +429,63 @@ __SCENES__
       var op = (idx === i) ? (1 - lp) : (idx === i + 1 ? lp : 0);
       s.style.opacity = op;
       s.style.zIndex = (idx === i || idx === i + 1) ? 2 : 1;
-      var bg = s.querySelector('.bg');
-      if (bg) {
+      s.classList.toggle('active', idx === i);
+
+      var m = s.querySelector('.media, .bg');
+      if (m) {
         var shift = (idx === i) ? -lp : (idx === i + 1 ? -(1 - lp) : 0);
-        bg.style.transform = 'scale(1.12) translateY(' + (shift * 8) + '%)';
+        m.style.transform = 'scale(1.12) translateY(' + (shift * 8) + '%)';
       }
-      var v = s.querySelector('video.bg');
-      if (v && v.duration && isFinite(v.duration)) {
-        try {
-          var vt = (idx === i) ? lp : (idx === i + 1 ? 1 : 0);
-          v.currentTime = vt * v.duration;
-        } catch (e) {}
+      var vs = s.querySelectorAll('video');
+      for (var k = 0; k < vs.length; k++) {
+        var v = vs[k];
+        if (v.duration && isFinite(v.duration)) {
+          try {
+            var vt = (idx === i) ? lp : (idx === i + 1 ? 1 : 0);
+            v.currentTime = vt * v.duration;
+          } catch (e) {}
+        }
       }
       var cap = s.querySelector('.caption');
       if (cap) {
         var cy = (idx === i) ? (1 - lp) : (idx === i + 1 ? -lp : 1);
-        cap.style.transform = 'translateY(' + (cy * 40) + 'px)';
-        cap.style.opacity = (idx === i) ? (1 - lp * 0.5) : (idx === i + 1 ? lp : 0);
+        cap.style.transform = 'translateY(' + (cy * 36) + 'px)';
+        cap.style.opacity = (idx === i) ? (1 - lp * 0.4) : (idx === i + 1 ? lp : 0);
       }
+    }
+    for (var d = 0; d < dots.length; d++) {
+      dots[d].classList.toggle('current', d === i);
     }
   }
 
-  function onScroll() {
-    if (!ticking) { ticking = true; requestAnimationFrame(update); }
-  }
+  function onScroll() { if (!ticking) { ticking = true; requestAnimationFrame(update); } }
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', onScroll);
-  // 初始：仅首屏可见
+
+  dots.forEach(function (dot) {
+    dot.addEventListener('click', function () {
+      var k = parseInt(dot.getAttribute('data-i'), 10);
+      var total = track.offsetHeight - window.innerHeight;
+      window.scrollTo({ top: (k / n) * total, behavior: 'smooth' });
+    });
+  });
+
   scenes.forEach(function (s, idx) { if (idx !== 0) s.style.opacity = 0; });
   update();
 })();
 </script>
 </body>
 </html>
-""".replace("__SCENES__", scenes_html).replace("__N__", str(n))
+"""
+    html = (html
+            .replace("__SCENES__", scenes_html)
+            .replace("__DOTS__", dots_html)
+            .replace("__N__", str(n))
+            .replace("__GRAD_A__", palette["grad_a"])
+            .replace("__GRAD_B__", palette["grad_b"])
+            .replace("__OVERLAY__", palette["overlay"])
+            .replace("__ACCENT__", palette["accent"])
+            .replace("__FONT__", palette["font"]))
     out_path = os.path.join(out_dir, "index.html")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -362,6 +499,10 @@ def main() -> int:
     ap.add_argument("--scenes-file", default=None, help="自定义场景 JSON 路径")
     ap.add_argument("--out", default="out/scroll_world", help="输出目录")
     ap.add_argument("--video", action="store_true", help="每个场景额外出视频并 scrub")
+    ap.add_argument("--layout", choices=["full", "split", "grid"], default="full",
+                    help="视频混排布局：full=整屏, split=左右2路, grid=2x2共4路")
+    ap.add_argument("--palette", default=None,
+                    help="配色主题（cyber/guofeng/future/nature/noir/sunset），缺省按 --theme 关键词自动匹配")
     ap.add_argument("--dry-run", action="store_true",
                     help="本地占位图，零网络零 key（离线验证 scrub 引擎）")
     args = ap.parse_args()
@@ -378,14 +519,16 @@ def main() -> int:
     else:
         hub = None  # 占位，dry-run 不调用
 
+    palette = pick_palette(args.theme, args.palette)
     out_dir = os.path.abspath(args.out)
     os.makedirs(out_dir, exist_ok=True)
 
     t0 = time.time()
     scenes = load_scenes(args)
-    print(f"场景数: {len(scenes)}  |  模式: {'dry-run' if args.dry_run else '真实(智谱)'}")
-    rendered = generate_assets(hub, scenes, out_dir, args.dry_run, args.video)
-    html_path = render_html(rendered, out_dir)
+    print(f"场景数: {len(scenes)}  |  模式: {'dry-run' if args.dry_run else '真实(智谱)'}  "
+          f"|  布局: {args.layout}  |  配色: {palette['label']}")
+    rendered = generate_assets(hub, scenes, out_dir, args.dry_run, args.video, layout=args.layout)
+    html_path = render_html(rendered, out_dir, palette, args.dry_run)
     dt = time.time() - t0
 
     print(f"\n✅ 完成 ({dt:.1f}s)")
