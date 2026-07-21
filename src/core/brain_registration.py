@@ -14,6 +14,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _register_df_handler(brain, name: str, handler) -> None:
+    """向 DeerFlow 注册 handler；deerflow 未就绪时静默跳过，绝不抛异常。
+
+    历史 bug: register_subagents 在 Batch 3 与 _init_deerflow_scheduler 并行执行,
+    若子智能体注册先跑, self.deerflow 尚未赋值, 原代码 brain.deerflow.register_handler
+    直接 AttributeError, 被 except 捕获后把全部子智能体标记 unavailable。
+    """
+    df = getattr(brain, "deerflow", None)
+    if df is None or not hasattr(df, "register_handler"):
+        logger.debug("DeerFlow 未就绪，跳过 handler 注册: %s", name)
+        return
+    try:
+        df.register_handler(name, handler)
+    except Exception as e:  # pragma: no cover - 兜底，绝不让注册流程崩
+        logger.warning("DeerFlow handler 注册失败 %s: %s", name, e)
+
+
 def register_subagents(brain, cfg) -> None:
     """注册全部子智能体到 SubAgentRegistry 与 DeerFlow handler。
 
@@ -36,7 +53,7 @@ def register_subagents(brain, cfg) -> None:
                 mcp_port=getattr(cfg, "UITARS_MCP_PORT", 8090),
             )
             brain.subagents.register("uitars", ut.DESCRIPTION, ut.CAPABILITIES, ut.handle)
-            brain.deerflow.register_handler("gui_automation", ut.handle)
+            _register_df_handler(brain, "gui_automation", ut.handle)
             logger.info("UI-TARS subagent registered")
     except Exception as e:
         logger.warning("UI-TARS subagent unavailable: %s", e)
@@ -51,7 +68,7 @@ def register_subagents(brain, cfg) -> None:
                 lobster_port=getattr(cfg, "LOBSTER_PORT", 8091),
             )
             brain.subagents.register("lobster", lb.DESCRIPTION, lb.CAPABILITIES, lb.handle)
-            brain.deerflow.register_handler("office_automation", lb.handle)
+            _register_df_handler(brain, "office_automation", lb.handle)
             logger.info("Lobster subagent registered")
     except Exception as e:
         logger.warning("Lobster subagent unavailable: %s", e)
@@ -61,7 +78,7 @@ def register_subagents(brain, cfg) -> None:
 
         vm = ViMaxSubagent()
         brain.subagents.register("vimax", vm.DESCRIPTION, vm.CAPABILITIES, vm.handle)
-        brain.deerflow.register_handler("video_generation", vm.handle)
+        _register_df_handler(brain, "video_generation", vm.handle)
         logger.info("ViMax subagent registered")
     except Exception as e:
         logger.warning("ViMax subagent unavailable: %s", e)
@@ -71,7 +88,7 @@ def register_subagents(brain, cfg) -> None:
 
         ima = IMASubagent()
         brain.subagents.register("ima", ima.DESCRIPTION, ima.CAPABILITIES, ima.handle)
-        brain.deerflow.register_handler("knowledge_search", ima.handle)
+        _register_df_handler(brain, "knowledge_search", ima.handle)
         logger.info("IMA subagent registered")
     except Exception as e:
         logger.warning("IMA subagent unavailable: %s", e)
@@ -81,7 +98,7 @@ def register_subagents(brain, cfg) -> None:
 
         rf = RuFloSubagent()
         brain.subagents.register("ruflo", rf.DESCRIPTION, rf.CAPABILITIES, rf.handle)
-        brain.deerflow.register_handler("code_execution", rf.handle)
+        _register_df_handler(brain, "code_execution", rf.handle)
         logger.info("RuFlo subagent registered")
     except Exception as e:
         logger.warning("RuFlo subagent unavailable: %s", e)
@@ -93,7 +110,7 @@ def register_subagents(brain, cfg) -> None:
         brain.subagents.register(
             "pixelle_video", px.DESCRIPTION, px.CAPABILITIES, px.handle
         )
-        brain.deerflow.register_handler("short_video_generation", px.handle)
+        _register_df_handler(brain, "short_video_generation", px.handle)
         logger.info("Pixelle-Video subagent registered")
     except Exception as e:
         logger.warning("Pixelle-Video subagent unavailable: %s", e)
@@ -105,7 +122,7 @@ def register_subagents(brain, cfg) -> None:
         brain.subagents.register(
             "loop_engineering", le.DESCRIPTION, le.CAPABILITIES, le.handle
         )
-        brain.deerflow.register_handler("loop_engineering", le.handle)
+        _register_df_handler(brain, "loop_engineering", le.handle)
         logger.info("Loop Engineering subagent registered")
     except Exception as e:
         logger.warning("Loop Engineering subagent unavailable: %s", e)

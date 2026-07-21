@@ -118,8 +118,16 @@ class UITarsSkill(Skill):
     def __init__(self):
         super().__init__()
         self._uitars_path = UITARS_PATH
-        self._cli_command = "node"
-        self._cli_args = [os.path.join(UITARS_PATH, "packages", "ui-tars", "cli", "bin", "index.js")]
+        if UITARS_PATH:
+            # 源码模式：直接用仓库内的 CLI 入口
+            self._cli_command = "node"
+            self._cli_args = [
+                os.path.join(UITARS_PATH, "packages", "ui-tars", "cli", "bin", "index.js")
+            ]
+        else:
+            # 源码未检测到 → 退回官方 CLI (npx @agent-tars/cli@latest)，不再用 None 拼路径
+            self._cli_command = "npx"
+            self._cli_args = ["-y", "@agent-tars/cli@latest"]
         self._available = False
         self._node_available = False
         self._enhanced_mode = True
@@ -128,7 +136,7 @@ class UITarsSkill(Skill):
     def _check_uitars(self):
         """检查 UI-TARS 是否可用"""
         try:
-            if os.path.exists(self._uitars_path):
+            if self._uitars_path and os.path.exists(self._uitars_path):
                 self._available = True
                 logger.info("UI-TARS 源码目录存在: %s", self._uitars_path)
             

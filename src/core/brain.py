@@ -693,11 +693,18 @@ class UnifiedBrain:
         # Batch 3: depend on batch-2 components
         [
             ("deerflow", "_init_deerflow_scheduler"),       # ← memory
-            ("subagents", "_init_subagents_registry"),       # ← config
             ("identity", "_init_identity"),                  # ← compliance
             ("task_classifier", "_init_task_classifier"),    # ← brain=self
             ("meta_debate", "_init_meta_debate"),            # ← skills
             ("task_fingerprint", "_init_task_fingerprint"),  # ← memory
+        ],
+        # Batch 3.5: 子智能体注册——必须等 Batch 3 的 deerflow 完成后才能跑。
+        # 原因: register_subagents 内会调 brain.deerflow.register_handler，若与
+        # _init_deerflow_scheduler 并行 (原同处 Batch 3)，self.deerflow 尚未赋值，
+        # 触发 AttributeError: 'UnifiedBrain' object has no attribute 'deerflow'，
+        # 把全部子智能体误标 unavailable。单独成批 → 串行在 deerflow 之后。
+        [
+            ("subagents", "_init_subagents_registry"),       # ← config + deerflow(已就绪)
         ],
         # Batch 4: depend on batch-3 components
         [
