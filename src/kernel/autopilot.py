@@ -305,6 +305,38 @@ def _reset_ag2():
     _ag2 = None
 
 
+def _zhipu_generate(prompt: str, timeout: float = 90.0) -> Optional[str]:
+    """智谱直连文本生成（ag2 不可用时的真实 LLM 后端，已验证可用，零新依赖）。
+
+    复用 kernel.plugins.zhipu_chat（a959ba6 实做，ZHIPU_API_KEY 已配置），
+    失败返 None 不抛，超时经 _call_with_timeout 守护，绝不拖垮自主环。
+    """
+    try:
+        from kernel.plugins.zhipu_chat import zhipu_chat
+        messages = [{"role": "user", "content": prompt}]
+        return _call_with_timeout(
+            lambda: zhipu_chat(messages, max_tokens=1024), timeout
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("智谱直连生成失败", exc_info=True)
+        return None
+
+
+def _build_plan_prompt(task: str) -> str:
+    """构造给智谱的规划 prompt：要求输出 AOS 能力标签步骤。"""
+    return (
+        "你是 AOS 自主执行环的规划 agent。\n"
+        f"任务：{task}\n\n"
+        "把任务拆成可执行步骤，每行一个步骤，用 AOS 能力标签前缀：\n"
+        "  web.search= 联网搜索信息\n"
+        "  action.code_exec= 执行代码或命令\n"
+        "  inference.llm= 纯推理/生成文本\n"
+        "  memory.semantic= 存取语义记忆\n"
+        "  file.write= 写文件\n"
+        "不要解释，只输出步骤计划，每行一个步骤。"
+    )
+
+
 # ---- 路由胶水 --------------------------------------------------
 
 def _make_noninteractive(code: str) -> str:
@@ -1121,12 +1153,26 @@ def _plan(task: str, planner: str):
             logger.warning("ag2 规划失败，降级 heuristic", exc_info=True)
 
     if not steps:
-        if parallel_on:
-            steps, parallel_groups = plan_with_parallelism(task, _CAPS)
-        else:
-            steps = heuristic_plan(task, _CAPS)
-        used_planner = "heuristic"
-        plan_text = None
+        # 智谱直连作为 ag2 不可用时的高质量 LLM 规划后端（已验证可用，零新依赖）
+        if planner in ("ag2", "zhipu"):
+            try:
+                ztext = _zhipu_generate(_build_plan_prompt(task))
+                if ztext:
+                    zsteps = parse_plan_to_steps(ztext, _CAPS)
+                    if zsteps:
+                        steps = zsteps
+                        plan_text = ztext.strip() or plan_text
+                        used_planner = "zhipu"
+                        logger.info("规划改用智谱直连（ag2 不可用）")
+            except Exception:
+                logger.warning("智谱规划失败，降级 heuristic", exc_info=True)
+        if not steps:
+            if parallel_on:
+                steps, parallel_groups = plan_with_parallelism(task, _CAPS)
+            else:
+                steps = heuristic_plan(task, _CAPS)
+            used_planner = "heuristic"
+            plan_text = None
 
     # 出门检：过滤掉 hub 实际未通电的能力步（避免执行必失败的步浪费反思轮次）
     hub = _get_hub()
@@ -1483,7 +1529,20 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
                                              causal_hints=causal_hints)
                 logger.warning("ag2 反思产出假重设计，降级 ollama")
     except Exception as e:  # noqa: BLE001
-        logger.warning("反思 ag2 失败，降级 ollama: %s", e)
+        logger.warning("反思 ag2 失败，降级智谐/ollama: %s", e)
+    # 1.5) 智谱直连（ag2 不可用时的真实 LLM 反思后端，已验证可用，零新依赖）
+    try:
+        ztext = _zhipu_generate(prompt)
+        if ztext:
+            zsteps = parse_plan_to_steps(ztext, _CAPS)
+            if zsteps:
+                _attach_engine_hints(zsteps, causal_hints)
+                if _is_meaningful_redesign(zsteps, failed, causal_hints):
+                    return _finalize_reflect(task, failed, ztext.strip(), zsteps, "zhipu",
+                                             causal_hints=causal_hints)
+                logger.warning("智谱反思产出假重设计，降级 ollama")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("反思 智谱失败，降级 ollama: %s", e)
     # 2) 本地 ollama（ag2 dead / 无 key 时的真实 LLM 反思后端）
     try:
         text = _ollama_generate(prompt)
@@ -2127,7 +2186,7 @@ def main() -> None:
     """CLI 入口：python -m kernel.autopilot "<任务描述>"
 
     环境要求：
-      - .env 中 ZHIPU_API_KEY 已配置（ag2 规划必需）
+      - .env 中 ZHIPU_API_KEY 已配置（规划/反思默认走智谱直连，无需 ag2/ollama）
       - 可选：AOS_LLM_MODEL / AOS_LLM_BASE_URL 覆盖默认智谱 glm-4-flash
     """
     if len(sys.argv) < 2:

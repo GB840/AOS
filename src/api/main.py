@@ -9,7 +9,7 @@ sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import logging
 from typing import Optional, List, Dict, Any
@@ -259,6 +259,16 @@ try:
         logger.info("产品飞轮前端已挂载: /studio/")
 except Exception as e:  # noqa: BLE001
     logger.warning("产品飞轮前端挂载失败: %s", e)
+
+# 投标分析前端页面（/bidding/）
+try:
+    from fastapi.staticfiles import StaticFiles as _SF2
+    bidding_web_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "web", "bidding")
+    if os.path.exists(bidding_web_dir):
+        app.mount("/bidding", _SF2(directory=bidding_web_dir, html=True), name="bidding")
+        logger.info("投标分析前端已挂载: /bidding/")
+except Exception as e:  # noqa: BLE001
+    logger.warning("投标分析前端挂载失败: %s", e)
 
 # ---- Unified Brain (singleton: Hermes + DeerFlow + Memory + Skills + SubAgents) ----
 # 延迟代理：UnifiedBrain() 构造极重（~2min，加载 mem0/ChromaDB/Hermes/AG2 等），
@@ -567,9 +577,15 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    # 统一前门：直接落进 Web 控制台 (/web/)，实现"圆润如一体"的单端口体验
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse("/web/", status_code=307)
+    # 统一前门：直接返回 AOS 统一门户 SPA，打开即完整系统
+    from fastapi.responses import HTMLResponse
+    portal_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "web", "portal.html")
+    try:
+        with open(portal_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse("/web/", status_code=307)
 
 
 @app.get("/info")
@@ -657,9 +673,34 @@ async def issue_token(req: TokenRequest):
 
 @app.get("/api/fabric")
 async def fabric_status():
-    """查看 fabric 薄缝当前 live 引擎与能力 (演进接口可视化)."""
-    # 遍历各适配器调 health()/advertise_capabilities() 含网络/进程探测，整体移入线程池。
+    """查看 fabric 当前 live 引擎与能力。
+
+    双轨融合：优先内核层 FabricHub（唯一运行时，真实连通性探测、全部适配器），
+    内核不可用时回退 brain.fabric（legacy）。避免 brain.fabric 优雅降级为 None 时
+    仪表盘引擎列表全空、而内核实际 22+ 引擎在线的双轨不一致。
+    """
     def _status():
+        # 1) 优先内核层 FabricHub（与 /api/chat 等走同一实例，状态全链路一致）
+        try:
+            from kernel.plugins.fabric_hub import get_fabric_hub
+            report = get_fabric_hub().health_report()
+            engines = []
+            for eid, info in report.get("adapters", {}).items():
+                item = {
+                    "engine_id": eid,
+                    "live": bool(info.get("live")),
+                    "capabilities": info.get("capabilities", []),
+                    "protocols": [],
+                }
+                if info.get("error"):
+                    item["error"] = info["error"]
+                engines.append(item)
+            live = [e["engine_id"] for e in engines if e["live"]]
+            return {"fabric": "ok", "source": "kernel", "live_count": len(live),
+                    "live": live, "engines": engines}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("kernel FabricHub 状态获取失败，回退 brain.fabric: %s", e)
+        # 2) 回退：brain 层 fabric（legacy 双轨）
         if not getattr(brain, "fabric", None):
             return {"fabric": "unavailable", "engines": []}
         engines = []
@@ -674,7 +715,7 @@ async def fabric_status():
             except Exception as e:
                 engines.append({"engine_id": eid, "live": False, "error": str(e)})
         live = [e["engine_id"] for e in engines if e.get("live")]
-        return {"fabric": "ok", "live_count": len(live), "live": live, "engines": engines}
+        return {"fabric": "ok", "source": "brain", "live_count": len(live), "live": live, "engines": engines}
     return await asyncio.to_thread(_status)
 
 
@@ -987,8 +1028,13 @@ async def list_knowledge(limit: int = Query(50, ge=1, le=200)):
             return cur.fetchall()
         rows = await asyncio.to_thread(_q)
         import json
+        def _safe_tags(tags_str):
+            try:
+                return json.loads(tags_str or "[]")
+            except (json.JSONDecodeError, TypeError):
+                return []
         return {"items": [{"id": r["id"],"title": r["title"],"content": r["content"],
-                "source": r["source"],"tags": json.loads(r["tags"] or "[]"),
+                "source": r["source"],"tags": _safe_tags(r["tags"]),
                 "created_at": r["created_at"]} for r in rows],
                 "count": len(rows)}
     except Exception as e:
@@ -997,6 +1043,21 @@ async def list_knowledge(limit: int = Query(50, ge=1, le=200)):
 @app.post("/api/search")
 async def search_memory(request: SearchRequest):
     return await asyncio.to_thread(brain.search_memory, query=request.query, search_type=request.search_type)
+
+
+@app.get("/api/web-search")
+async def web_search(q: str, max_results: int = Query(8, ge=1, le=20)):
+    """六级源网络搜索（AnySearch→百度→Bing→DDG→Jina→智谱，全部免 key）。
+
+    经内核 FabricHub 统一路由 web.search 能力，自动故障转移。
+    返回 {ok, data:{results:[{title,url,body}], count, engine, confidence}, error}。
+    """
+    def _do():
+        from kernel.plugins.fabric_hub import get_fabric_hub
+        res = get_fabric_hub().route("web.search", {"query": q, "max_results": max_results})
+        return {"ok": bool(res.ok), "data": res.data, "error": res.error}
+    return await asyncio.to_thread(_do)
+
 
 @app.get("/api/memory")
 async def memory_overview():
@@ -2147,6 +2208,27 @@ async def loop_list():
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
+class AutopilotRequest(BaseModel):
+    task: str = Field(..., description="一句话自然语言任务")
+    planner: str = Field(default="ag2", description="ag2 / zhipu / heuristic（ag2 不可用自动降级智谱）")
+    run_id: Optional[str] = Field(default=None)
+
+
+@app.post("/api/autopilot/run")
+async def autopilot_run(req: AutopilotRequest):
+    """一句话触发 AOS 自主闭环（规划/反思走智谱直连，无需 ag2/ollama）。
+
+    服务器常驻即可调用，无需单独启任何组件——发一句任务，自主环自己规划、
+    执行、反思、落盘 Trace。
+    """
+    try:
+        from kernel.autopilot import run as _ap_run
+        result = await asyncio.to_thread(_ap_run, req.task, req.planner, req.run_id)
+        return {"ok": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
 # ---- Manage Provider (for failover) ----
 
 @app.post("/api/providers/switch")
@@ -2877,6 +2959,69 @@ async def compliance_gate(req: ComplianceGateRequest):
         return report.to_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+# ---- Bidding Analysis API ----
+
+
+@app.post("/api/bidding/analyze")
+async def bidding_analyze(
+    file: UploadFile = File(...),
+    company_name: Optional[str] = None,
+    qualifications: Optional[str] = None,
+    focus_areas: Optional[str] = None,
+):
+    """投标分析：上传招标 PDF → 结构化报告（需求提取 + 合规检查 + 策略建议）。
+
+    - file: 招标文件 PDF（必须）
+    - company_name: 企业名称（可选，用于资质匹配）
+    - qualifications: 企业资质列表，逗号分隔（可选）
+    - focus_areas: 重点关注领域，逗号分隔（可选）
+    """
+    import tempfile
+    import shutil
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+
+    # 保存上传文件到临时路径（BiddingAgent 需要文件路径）
+    tmp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "_traces", "uploads")
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_path = os.path.join(tmp_dir, f"bidding_{int(time.time()*1000)}_{file.filename}")
+
+    try:
+        with open(tmp_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        # 构建 BiddingAgent 上下文
+        context: Dict[str, Any] = {"pdf_path": tmp_path}
+        if company_name or qualifications:
+            context["company_profile"] = {
+                "name": company_name or "",
+                "qualifications": [q.strip() for q in (qualifications or "").split(",") if q.strip()],
+            }
+        if focus_areas:
+            context["focus_areas"] = [a.strip() for a in focus_areas.split(",") if a.strip()]
+
+        # PDF 解析 + 规则引擎是 CPU 重阻塞，移入线程池
+        from skills.bidding_agent import BiddingAgent
+        agent = BiddingAgent()
+        result = await asyncio.to_thread(agent.execute, context)
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bidding analyze error: {e}")
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+    finally:
+        # 清理临时文件
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 # ---- Main ----
