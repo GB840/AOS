@@ -1,206 +1,260 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AOS · 一句话自主执行</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AOS 自主执行台 · 看得见的过程</title>
 <style>
   :root{
-    --bg:#0e1117; --panel:#161b22; --panel2:#1c2330; --line:#2a3340;
-    --txt:#e6edf3; --dim:#8b949e; --accent:#3fb950; --accent2:#58a6ff;
-    --warn:#f0883e; --bad:#f85149; --ok:#3fb950;
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2330; --line:#2a3340;
+    --txt:#e6edf3; --dim:#8b96a5; --accent:#3fb950; --accent2:#58a6ff;
+    --warn:#d29922; --bad:#f85149; --real:#3fb950; --fake:#d29922; --fail:#f85149;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);
-    font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
-    line-height:1.6;padding:28px 16px 60px}
-  .wrap{max-width:820px;margin:0 auto}
-  h1{font-size:22px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
-  h1 .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);
-    box-shadow:0 0 10px var(--accent)}
-  .sub{color:var(--dim);font-size:13px;margin:0 0 20px}
-  .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
-  textarea{width:100%;min-height:76px;resize:vertical;background:var(--panel2);
-    border:1px solid var(--line);border-radius:9px;color:var(--txt);
-    padding:11px 12px;font-size:15px;font-family:inherit;outline:none}
-  textarea:focus{border-color:var(--accent2)}
-  .row{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
-  button{cursor:pointer;border:none;border-radius:9px;padding:10px 18px;
-    font-size:14px;font-weight:600;font-family:inherit}
-  .run{background:var(--accent);color:#06210d}
-  .run:disabled{opacity:.5;cursor:not-allowed}
-  .mic{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
-  .mic.on{background:var(--bad);color:#fff}
-  .hint{color:var(--dim);font-size:12px;margin-left:auto;align-self:center}
-  .phase{margin:18px 0 6px;font-size:13px;color:var(--accent2);
-    min-height:20px;display:flex;align-items:center;gap:8px}
+    font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",monospace;
+    font-size:14px;line-height:1.6}
+  .wrap{max-width:980px;margin:0 auto;padding:18px 16px 60px}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:16px}
+  header h1{font-size:18px;margin:0;font-weight:700}
+  header .sub{color:var(--dim);font-size:12px}
+  .pill{font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid var(--line);
+    color:var(--dim)}
+  .pill.run{color:var(--accent2);border-color:var(--accent2)}
+  .pill.done{color:var(--accent);border-color:var(--accent)}
+  .pill.fail{color:var(--bad);border-color:var(--bad)}
+  .composer{display:flex;gap:8px;margin-bottom:14px}
+  textarea{flex:1;background:var(--panel);color:var(--txt);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;font-size:14px;resize:vertical;min-height:46px;
+    font-family:inherit}
+  button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--txt);
+    border-radius:10px;padding:0 16px;font-size:14px;font-weight:600}
+  button.go{background:var(--accent);border-color:var(--accent);color:#06210d}
+  button:hover{filter:brightness(1.1)}
+  button:disabled{opacity:.5;cursor:default}
+  .mic{font-size:16px;min-width:46px}
+  .hint{color:var(--dim);font-size:12px;margin:-6px 0 14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;margin-bottom:14px}
+  .card h2{font-size:13px;margin:0 0 10px;color:var(--accent2);
+    text-transform:uppercase;letter-spacing:.08em}
+  .task{font-size:16px;font-weight:600}
+  .plan{white-space:pre-wrap;color:var(--txt);font-size:13.5px;max-height:320px;overflow:auto}
+  .live{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:13px}
   .spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent2);
-    border-radius:50%;animation:sp 1s linear infinite}
+    border-radius:50%;animation:sp 0.8s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
-  .sec{margin-top:18px}
-  .sec h3{font-size:13px;color:var(--dim);margin:0 0 8px;font-weight:600;
-    text-transform:uppercase;letter-spacing:.06em}
-  .plan{white-space:pre-wrap;font-size:13px;color:var(--txt);
-    background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:12px}
-  .step{display:flex;gap:10px;padding:9px 12px;border:1px solid var(--line);
-    border-radius:9px;margin-bottom:8px;background:var(--panel2);align-items:flex-start}
-  .step .ic{flex:0 0 22px;text-align:center;font-weight:700}
-  .step .body{flex:1;min-width:0}
-  .step .cap{font-weight:600;font-size:14px}
-  .step .sum{color:var(--dim);font-size:12px;margin-top:2px;word-break:break-word}
-  .ok{border-color:#1d3a26}.ok .ic{color:var(--ok)}
-  .bad{border-color:#4a2522}.bad .ic{color:var(--bad)}
-  .pend{border-color:var(--line);opacity:.6}
-  .final{white-space:pre-wrap;font-size:14px;background:var(--panel2);
-    border:1px solid var(--accent);border-radius:9px;padding:14px}
-  .meta{color:var(--dim);font-size:12px;margin-top:14px;word-break:break-all}
-  .meta code{color:var(--accent2)}
-  .err{color:var(--bad);font-size:13px;margin-top:10px}
-  .reflect{font-size:12px;color:var(--warn);margin-top:6px}
+  .bar{height:6px;background:var(--panel2);border-radius:4px;overflow:hidden;margin-top:8px}
+  .bar>i{display:block;height:100%;background:var(--accent2);width:0;transition:width .3s}
+  .cyc{margin-bottom:14px;border-left:3px solid var(--line);padding-left:12px}
+  .cyc .ct{font-size:12px;color:var(--dim);margin-bottom:8px}
+  .step{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;margin-bottom:8px}
+  .step .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .step .cap{font-weight:700}
+  .badge{font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);
+    color:var(--dim)}
+  .b-real{color:var(--real);border-color:var(--real)}
+  .b-fake{color:var(--fake);border-color:var(--fake)}
+  .b-fail{color:var(--fail);border-color:var(--fail)}
+  .b-engine{color:var(--accent2);border-color:var(--accent2)}
+  .b-ok{color:var(--real);border-color:var(--real)}
+  pre{background:#0a0d12;border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+    margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12.5px;
+    color:#c9d4e0;max-height:240px;overflow:auto}
+  .err{color:var(--bad)}
+  .refl{font-size:13px}
+  .refl .r{margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
+  .refl .ra{color:var(--accent);font-weight:600}
+  .final{background:#0a1f12;border-color:var(--accent)}
+  .final pre{background:#06160c}
+  .empty{color:var(--dim);font-size:13px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1><span class="dot"></span> AOS · 一句话自主执行</h1>
-  <p class="sub">说一句（或打一句），它自己规划 → 执行 → 反思 → 出结果。你什么都不用配。</p>
+  <header>
+    <h1>🛰️ AOS 自主执行台</h1>
+    <span class="sub">一句话 / 一句语音 → 它自己规划·执行·反思，全程可见</span>
+    <span id="statusPill" class="pill">待命</span>
+  </header>
 
-  <div class="box">
-    <textarea id="task" placeholder="例如：搜索 2026 年开源大模型最新进展，并总结成 5 条要点"></textarea>
-    <div class="row">
-      <button class="run" id="runBtn">▶ 执行</button>
-      <button class="mic" id="micBtn" title="语音输入（建议用 Chrome）">🎤 语音</button>
-      <span class="hint">后端：智谱直连 · 无需 ag2/ollama</span>
-    </div>
+  <div class="composer">
+    <textarea id="task" placeholder="例如：帮我查一下北京明天天气，并写一份简短提醒给我"></textarea>
+    <button class="mic" id="mic" title="语音输入">🎤</button>
+    <button class="go" id="run">执行</button>
   </div>
+  <div class="hint">服务器常驻即可，不用单独启任何组件。点「执行」后往下看：计划 → 实时进度 → 每一步用了什么 → 反思 → 最终交付。</div>
 
-  <div class="phase" id="phase"></div>
-
-  <div id="content"></div>
-
-  <div class="meta" id="meta"></div>
+  <div id="out"></div>
+  <div id="reset" style="display:none;margin-top:8px">
+    <button id="newTask">＋ 新任务</button>
+  </div>
 </div>
 
 <script>
-const $ = id => document.getElementById(id);
-const runBtn = $('runBtn'), micBtn = $('micBtn'), taskEl = $('task');
-const phaseEl = $('phase'), contentEl = $('content'), metaEl = $('meta');
+const $ = s => document.querySelector(s);
+const API = location.origin;
+let pollTimer = null, runId = null;
 
-let pollTimer = null;
+const CAP = {
+  "web.search":"🔎 搜索", "inference.llm":"✍️ 推理/写作",
+  "cognition.reasoning":"🧠 推理", "cognition.planning":"🗺️ 规划",
+  "action.code_exec":"⚙️ 执行代码", "memory.semantic":"💾 记忆",
+  "orchestration":"🔗 编排"
+};
+const capLabel = c => CAP[c] || ("⚡ " + (c||"?"));
 
-function setPhase(txt, spin){
-  phaseEl.innerHTML = (spin ? '<span class="spin"></span>' : '') + (txt||'');
-}
-function esc(s){ return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function esc(s){return String(s==null?"":s).replace(/[&<>]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[m]));}
 
-function renderState(st){
-  const last = (st && st.last) || {};
-  const plan = last.plan || (st && st.plan_text) || '';
-  const exe  = last.execution || {};
-  const trace = exe.trace || [];
-  const cycle = (st && st.cycle!=null) ? st.cycle : -1;
+function setPill(t, cls){const p=$("#statusPill");p.textContent=t;p.className="pill "+(cls||"");}
 
-  let html = '';
-  if(plan){
-    html += '<div class="sec"><h3>规划（'+esc(last.planner||'')+'）</h3><div class="plan">'+esc(plan)+'</div></div>';
+function render(state, status){
+  const out = $("#out");
+  if(!state){out.innerHTML='<div class="card"><div class="empty">正在启动自主环…</div></div>';return;}
+  let html = "";
+  if(state.task) html += `<div class="card"><h2>任务</h2><div class="task">${esc(state.task)}</div></div>`;
+  if(state.plan_text) html += `<div class="card"><h2>① 计划</h2><div class="plan">${esc(state.plan_text)}</div></div>`;
+
+  // 实时进度
+  if(state.live && state.live.done!=null){
+    const lv = state.live, pct = lv.total? Math.round(lv.done/lv.total*100):0;
+    html += `<div class="card"><h2>② 实时进度</h2>
+      <div class="live"><span class="spin"></span> 执行中：第 ${lv.done}/${lv.total} 步
+      · 最近：${capLabel(lv.capability)} ${lv.ok?"✅":"❌"}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div></div>`;
   }
-  if(trace.length){
-    html += '<div class="sec"><h3>执行步骤 · 第 '+(cycle+1)+' 轮</h3>';
-    trace.forEach((t,i)=>{
-      const ok = t.ok, real = t.real;
-      const cls = ok ? 'ok' : (ok===false ? 'bad' : 'pend');
-      const ic  = ok ? '✓' : (ok===false ? '✗' : '·');
-      const tag = real===true ? ' <span style="color:var(--accent)">真实</span>'
-                : real===false ? ' <span style="color:var(--bad)">失败/模拟</span>' : '';
-      html += '<div class="step '+cls+'"><div class="ic">'+ic+'</div>'
-            + '<div class="body"><div class="cap">'+esc(t.capability||('步骤'+(i+1)))+tag+'</div>'
-            + (t.summary ? '<div class="sum">'+esc(t.summary)+'</div>' : '')
-            + '</div></div>';
+
+  // 详细过程（每轮 trace + 用了什么引擎）
+  const traces = state.all_traces && state.all_traces.length ? state.all_traces : [];
+  // 若还没有 all_traces，但 last 里有 execution.trace，也展示
+  if(!traces.length && state.last && state.last.execution){
+    traces.push({cycle: state.cycle>=0?state.cycle:0, trace: state.last.execution.trace,
+                 verdict: state.last.verdict, confidence: state.last.confidence});
+  }
+  if(traces.length){
+    html += `<div class="card"><h2>③ 详细过程（每一步用了什么）</h2>`;
+    traces.forEach(tr=>{
+      html += `<div class="cyc"><div class="ct">第 ${tr.cycle+1} 轮`
+        + (tr.verdict? ` · 判定：${esc(tr.verdict.verdict||tr.verdict)}`:"")
+        + (tr.confidence&&tr.confidence.score!=null? ` · 置信 ${tr.confidence.score}/10`:"")
+        + `</div>`;
+      (tr.trace||[]).forEach(t=>{
+        const eng = t.engine? esc(t.engine) : "默认路由";
+        let rb = "", rc = "";
+        if(t.real===true){rb="真实";rc="b-real";}
+        else if(t.real===false){rb="模拟";rc="b-fake";}
+        else {rb="—";rc="";}
+        const okB = t.ok===false? '<span class="badge b-fail">失败</span>':(t.ok===true?'<span class="badge b-ok">成功</span>':"");
+        html += `<div class="step">
+          <div class="top">
+            <span class="cap">${capLabel(t.capability)}</span>
+            <span class="badge b-engine">用了：${eng}</span>
+            <span class="badge ${rc}">${rb}</span>
+            ${okB}
+          </div>`;
+        if(t.error){html += `<pre class="err">${esc(t.error)}</pre>`;}
+        else if(t.out){html += `<pre>${esc(t.out)}</pre>`;}
+        html += `</div>`;
+      });
+      html += `</div>`;
     });
-    html += '</div>';
+    html += `</div>`;
   }
-  if(exe.final){
-    html += '<div class="sec"><h3>最终结果</h3><div class="final">'+esc(exe.final)+'</div></div>';
-  }
-  if(last.reflection && last.reflection.log && last.reflection.log.length){
-    const r = last.reflection;
-    html += '<div class="sec"><h3>反思闭环</h3>';
-    html += '<div class="reflect">共执行 '+esc(r.attempts)+' 轮'
-          + (r.exhausted?' · 已达上限未完全达成':' · 已达成')+'</div>';
-    r.log.slice(-4).forEach(x=>{
-      html += '<div class="reflect">· '+(x.action||'')+'：'+esc(x.reason||'')+'</div>';
-    });
-    html += '</div>';
-  }
-  contentEl.innerHTML = html;
 
-  if(last.trace_id) metaEl.innerHTML = 'run_id: <code>'+esc(st.run_id||'')+'</code> · trace_id: <code>'+esc(last.trace_id)+'</code> · 耗时 '+esc(last.duration_s||'')+'s';
+  // 反思记录
+  const refl = state.reflection_log||[];
+  if(refl.length){
+    html += `<div class="card"><h2>④ 反思记录</h2><div class="refl">`;
+    refl.forEach(r=>{
+      const bits = [];
+      if(r.action) bits.push(`<span class="ra">${esc(r.action)}</span>`);
+      if(r.engine) bits.push(`引擎:${esc(r.engine)}`);
+      if(r.reason) bits.push(esc(r.reason));
+      if(r.new_step_count!=null) bits.push(`新步数:${r.new_step_count}`);
+      if(r.failed&&r.failed.length) bits.push(`失败步:${r.failed.map(esc).join(",")}`);
+      if(r.causal_hints&&r.causal_hints.length) bits.push(`因果建议:${r.causal_hints.map(h=>esc(Array.isArray(h)?h.join("→"):h)).join(";")}`);
+      html += `<div class="r">${bits.join(" · ")||"<span class='empty'>（空）</span>"}</div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // 最终交付
+  let finalTxt = (state.last&&state.last.execution&&state.last.execution.final)
+      || (state.last&&state.last.execution&&state.last.execution.trace
+          && state.last.execution.trace.filter(t=>t.ok&&t.real!==false).slice(-1)[0]
+          && state.last.execution.trace.filter(t=>t.ok&&t.real!==false).slice(-1)[0].out);
+  if(finalTxt){
+    html += `<div class="card final"><h2>⑤ 最终交付</h2><pre>${esc(finalTxt)}</pre></div>`;
+  }
+  out.innerHTML = html;
+  out.scrollIntoView({block:"end"});
 }
 
-async function poll(runId){
-  setPhase('正在执行，请稍候…', true);
-  pollTimer = setInterval(async ()=>{
-    try{
-      const r = await fetch('/api/autopilot/status/'+encodeURIComponent(runId));
-      const j = await r.json();
-      const st = j.state || {};
-      if(j.status === 'done'){
-        clearInterval(pollTimer);
-        renderState(st);
-        setPhase('✅ 完成', false);
-        runBtn.disabled = false;
-        if(st.last && st.last.error){ metaEl.innerHTML += '<div class="err">错误：'+esc(st.last.error)+'</div>'; }
-        return;
-      }
-      if(j.status === 'starting'){ setPhase('正在启动任务…', true); return; }
-      renderState(st);
-      const cyc = (st.cycle!=null?st.cycle:-1);
-      setPhase('自主环运行中 · 第 '+(cyc+1)+' 轮', true);
-    }catch(e){
-      setPhase('轮询状态出错：'+e.message, false);
-    }
-  }, 1200);
+async function poll(){
+  if(!runId) return;
+  try{
+    const r = await fetch(`${API}/api/autopilot/status/${runId}`);
+    const d = await r.json();
+    const st = d.status, state = d.state||{};
+    render(state, st);
+    if(st==="done"){setPill("已完成 ✅","done");clearInterval(pollTimer);$("#reset").style.display="block";}
+    else if(st==="failed"){setPill("执行出错 ❌","fail");clearInterval(pollTimer);$("#reset").style.display="block";}
+    else if(st==="starting"){setPill("启动中…","run");}
+    else {setPill("执行中 🔄","run");}
+  }catch(e){
+    $("#out").innerHTML = `<div class="card"><div class="err">轮询失败：${esc(e)}</div></div>`;
+  }
 }
 
 async function start(){
-  const task = taskEl.value.trim();
-  if(!task){ alert('先说/打一句你要它做什么'); return; }
-  runBtn.disabled = true;
-  contentEl.innerHTML = ''; metaEl.innerHTML = '';
-  setPhase('提交任务中…', true);
+  const task = $("#task").value.trim();
+  if(!task){alert("先输入一句话任务");return;}
+  $("#run").disabled = true; $("#reset").style.display="none";
+  setPill("提交中…","run");
   try{
-    const r = await fetch('/api/autopilot/run',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({task:task, planner:'zhipu'})
+    const r = await fetch(`${API}/api/autopilot/run`,{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({task, planner:"zhipu"})
     });
-    const j = await r.json();
-    if(!j.ok){ throw new Error(j.detail||'提交失败'); }
-    poll(j.run_id);
+    const d = await r.json();
+    if(!d.ok){throw new Error(d.detail||"提交失败");}
+    runId = d.run_id;
+    $("#out").innerHTML = `<div class="card"><div class="live"><span class="spin"></span> 已提交，run_id=${esc(runId)}，正在规划…</div></div>`;
+    clearInterval(pollTimer);
+    pollTimer = setInterval(poll, 1200);
+    poll();
   }catch(e){
-    setPhase('', false);
-    metaEl.innerHTML = '<div class="err">'+esc(e.message)+'</div>';
-    runBtn.disabled = false;
+    setPill("提交失败","fail");
+    $("#out").innerHTML = `<div class="card"><div class="err">${esc(e)}</div></div>`;
+    $("#run").disabled = false;
   }
 }
 
-runBtn.onclick = start;
-taskEl.addEventListener('keydown', e=>{ if((e.ctrlKey||e.metaKey) && e.key==='Enter') start(); });
-
-// ---- 语音输入（浏览器端 Web Speech API，本地识别，无需服务端）----
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-if(SR){
-  const rec = new SR();
-  rec.lang = 'zh-CN'; rec.interimResults = false; rec.maxAlternatives = 1;
-  rec.onresult = e=>{ taskEl.value = e.results[0][0].transcript; };
-  rec.onerror = e=>{ micBtn.classList.remove('on'); setPhase('语音识别出错：'+e.error, false); };
-  rec.onend = ()=> micBtn.classList.remove('on');
-  micBtn.onclick = ()=>{
-    if(micBtn.classList.contains('on')){ rec.stop(); return; }
-    try{ rec.start(); micBtn.classList.add('on'); setPhase('🎤 听写中…说完自动填入', true); }
-    catch(e){ setPhase('无法启动语音：'+e.message, false); }
-  };
-}else{
-  micBtn.disabled = true; micBtn.title = '当前浏览器不支持语音，请用 Chrome 或直接在框里打字';
+// 语音输入
+function initMic(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){$("#mic").title="当前浏览器不支持语音，请用手输入";return;}
+  const rec = new SR(); rec.lang="zh-CN"; rec.interimResults=false; rec.maxAlternatives=1;
+  let on=false;
+  $("#mic").addEventListener("click",()=>{
+    if(on){rec.stop();return;}
+    on=true; $("#mic").style.background="var(--bad)";
+    rec.start();
+  });
+  rec.onresult = e=>{ $("#task").value = e.results[0][0].transcript; };
+  rec.onend = ()=>{ on=false; $("#mic").style.background=""; };
+  rec.onerror = ()=>{ on=false; $("#mic").style.background=""; };
 }
+
+$("#run").addEventListener("click", start);
+$("#newTask").addEventListener("click",()=>{
+  runId=null; clearInterval(pollTimer); $("#task").value="";
+  $("#out").innerHTML=""; $("#reset").style.display="none"; $("#run").disabled=false;
+  setPill("待命","");
+});
+initMic();
 </script>
 </body>
 </html>

@@ -1198,7 +1198,7 @@ def _plan(task: str, planner: str):
 
 
 def _execute(task: str, steps: List[Dict[str, Any]], seed_context: Optional[Dict[str, Any]] = None,
-             parallel_groups=None):
+             parallel_groups=None, on_step=None):
     """执行一轮步骤（每轮新建 OrchestrationChiplet，保证上下文干净）。
 
     返回 (exe_res, recorded)：recorded 是本轮回所有「成功步」的真实产出
@@ -1235,6 +1235,18 @@ def _execute(task: str, steps: List[Dict[str, Any]], seed_context: Optional[Dict
                                 "（关键词重叠 %.2f）", len(recorded), overlap)
         # 因果反思闭环：把每步真实成败+引擎喂进白盒蒸馏器（opt-in）
         _feed_distiller(capability, res)
+        # 实时进度钩子：每步完成后通知前端（落盘 checkpoint，前端轮询可见逐步过程）
+        if on_step is not None:
+            try:
+                on_step({
+                    "done": len(recorded),
+                    "total": len(steps),
+                    "capability": capability,
+                    "ok": isinstance(res, InvokeResult) and bool(res.ok),
+                    "last_out": (recorded[-1]["out"] if recorded else None),
+                })
+            except Exception:  # noqa: BLE001
+                pass
         return res
 
     oc = OrchestrationChiplet(route_fn=_rec_route)
@@ -1687,9 +1699,11 @@ def _assemble(task, used_planner, plan_text, steps, exe_res, cycle, start) -> Di
                 {
                     "step": t.get("step"),
                     "capability": t.get("capability", ""),
+                    "engine": t.get("engine"),
                     "ok": t.get("ok"),
                     "real": (t.get("real_metrics") or {}).get("is_real"),
-                    "summary": str(t.get("summary") or t.get("error") or t.get("out") or t.get("output") or "")[:200],
+                    "out": str(t.get("out") or "")[:500],
+                    "error": str(t.get("error") or "")[:300],
                 }
                 for t in trace
             ],
@@ -1726,6 +1740,7 @@ class _RunState:
         self.prior_success: list = []
         self.reflection_log: list = []
         self.last: dict = {}
+        self.all_traces: list = []  # 每轮执行后的完整 trace（累计，供前端展示全过程）
         self.cycle = -1
         self.start = time.time()
         self.run_id = _new_run_id(task)
@@ -1743,6 +1758,7 @@ class _RunState:
             "prior_success": self.prior_success,
             "reflection_log": self.reflection_log,
             "last": self.last,
+            "all_traces": self.all_traces,
             "cycle": self.cycle,
             "start": self.start,
             "max_reflect": self.max_reflect,
@@ -1756,6 +1772,7 @@ class _RunState:
         s.prior_success = d.get("prior_success", [])
         s.reflection_log = d.get("reflection_log", [])
         s.last = d.get("last", {})
+        s.all_traces = d.get("all_traces", [])
         s.cycle = d.get("cycle", -1)
         s.start = d.get("start", time.time())
         s.run_id = d["run_id"]
@@ -1791,9 +1808,19 @@ def _advance_cycle(s: _RunState) -> bool:
             seed["text"] = seed_text
     # 仅首轮（主执行轮）透传并行分组；反思重设计后的轮次保持串行以保安全
     pg = s.parallel_groups if s.cycle == 0 else None
-    exe_res, recorded = _execute(s.task, s.steps, seed_context=seed, parallel_groups=pg)
+    def _live_save(prog):
+        snap = s.to_dict()
+        snap["live"] = prog
+        save_checkpoint(s.run_id, snap)
+    exe_res, recorded = _execute(s.task, s.steps, seed_context=seed, parallel_groups=pg, on_step=_live_save)
     r = _assemble(s.task, s.planner, s.plan_text, s.steps, exe_res, s.cycle, s.start)
     s.last = r
+    s.all_traces.append({
+        "cycle": s.cycle,
+        "trace": r.get("execution", {}).get("trace", []),
+        "verdict": r.get("verdict"),
+        "confidence": r.get("confidence"),
+    })
     if recorded:
         s.prior_success = recorded
     # 已达成（或产物已落盘的部分完成）→ 停
@@ -1848,6 +1875,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
     if run_id:
         s.run_id = run_id
     create_run(s.run_id, task, used_planner)
+    save_checkpoint(s.run_id, s.to_dict())  # 立即落盘计划，前端可秒看「已规划 N 步」
 
     while _advance_cycle(s):
         save_checkpoint(s.run_id, s.to_dict())
