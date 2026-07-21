@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AOS v5.0 - 智能工作台</title>
+<style>
+:root {
+  --blue: #2563eb; --blue-hover: #1d4ed8; --blue-light: #eff6ff;
+  --green: #16a34a; --red: #dc2626; --orange: #ea580c; --yellow: #ca8a04;
+  --gray-50: #f8fafc; --gray-100: #f1f5f9; --gray-200: #e2e8f0; --gray-300: #cbd5e1;
+  --gray-400: #94a3b8; --gray-500: #64748b; --gray-600: #475569; --gray-700: #334155;
+  --gray-800: #1e293b; --gray-900: #0f172a;
+  --radius: 10px; --shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--gray-50); color: var(--gray-800); height: 100vh; overflow: hidden; }
+.layout { display: flex; height: 100vh; }
+
+/* ---- 侧边栏 ---- */
+.sidebar { width: 216px; background: var(--gray-900); display: flex; flex-direction: column; flex-shrink: 0; }
+.logo { padding: 18px 16px 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, #3b82f6, #6366f1); border-radius: 9px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 15px; }
+.logo-text { color: #f1f5f9; font-size: 14px; font-weight: 600; }
+.logo-sub { display: flex; align-items: center; gap: 5px; margin-top: 3px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); animation: pulse 1.2s infinite; }
+.dot.on { background: #4ade80; animation: none; }
+.dot.off { background: #f87171; animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+.logo-status { font-size: 10px; color: var(--gray-400); }
+.nav { flex: 1; padding: 12px 8px; overflow-y: auto; }
+.nav-group { font-size: 10px; color: var(--gray-500); text-transform: uppercase; letter-spacing: 1px; padding: 12px 12px 6px; font-weight: 600; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; color: var(--gray-400); font-size: 13px; cursor: pointer; transition: all .15s; margin-bottom: 2px; user-select: none; }
+.nav-item:hover { background: rgba(255,255,255,.06); color: var(--gray-200); }
+.nav-item.active { background: rgba(59,130,246,.15); color: #93c5fd; font-weight: 600; }
+.nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+.sidebar-footer { padding: 12px; text-align: center; font-size: 10px; color: var(--gray-600); border-top: 1px solid rgba(255,255,255,.06); }
+
+/* ---- 主区域 ---- */
+.main { flex: 1; overflow-y: auto; }
+.view { display: none; padding: 28px 32px; animation: fadeIn .2s ease-out; }
+.view.active { display: block; }
+.view-chat.active { display: flex; flex-direction: column; height: 100vh; padding: 0; }
+.view-store { padding: 0; height: 100vh; }
+.view-store.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+h1 { font-size: 22px; font-weight: 700; color: var(--gray-900); margin-bottom: 4px; }
+.subtitle { font-size: 13px; color: var(--gray-400); margin-bottom: 24px; }
+.card { background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+.card-title { font-size: 13px; font-weight: 600; color: var(--gray-600); margin-bottom: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+.stat-label { font-size: 11px; color: var(--gray-400); margin-bottom: 4px; }
+.stat-value { font-size: 18px; font-weight: 700; color: var(--gray-800); }
+.stat-value.ok { color: var(--green); }
+.stat-value.err { color: var(--red); }
+
+/* ---- 通用控件 ---- */
+.input { width: 100%; padding: 10px 14px; border: 1px solid var(--gray-200); border-radius: 8px; font-size: 13px; outline: none; transition: border .15s, box-shadow .15s; background: #fff; color: var(--gray-800); }
+.input:focus { border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+.btn { padding: 10px 20px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s; }
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-primary:hover { background: var(--blue-hover); }
+.btn-primary:disabled { background: var(--gray-300); cursor: not-allowed; }
+.btn-ghost { background: var(--blue-light); color: var(--blue); }
+.btn-ghost:hover { background: #dbeafe; }
+select.input { appearance: auto; }
+
+/* ---- 引擎列表 ---- */
+.engine-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 7px; margin-bottom: 4px; font-size: 13px; }
+.engine-row.alive { background: #f0fdf4; }
+.engine-row.dead { background: #fef2f2; }
+.engine-name { font-weight: 500; color: var(--gray-700); }
+.engine-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+.engine-badge.alive { background: #dcfce7; color: #15803d; }
+.engine-badge.dead { background: #fee2e2; color: #b91c1c; }
+
+/* ---- 对话 ---- */
+.chat-header { padding: 16px 24px; background: #fff; border-bottom: 1px solid var(--gray-200); }
+.chat-header h2 { font-size: 16px; font-weight: 700; color: var(--gray-900); }
+.chat-header p { font-size: 11px; color: var(--gray-400); margin-top: 2px; }
+.chat-body { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+.chat-empty { text-align: center; color: var(--gray-300); font-size: 13px; padding: 60px 0; }
+.msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.msg.user { align-self: flex-end; background: var(--blue); color: #fff; border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: #fff; border: 1px solid var(--gray-200); color: var(--gray-700); border-bottom-left-radius: 4px; }
+.msg.bot .route-tag { display: inline-block; font-size: 10px; color: var(--gray-400); background: var(--gray-100); padding: 1px 6px; border-radius: 4px; margin-bottom: 4px; }
+.chat-input-bar { padding: 16px 24px; background: #fff; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; }
+.chat-input-bar .input { flex: 1; }
+
+/* ---- 搜索 ---- */
+.search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+.search-bar .input { flex: 1; }
+.result-card { background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 16px; margin-bottom: 10px; }
+.result-card a { font-size: 14px; font-weight: 600; color: var(--blue); text-decoration: none; }
+.result-card a:hover { text-decoration: underline; }
+.result-card p { font-size: 12px; color: var(--gray-500); margin-top: 6px; line-height: 1.5; }
+
+/* ---- 投标 ---- */
+.drop-zone { border: 2px dashed var(--gray-300); border-radius: var(--radius); padding: 48px 20px; text-align: center; cursor: pointer; background: #fff; transition: all .2s; }
+.drop-zone:hover, .drop-zone.dragover { border-color: var(--blue); background: var(--blue-light); }
+.drop-zone svg { width: 44px; height: 44px; color: #93c5fd; margin: 0 auto 12px; }
+.drop-label { font-size: 13px; color: var(--gray-500); }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.bid-loading { text-align: center; padding: 70px 0; }
+.spinner { width: 40px; height: 40px; border: 4px solid var(--gray-200); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 16px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.bid-step { font-size: 13px; color: var(--gray-400); }
+.report-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.report-stat { background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 14px; text-align: center; }
+.report-stat .num { font-size: 22px; font-weight: 700; }
+.report-stat .lbl { font-size: 10px; color: var(--gray-400); margin-top: 2px; }
+.num.blue { color: var(--blue); } .num.indigo { color: #4f46e5; } .num.red { color: var(--red); } .num.green { color: var(--green); } .num.gray { color: var(--gray-600); }
+.risk-item { padding: 10px 14px; border-radius: 0 8px 8px 0; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; background: var(--gray-50); font-size: 12px; color: var(--gray-700); }
+.risk-item.sev-critical { border-left: 4px solid var(--red); }
+.risk-item.sev-high { border-left: 4px solid var(--orange); }
+.risk-item.sev-medium { border-left: 4px solid var(--yellow); }
+.risk-item.sev-low { border-left: 4px solid var(--green); }
+.sev-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+.sev-badge.sev-critical { background: #fee2e2; color: #b91c1c; }
+.sev-badge.sev-high { background: #ffedd5; color: #c2410c; }
+.sev-badge.sev-medium { background: #fef9c3; color: #a16207; }
+.sev-badge.sev-low { background: #dcfce7; color: #15803d; }
+.req-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 8px; background: var(--gray-50); margin-bottom: 6px; }
+.req-num { width: 20px; height: 20px; border-radius: 50%; background: #dbeafe; color: var(--blue); font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.req-type { font-size: 10px; background: var(--blue-light); color: var(--blue); font-weight: 600; padding: 1px 6px; border-radius: 4px; }
+.req-detail { font-size: 12px; color: var(--gray-600); margin-top: 3px; line-height: 1.5; }
+.section { margin-bottom: 16px; }
+
+/* ---- 飞轮 ---- */
+.fw-form { display: grid; grid-template-columns: 1fr 160px; gap: 12px; margin-bottom: 14px; }
+.fw-output { background: var(--gray-900); color: #a5f3fc; border-radius: var(--radius); padding: 18px; font-size: 12px; font-family: "Cascadia Code", "Fira Code", monospace; white-space: pre-wrap; max-height: 420px; overflow-y: auto; line-height: 1.6; }
+
+/* ---- 任务 ---- */
+.task-row { display: flex; align-items: center; justify-content: space-between; background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 8px; }
+.task-title { font-size: 13px; font-weight: 500; color: var(--gray-700); }
+.task-meta { font-size: 11px; color: var(--gray-400); margin-top: 2px; }
+.task-badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; }
+.task-badge.running { background: #fef9c3; color: #a16207; }
+.task-badge.done, .task-badge.completed { background: #dcfce7; color: #15803d; }
+.task-badge.pending, .task-badge.queued { background: var(--gray-100); color: var(--gray-500); }
+.task-badge.failed { background: #fee2e2; color: #b91c1c; }
+
+/* ---- 技能 ---- */
+.skill-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.skill-card { background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 16px; }
+.skill-name { font-size: 13px; font-weight: 600; color: var(--gray-800); }
+.skill-desc { font-size: 11px; color: var(--gray-500); margin-top: 5px; line-height: 1.5; }
+.skill-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.skill-tag { font-size: 10px; background: var(--gray-100); color: var(--gray-500); padding: 2px 7px; border-radius: 4px; }
+
+/* ---- 系统 ---- */
+.sys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.sys-pre { font-size: 11px; font-family: monospace; white-space: pre-wrap; color: var(--gray-600); max-height: 400px; overflow-y: auto; line-height: 1.5; }
+.hint { font-size: 12px; color: var(--gray-400); text-align: center; padding: 30px 0; }
+.error-text { font-size: 12px; color: var(--red); }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- 侧边栏 -->
+<aside class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">A</div>
+    <div>
+      <div class="logo-text">AOS v5.0</div>
+      <div class="logo-sub"><span id="sysDot" class="dot"></span><span id="sysText" class="logo-status">连接中...</span></div>
+    </div>
+  </div>
+  <nav class="nav">
+    <div class="nav-group">核心</div>
+    <div class="nav-item active" data-view="dashboard" onclick="switchView('dashboard')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+      仪表盘
+    </div>
+    <div class="nav-item" data-view="chat" onclick="switchView('chat')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+      AI 对话
+    </div>
+    <div class="nav-item" data-view="search" onclick="switchView('search')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+      智能搜索
+    </div>
+    <div class="nav-group">业务</div>
+    <div class="nav-item" data-view="bidding" onclick="switchView('bidding')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      投标分析
+    </div>
+    <div class="nav-item" data-view="flywheel" onclick="switchView('flywheel')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      内容飞轮
+    </div>
+    <div class="nav-item" data-view="store" onclick="switchView('store')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+      智能体商店
+    </div>
+    <div class="nav-group">系统</div>
+    <div class="nav-item" data-view="tasks" onclick="switchView('tasks')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+      自主执行
+    </div>
+    <div class="nav-item" data-view="skills" onclick="switchView('skills')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/></svg>
+      技能库
+    </div>
+    <div class="nav-item" data-view="system" onclick="switchView('system')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      系统状态
+    </div>
+  </nav>
+  <div class="sidebar-footer">AOS v5.0 · 单内核 + 多芯粒架构</div>
+</aside>
+
+<!-- 主内容 -->
+<main class="main">
+
+<!-- 仪表盘 -->
+<div id="view-dashboard" class="view active">
+  <h1>仪表盘</h1>
+  <p class="subtitle">系统运行状态总览</p>
+  <div class="grid3">
+    <div class="card"><p class="stat-label">系统状态</p><p id="dashHealth" class="stat-value">检测中...</p></div>
+    <div class="card"><p class="stat-label">注册引擎</p><p id="dashEngines" class="stat-value">-</p></div>
+    <div class="card"><p class="stat-label">技能数量</p><p id="dashSkills" class="stat-value">-</p></div>
+  </div>
+  <div class="card">
+    <p class="card-title">引擎状态（FabricHub 实时探测）</p>
+    <div id="dashEngineList"><p class="hint">加载中...</p></div>
+  </div>
+</div>
+
+<!-- AI 对话 -->
+<div id="view-chat" class="view view-chat">
+  <div class="chat-header">
+    <h2>AI 对话</h2>
+    <p>FabricHub 统一路由 · 多引擎自动故障转移</p>
+  </div>
+  <div id="chatBody" class="chat-body">
+    <p class="chat-empty">输入消息开始对话，AOS 自动选择最优引擎响应</p>
+  </div>
+  <div class="chat-input-bar">
+    <input id="chatInput" class="input" type="text" placeholder="输入消息..." onkeydown="if(event.key==='Enter')sendChat()">
+    <button class="btn btn-primary" onclick="sendChat()">发送</button>
+  </div>
+</div>
+
+<!-- 智能搜索 -->
+<div id="view-search" class="view">
+  <h1>智能搜索</h1>
+  <p class="subtitle">六级源网络搜索 · AnySearch / 百度 / Bing 自动故障转移 · 免 key</p>
+  <div class="search-bar">
+    <input id="searchInput" class="input" type="text" placeholder="输入搜索内容..." onkeydown="if(event.key==='Enter')doSearch()">
+    <button class="btn btn-primary" onclick="doSearch()">搜索</button>
+  </div>
+  <div id="searchResults"></div>
+</div>
+
+<!-- 投标分析 -->
+<div id="view-bidding" class="view">
+  <h1>投标分析</h1>
+  <p class="subtitle">上传招标文件 PDF，自动提取需求、检查合规、匹配资质、生成策略</p>
+
+  <div id="bidUpload">
+    <div id="bidDropZone" class="drop-zone" onclick="document.getElementById('bidFileInput').click()">
+      <input type="file" id="bidFileInput" accept=".pdf" style="display:none" onchange="bidFileSelect(event)">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+      <p id="bidFileLabel" class="drop-label">拖拽 PDF 到此处，或点击选择文件</p>
+    </div>
+    <div class="form-grid">
+      <input id="bidCompany" class="input" type="text" placeholder="公司名称（选填，用于资质匹配）">
+      <input id="bidQuals" class="input" type="text" placeholder="已有资质，逗号分隔（选填）">
+    </div>
+    <button id="bidBtn" class="btn btn-primary" style="width:100%;margin-top:16px;padding:13px" disabled onclick="bidAnalyze()">开始分析</button>
+  </div>
+
+  <div id="bidLoading" class="bid-loading" style="display:none">
+    <div class="spinner"></div>
+    <p id="bidStep" class="bid-step">正在解析 PDF...</p>
+  </div>
+
+  <div id="bidReport" style="display:none"></div>
+</div>
+
+<!-- 内容飞轮 -->
+<div id="view-flywheel" class="view">
+  <h1>内容飞轮</h1>
+  <p class="subtitle">一句话目标 → 自动生产完整内容（选题 → 脚本 → 正文 → 发布策略）</p>
+  <div class="card" style="margin-bottom:16px">
+    <div class="fw-form">
+      <input id="fwGoal" class="input" type="text" placeholder="输入内容目标，如：写一篇智能家居种草文，目标小红书平台">
+      <select id="fwAuto" class="input">
+        <option value="0">人工审核模式</option>
+        <option value="1">全自动发布</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="runFlywheel()">执行一轮生产</button>
+  </div>
+  <div id="fwResult" style="display:none">
+    <p class="card-title">执行结果</p>
+    <div id="fwOutput" class="fw-output"></div>
+  </div>
+</div>
+
+<!-- 智能体商店（嵌入 /studio/，同源 iframe） -->
+<div id="view-store" class="view view-store">
+  <iframe id="storeFrame" src="/studio/" style="width:100%;height:100%;border:none;background:#f8fafc"></iframe>
+</div>
+
+<!-- 自主执行（一句话 → 规划→执行→反思→交付，全程可见） -->
+<div id="view-tasks" class="view">
+  <h1>自主执行</h1>
+  <p class="subtitle">输入一句话目标（或点 🎤 说话），AOS 自主规划 → 执行 → 反思 → 交付，全过程实时可见</p>
+  <div class="search-bar">
+    <input id="taskInput" class="input" type="text" placeholder="例如：调研 AOS 自主进化框架，写一份 800 字对比报告" onkeydown="if(event.key==='Enter')runAutopilot()">
+    <button id="micBtn" class="btn btn-ghost" type="button" onclick="startVoice()" title="语音输入">🎤</button>
+    <button id="runBtn" class="btn btn-primary" onclick="runAutopilot()">执行并看过程</button>
+  </div>
+
+  <div id="apProgress" style="display:none">
+    <div class="card" style="margin-bottom:16px">
+      <p class="card-title">实时进度</p>
+      <div id="apLive" style="font-size:13px;color:var(--gray-600)">规划中…</div>
+      <div style="background:var(--gray-100);border-radius:6px;height:8px;margin-top:10px;overflow:hidden">
+        <div id="apBar" style="height:100%;width:0;background:var(--blue);transition:width .4s"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <p class="card-title">执行计划</p>
+      <pre id="apPlan" class="sys-pre" style="white-space:pre-wrap">规划中…</pre>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <p class="card-title">详细过程（每一轮 · 每一步）</p>
+      <div id="apTrace"><p class="hint">等待执行…</p></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <p class="card-title">反思记录</p>
+      <div id="apReflect"><p class="hint">暂无反思</p></div>
+    </div>
+
+    <div class="card">
+      <p class="card-title">最终交付</p>
+      <pre id="apFinal" class="sys-pre" style="white-space:pre-wrap"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- 技能库 -->
+<div id="view-skills" class="view">
+  <h1>技能库</h1>
+  <p class="subtitle">已注册的全部 AOS 技能</p>
+  <div id="skillList" class="skill-grid"><p class="hint">加载中...</p></div>
+</div>
+
+<!-- 系统状态 -->
+<div id="view-system" class="view">
+  <h1>系统状态</h1>
+  <p class="subtitle">供给方引擎与运行统计</p>
+  <div class="sys-grid">
+    <div class="card">
+      <p class="card-title">供给方 / 引擎</p>
+      <div id="sysProviders"><p class="hint">加载中...</p></div>
+    </div>
+    <div class="card">
+      <p class="card-title">运行统计</p>
+      <div id="sysStats"><p class="hint">加载中...</p></div>
+    </div>
+  </div>
+</div>
+
+</main>
+</div>
+
+<script>
+// ---- 视图切换 ----
+function switchView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  var nav = document.querySelector('[data-view="' + name + '"]');
+  if (nav) nav.classList.add('active');
+  try { history.replaceState(null, '', '#' + name); } catch (e) {}
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'skills') loadSkills();
+  if (name === 'system') loadSystem();
+  if (name === 'tasks') initAutopilotView();
+}
+
+// ---- 健康检测 ----
+async function checkHealth() {
+  var dot = document.getElementById('sysDot'), txt = document.getElementById('sysText');
+  try {
+    var r = await fetch('/health', { signal: AbortSignal.timeout(4000) });
+    if (r.ok) { dot.className = 'dot on'; txt.textContent = '运行中'; }
+    else { dot.className = 'dot off'; txt.textContent = '异常'; }
+  } catch (e) { dot.className = 'dot off'; txt.textContent = '离线'; }
+}
+checkHealth(); setInterval(checkHealth, 15000);
+
+// ---- 仪表盘 ----
+async function loadDashboard() {
+  try {
+    var r = await fetch('/api/fabric');
+    var d = await r.json();
+    var engines = d.engines || [];
+    var liveCount = d.live_count !== undefined ? d.live_count : engines.filter(function(e){ return e.live; }).length;
+    document.getElementById('dashHealth').innerHTML = '<span class="stat-value ok">在线</span>';
+    document.getElementById('dashEngines').textContent = engines.length + ' 个（' + liveCount + ' 存活）';
+    var html = '';
+    engines.forEach(function(e) {
+      var name = e.engine_id || e.name || '?';
+      var alive = !!e.live;
+      html += '<div class="engine-row ' + (alive ? 'alive' : 'dead') + '">' +
+        '<span class="engine-name">' + esc(name) + '</span>' +
+        '<span class="engine-badge ' + (alive ? 'alive' : 'dead') + '">' + (alive ? '存活' : '离线') + '</span></div>';
+    });
+    document.getElementById('dashEngineList').innerHTML = html || '<p class="hint">无引擎数据</p>';
+  } catch (e) {
+    document.getElementById('dashHealth').innerHTML = '<span class="stat-value err">错误</span>';
+    document.getElementById('dashEngineList').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>';
+  }
+  try {
+    var r2 = await fetch('/api/skills');
+    var d2 = await r2.json();
+    var skills = d2.skills || d2 || [];
+    document.getElementById('dashSkills').textContent = (Array.isArray(skills) ? skills.length : 0) + ' 个';
+  } catch (e) { document.getElementById('dashSkills').textContent = '-'; }
+}
+loadDashboard();
+
+// ---- AI 对话 ----
+var chatSession = null;
+async function sendChat() {
+  var input = document.getElementById('chatInput');
+  var msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  appendMsg('user', msg);
+  var waitEl = appendMsg('bot', '思考中...');
+  try {
+    var r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, session_id: chatSession })
+    });
+    var d = await r.json();
+    waitEl.remove();
+    if (!r.ok) { appendMsg('bot', '请求失败: ' + (d.detail || r.status)); return; }
+    chatSession = d.session_id || chatSession;
+    var el = appendMsg('bot', d.response || d.reply || d.content || JSON.stringify(d));
+    if (d.route) {
+      var tag = document.createElement('div');
+      tag.className = 'route-tag';
+      tag.textContent = 'via ' + d.route;
+      el.insertBefore(tag, el.firstChild);
+    }
+  } catch (e) { waitEl.remove(); appendMsg('bot', '网络错误: ' + e.message); }
+}
+function appendMsg(role, text) {
+  var box = document.getElementById('chatBody');
+  var empty = box.querySelector('.chat-empty');
+  if (empty) empty.remove();
+  var div = document.createElement('div');
+  div.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+// ---- 智能搜索（六级源网络搜索） ----
+async function doSearch() {
+  var q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  var box = document.getElementById('searchResults');
+  box.innerHTML = '<p class="hint">搜索中（多源故障转移，可能需要几秒）...</p>';
+  try {
+    var r = await fetch('/api/web-search?q=' + encodeURIComponent(q));
+    var d = await r.json();
+    if (!r.ok) { box.innerHTML = '<p class="error-text">请求失败: ' + esc(d.detail || r.status) + '</p>'; return; }
+    if (!d.ok) { box.innerHTML = '<p class="error-text">搜索失败: ' + esc(d.error || '所有搜索源均不可用') + '</p>'; return; }
+    var data = d.data || {};
+    var results = data.results || [];
+    var confLabel = { high: '高', medium: '中', low: '低' }[data.confidence] || data.confidence || '';
+    var meta = '<p style="font-size:11px;color:var(--gray-400);margin-bottom:14px">来源: ' + esc(data.engine || '?') +
+      ' · 命中 ' + (data.count || results.length) + ' 条' + (confLabel ? ' · 置信度 ' + esc(confLabel) : '') + '</p>';
+    if (!results.length) { box.innerHTML = meta + '<p class="hint">未找到相关结果</p>'; return; }
+    box.innerHTML = meta + results.slice(0, 15).map(function(item) {
+      var title = item.title || '结果';
+      var url = item.url || item.link || '';
+      var snippet = item.body || item.snippet || item.description || item.content || '';
+      if (typeof snippet !== 'string') snippet = JSON.stringify(snippet);
+      return '<div class="result-card">' +
+        (url ? '<a href="' + esc(url) + '" target="_blank">' + esc(title) + '</a>' : '<span style="font-size:14px;font-weight:600;color:var(--gray-800)">' + esc(title) + '</span>') +
+        (url ? '<p style="font-size:11px;color:var(--green);margin:2px 0">' + esc(url) + '</p>' : '') +
+        '<p>' + esc(snippet.slice(0, 300)) + '</p></div>';
+    }).join('');
+  } catch (e) { box.innerHTML = '<p class="error-text">' + esc(e.message) + '</p>'; }
+}
+
+// ---- 投标分析 ----
+var bidFile = null;
+var dz = document.getElementById('bidDropZone');
+dz.addEventListener('dragover', function(e) { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', function() { dz.classList.remove('dragover'); });
+dz.addEventListener('drop', function(e) {
+  e.preventDefault(); dz.classList.remove('dragover');
+  var f = e.dataTransfer.files[0];
+  if (f && f.name.toLowerCase().endsWith('.pdf')) setBidFile(f);
+  else alert('请选择 PDF 文件');
+});
+function bidFileSelect(e) { if (e.target.files[0]) setBidFile(e.target.files[0]); }
+function setBidFile(f) {
+  bidFile = f;
+  document.getElementById('bidFileLabel').textContent = f.name + '（' + (f.size / 1048576).toFixed(1) + ' MB）';
+  document.getElementById('bidBtn').disabled = false;
+}
+
+async function bidAnalyze() {
+  if (!bidFile) return;
+  document.getElementById('bidUpload').style.display = 'none';
+  document.getElementById('bidLoading').style.display = 'block';
+  var steps = ['正在解析 PDF...', '正在提取招标需求...', '正在检查合规风险...', '正在匹配资质...', '正在生成投标策略...'];
+  var si = 0;
+  var timer = setInterval(function() { si = Math.min(si + 1, steps.length - 1); document.getElementById('bidStep').textContent = steps[si]; }, 2000);
+
+  var fd = new FormData();
+  fd.append('file', bidFile);
+  var cn = document.getElementById('bidCompany').value.trim();
+  var qf = document.getElementById('bidQuals').value.trim();
+  if (cn) fd.append('company_name', cn);
+  if (qf) fd.append('qualifications', qf);
+
+  try {
+    var r = await fetch('/api/bidding/analyze', { method: 'POST', body: fd });
+    var data = await r.json();
+    clearInterval(timer);
+    document.getElementById('bidLoading').style.display = 'none';
+    if (!r.ok || !data.ok) throw new Error(data.detail || data.error || '分析失败');
+    renderBidReport(data);
+  } catch (e) {
+    clearInterval(timer);
+    document.getElementById('bidLoading').style.display = 'none';
+    document.getElementById('bidUpload').style.display = 'block';
+    alert('分析出错: ' + e.message);
+  }
+}
+
+function renderBidReport(data) {
+  var a = data.analysis || {};
+  var reqs = a.requirements || [];
+  var compliance = data.compliance || [];
+  var critical = data.critical_risks || [];
+  var match = data.qualification_match || {};
+  var strategy = data.strategy || '';
+  var trace = data.trace || {};
+  var sevNames = { critical: '致命', high: '高', medium: '中', low: '低' };
+  var sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+
+  var html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">' +
+    '<h2 style="font-size:18px;font-weight:700">分析报告</h2>' +
+    '<button class="btn btn-ghost" onclick="bidReset()">新建分析</button></div>';
+
+  html += '<div class="report-stats">' +
+    '<div class="report-stat"><p class="num blue">' + reqs.length + '</p><p class="lbl">提取需求</p></div>' +
+    '<div class="report-stat"><p class="num indigo">' + compliance.length + '</p><p class="lbl">合规风险</p></div>' +
+    '<div class="report-stat"><p class="num ' + (critical.length ? 'red' : 'green') + '">' + critical.length + '</p><p class="lbl">致命风险</p></div>' +
+    '<div class="report-stat"><p class="num gray">' + (trace.elapsed_sec || '?') + 's</p><p class="lbl">分析耗时</p></div></div>';
+
+  // 需求
+  html += '<div class="card section"><p class="card-title">招标需求提取</p>';
+  if (reqs.length) {
+    reqs.forEach(function(rq, i) {
+      html += '<div class="req-item"><span class="req-num">' + (i + 1) + '</span><div><span class="req-type">' + esc(rq.type || '需求') + '</span><p class="req-detail">' + esc(rq.detail || '') + '</p></div></div>';
+    });
+  } else html += '<p class="hint">未检测到明确需求</p>';
+  html += '</div>';
+
+  // 合规
+  html += '<div class="card section"><p class="card-title">合规风险检查</p>';
+  var sorted = compliance.slice().sort(function(x, y) { return (sevOrder[x.severity] || 9) - (sevOrder[y.severity] || 9); });
+  if (sorted.length) {
+    sorted.forEach(function(c) {
+      var sev = c.severity || 'low';
+      html += '<div class="risk-item sev-' + sev + '"><span>' + esc(c.rule || c.name || c.description || '') + '</span><span class="sev-badge sev-' + sev + '">' + (sevNames[sev] || sev) + '</span></div>';
+    });
+  } else html += '<p class="hint">未发现合规风险</p>';
+  html += '</div>';
+
+  // 资质匹配
+  if (match && ((match.matched || 0) > 0 || (match.missing || 0) > 0 || (match.missing_items || []).length)) {
+    html += '<div class="card section"><p class="card-title">资质匹配</p>' +
+      '<p style="font-size:13px;margin-bottom:8px"><span style="color:var(--green);font-weight:600">满足: ' + (match.matched || 0) + '</span>' +
+      '&nbsp;&nbsp;<span style="color:var(--red);font-weight:600">缺失: ' + (match.missing || 0) + '</span></p>';
+    (match.missing_items || []).forEach(function(m) { html += '<p style="font-size:12px;color:var(--red)">✗ ' + esc(m) + '</p>'; });
+    html += '</div>';
+  }
+
+  // 策略
+  html += '<div class="card section"><p class="card-title">投标策略建议</p>' +
+    '<p style="font-size:13px;color:var(--gray-600);line-height:1.8;white-space:pre-line">' + esc(typeof strategy === 'string' ? strategy : JSON.stringify(strategy, null, 2)) + '</p></div>';
+
+  var box = document.getElementById('bidReport');
+  box.innerHTML = html;
+  box.style.display = 'block';
+}
+function bidReset() {
+  bidFile = null;
+  document.getElementById('bidFileLabel').textContent = '拖拽 PDF 到此处，或点击选择文件';
+  document.getElementById('bidBtn').disabled = true;
+  document.getElementById('bidFileInput').value = '';
+  document.getElementById('bidReport').style.display = 'none';
+  document.getElementById('bidUpload').style.display = 'block';
+}
+
+// ---- 内容飞轮 ----
+async function runFlywheel() {
+  var goal = document.getElementById('fwGoal').value.trim();
+  if (!goal) { alert('请输入内容目标'); return; }
+  var auto = document.getElementById('fwAuto').value === '1';
+  document.getElementById('fwResult').style.display = 'block';
+  document.getElementById('fwOutput').textContent = '正在执行内容生产流水线...\n（选题 → 脚本 → 正文 → 策略，可能需要 30-60 秒）';
+  try {
+    var r = await fetch('/api/content/produce', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal: goal, auto_publish: auto })
+    });
+    var d = await r.json();
+    document.getElementById('fwOutput').textContent = JSON.stringify(d, null, 2);
+  } catch (e) {
+    document.getElementById('fwOutput').textContent = '执行出错: ' + e.message;
+  }
+}
+
+// ---- 自主执行（一句话 → 看完整过程）----
+function initAutopilotView() {
+  var el = document.getElementById('taskInput');
+  if (el) el.focus();
+}
+var apRunId = null, apTimer = null;
+async function runAutopilot() {
+  var input = document.getElementById('taskInput');
+  var task = input.value.trim();
+  if (!task) { alert('请输入一句话任务目标'); return; }
+  document.getElementById('apProgress').style.display = 'block';
+  document.getElementById('apPlan').textContent = '规划中…';
+  document.getElementById('apTrace').innerHTML = '<p class="hint">等待执行…</p>';
+  document.getElementById('apReflect').innerHTML = '<p class="hint">暂无反思</p>';
+  document.getElementById('apFinal').textContent = '';
+  document.getElementById('apBar').style.width = '0%';
+  document.getElementById('runBtn').disabled = true;
+  try {
+    var r = await fetch('/api/autopilot/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: task, planner: 'zhipu' })
+    });
+    var d = await r.json();
+    if (!r.ok || !d.ok) { alert('启动失败: ' + (d.detail || d.error || r.status)); document.getElementById('runBtn').disabled = false; return; }
+    apRunId = d.run_id;
+    pollAutopilot();
+  } catch (e) { alert('启动出错: ' + e.message); document.getElementById('runBtn').disabled = false; }
+}
+async function pollAutopilot() {
+  if (!apRunId) return;
+  try {
+    var r = await fetch('/api/autopilot/status/' + encodeURIComponent(apRunId));
+    var d = await r.json();
+    renderAutopilot(d);
+    if (d.status === 'done' || d.status === 'failed') { document.getElementById('runBtn').disabled = false; return; }
+  } catch (e) { /* 网络抖动，下一轮继续轮询 */ }
+  apTimer = setTimeout(pollAutopilot, 1500);
+}
+function renderAutopilot(d) {
+  var st = d.state || {};
+  if (st.plan_text) document.getElementById('apPlan').textContent = st.plan_text;
+  var live = st.live;
+  var liveTxt = '运行中…';
+  if (live) {
+    var done = live.done || 0, total = live.total || 0;
+    liveTxt = '第 ' + done + ' / ' + total + ' 步：正在执行「' + (live.capability || '') + '」' + (live.ok ? ' ✅' : '');
+    document.getElementById('apBar').style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+  } else if (st.all_traces && st.all_traces.length) {
+    liveTxt = '已完成 ' + st.all_traces.length + ' 轮反思闭环';
+    document.getElementById('apBar').style.width = '100%';
+  }
+  document.getElementById('apLive').textContent = liveTxt;
+  renderTrace(st.all_traces || []);
+  renderReflect(st.reflection_log || []);
+  if (st.last) {
+    var fin = (st.last.execution && st.last.execution.final) || st.last.plan || '';
+    var conf = st.last.confidence || {};
+    var verdict = st.last.verdict || '';
+    var dur = st.last.duration_s || '';
+    var head = '';
+    if (conf.label) head += '【' + conf.label + '】 ';
+    if (verdict) head += verdict + ' ';
+    if (dur) head += '（耗时 ' + dur + 's）';
+    document.getElementById('apFinal').textContent = (head ? head + '\n\n' : '') + String(fin || '（无文本交付物，详见上方过程记录）');
+  }
+}
+function renderTrace(traces) {
+  var box = document.getElementById('apTrace');
+  if (!traces.length) { box.innerHTML = '<p class="hint">等待执行…</p>'; return; }
+  var html = '';
+  traces.forEach(function (cy) {
+    html += '<div style="margin-bottom:14px"><div style="font-size:12px;font-weight:600;color:var(--gray-700);margin-bottom:6px">第 ' + (cy.cycle + 1) + ' 轮' + (cy.verdict ? ' · ' + esc(cy.verdict) : '') + '</div>';
+    (cy.trace || []).forEach(function (t, i) {
+      var engine = t.engine ? ' <span style="font-size:11px;color:var(--gray-500)">用了：' + esc(t.engine) + '</span>' : '';
+      var badge = t.ok ? '<span class="task-badge done">成功</span>' : '<span class="task-badge failed">失败</span>';
+      var realBadge = t.real === true ? '<span class="sev-badge sev-low" style="background:#dcfce7;color:#15803d">真实</span>'
+        : (t.real === false ? '<span class="sev-badge sev-medium" style="background:#fef9c3;color:#a16207">模拟</span>' : '');
+      var out = t.out ? '<pre class="sys-pre" style="white-space:pre-wrap;margin-top:6px">' + esc(t.out) + '</pre>' : '';
+      var err = t.error ? '<pre class="sys-pre" style="white-space:pre-wrap;margin-top:6px;color:var(--red)">' + esc(t.error) + '</pre>' : '';
+      html += '<div style="border:1px solid var(--gray-200);border-radius:8px;padding:10px 12px;margin-bottom:6px">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:12px;font-weight:600;color:var(--gray-800)">步骤 ' + (t.step != null ? t.step : (i + 1)) + '</span>' +
+        '<span style="font-size:11px;color:var(--blue)">' + esc(t.capability || '') + '</span>' + engine + badge + realBadge + '</div>' + out + err + '</div>';
+    });
+    html += '</div>';
+  });
+  box.innerHTML = html;
+}
+function renderReflect(log) {
+  var box = document.getElementById('apReflect');
+  if (!log || !log.length) { box.innerHTML = '<p class="hint">暂无反思</p>'; return; }
+  box.innerHTML = log.map(function (e) {
+    var txt = '第 ' + (e.cycle != null ? e.cycle : '?') + ' 轮 · ' + (e.action || '') + (e.reason ? '：' + e.reason : '');
+    if (e.failed && e.failed.length) txt += ' · 失败步：' + e.failed.join('、');
+    return '<div style="font-size:12px;color:var(--gray-600);padding:6px 0;border-bottom:1px solid var(--gray-100)">' + esc(txt) + '</div>';
+  }).join('');
+}
+function startVoice() {
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('当前浏览器不支持语音输入，请用 Chrome / Edge，或直接在框里打字'); return; }
+  var rec = new SR();
+  rec.lang = 'zh-CN'; rec.interimResults = false; rec.maxAlternatives = 1;
+  var btn = document.getElementById('micBtn');
+  btn.textContent = '🎙️…';
+  rec.onresult = function (ev) { document.getElementById('taskInput').value = ev.results[0][0].transcript; btn.textContent = '🎤'; };
+  rec.onerror = function () { btn.textContent = '🎤'; };
+  rec.onend = function () { btn.textContent = '🎤'; };
+  rec.start();
+}
+
+// ---- 技能库 ----
+async function loadSkills() {
+  try {
+    var r = await fetch('/api/skills');
+    var d = await r.json();
+    var skills = d.skills || (Array.isArray(d) ? d : []);
+    var box = document.getElementById('skillList');
+    if (!skills.length) { box.innerHTML = '<p class="hint">暂无技能</p>'; return; }
+    box.innerHTML = skills.map(function(s) {
+      var name = s.name || s.id || s.skill_name || '';
+      var desc = s.description || s.category || '';
+      var tags = s.capabilities || s.tags || [];
+      var status = s.status || '';
+      return '<div class="skill-card"><p class="skill-name">' + esc(name) + (status ? ' <span style="font-size:10px;color:' + (status === 'ready' || status === 'active' ? 'var(--green)' : 'var(--gray-400)') + '">' + esc(status) + '</span>' : '') + '</p>' +
+        '<p class="skill-desc">' + esc(String(desc).slice(0, 120)) + '</p>' +
+        '<div class="skill-tags">' + tags.slice(0, 4).map(function(t) { return '<span class="skill-tag">' + esc(t) + '</span>'; }).join('') + '</div></div>';
+    }).join('');
+  } catch (e) { document.getElementById('skillList').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>'; }
+}
+
+// ---- 系统状态 ----
+async function loadSystem() {
+  try {
+    var r = await fetch('/api/providers');
+    var d = await r.json();
+    var providers = d.providers || (Array.isArray(d) ? d : []);
+    var html = providers.map(function(p) {
+      var alive = p.available !== undefined ? p.available : (p.alive !== undefined ? p.alive : p.live);
+      return '<div class="engine-row ' + (alive ? 'alive' : 'dead') + '"><span class="engine-name">' + esc(p.name || p.id || '') + (p.model ? ' <span style="font-size:11px;color:var(--gray-400)">(' + esc(p.model) + ')</span>' : '') + '</span>' +
+        '<span class="engine-badge ' + (alive ? 'alive' : 'dead') + '">' + (alive ? '可用' : '未配置') + '</span></div>';
+    }).join('');
+    document.getElementById('sysProviders').innerHTML = html || '<p class="hint">无数据</p>';
+  } catch (e) { document.getElementById('sysProviders').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>'; }
+  try {
+    var r2 = await fetch('/api/stats');
+    var d2 = await r2.json();
+    document.getElementById('sysStats').innerHTML = '<pre class="sys-pre">' + esc(JSON.stringify(d2, null, 2)) + '</pre>';
+  } catch (e) { document.getElementById('sysStats').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>'; }
+}
+
+// ---- 工具 ----
+function esc(s) { var d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
+
+// ---- Hash 路由：支持 /#bidding 等深链接，切换视图时同步 URL ----
+var VALID_VIEWS = ['dashboard', 'chat', 'search', 'bidding', 'flywheel', 'store', 'tasks', 'skills', 'system'];
+function applyHash() {
+  var h = location.hash.replace('#', '');
+  if (h && VALID_VIEWS.indexOf(h) >= 0) switchView(h);
+}
+window.addEventListener('hashchange', applyHash);
+applyHash();
+</script>
+</body>
+</html>

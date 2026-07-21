@@ -2214,12 +2214,7 @@ class AutopilotRequest(BaseModel):
     run_id: Optional[str] = Field(default=None)
 
 
-# 自主环后台执行：提交即返回 run_id，前端轮询 /api/autopilot/status/{run_id} 看实时进度
-_AUTOPILOT_HTML = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "..", "web", "autopilot_do.html"
-)
-
-
+# 自主环后台执行：提交即返回 run_id，前端（web/portal.html 任务中心）轮询 /api/autopilot/status/{run_id} 看实时进度
 def _ap_run_safe(task: str, planner: str, run_id: str) -> None:
     """在后台线程跑自主环；异常时落一个错误 checkpoint，使状态端点能反映失败。"""
     from kernel.autopilot import run as _ap_run
@@ -2270,15 +2265,7 @@ async def autopilot_status(run_id: str):
         raise HTTPException(status_code=500, detail=_safe_detail(e))
 
 
-@app.get("/do")
-async def autopilot_page():
-    """一句话自主执行入口页（打开即用，无需任何配置）。"""
-    try:
-        from fastapi.responses import HTMLResponse
-        with open(_AUTOPILOT_HTML, encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="autopilot 页面未找到")
+# 注：独立的 /do 页面已弃用，自主执行能力整合进 web/portal.html 的「自主执行」模块（根路径 /）。
 
 
 # ---- Manage Provider (for failover) ----
