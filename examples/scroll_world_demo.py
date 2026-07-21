@@ -12,7 +12,7 @@
 - 若场景带视频：video.currentTime 随滚动 scrub（签名效果）
 
 两种模式：
-- 真实模式：经 FabricHub.route("media.image"/"media.video") 调智谱出图/视频，下载到 assets/
+- 真实模式：经 FabricHub.invoke_engine("media-gen", ...) 直打国产智谱出图/视频（钉死 media-gen，避免 route() 按档位误选 agnes 等外部引擎），下载到 assets/
 - --dry-run：本地生成渐变占位 SVG，零网络零 key，用于离线验证 scrub 引擎
 
 用法：
