@@ -241,7 +241,7 @@ def render_html(scenes: list[dict], out_dir: str) -> str:
         if sc.get("video"):
             media = (
                 f'<video class="bg" data-scrub muted playsinline preload="auto" '
-                f'src="{sc["video"]}"></video>'
+                f'poster="{sc["image"]}" src="{sc["video"]}"></video>'
             )
         else:
             media = f'<img class="bg" src="{sc["image"]}" alt="{sc["title"]}" />'
