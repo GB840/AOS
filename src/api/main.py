@@ -2210,23 +2210,75 @@ async def loop_list():
 
 class AutopilotRequest(BaseModel):
     task: str = Field(..., description="一句话自然语言任务")
-    planner: str = Field(default="ag2", description="ag2 / zhipu / heuristic（ag2 不可用自动降级智谱）")
+    planner: str = Field(default="zhipu", description="zhipu / ag2 / heuristic（默认智谱直连，无需 ag2/ollama）")
     run_id: Optional[str] = Field(default=None)
+
+
+# 自主环后台执行：提交即返回 run_id，前端轮询 /api/autopilot/status/{run_id} 看实时进度
+_AUTOPILOT_HTML = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "..", "web", "autopilot_do.html"
+)
+
+
+def _ap_run_safe(task: str, planner: str, run_id: str) -> None:
+    """在后台线程跑自主环；异常时落一个错误 checkpoint，使状态端点能反映失败。"""
+    from kernel.autopilot import run as _ap_run
+    from kernel.run_state_store import save_checkpoint, mark_done
+    try:
+        _ap_run(task, planner, run_id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("autopilot run %s 失败: %s", run_id, e)
+        try:
+            save_checkpoint(run_id, {
+                "run_id": run_id, "task": task, "cycle": -1,
+                "last": {"error": str(e)}, "steps": [], "reflection_log": [],
+            })
+            mark_done(run_id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @app.post("/api/autopilot/run")
 async def autopilot_run(req: AutopilotRequest):
-    """一句话触发 AOS 自主闭环（规划/反思走智谱直连，无需 ag2/ollama）。
+    """一句话触发 AOS 自主闭环（默认智谱直连，无需 ag2/ollama）。
 
-    服务器常驻即可调用，无需单独启任何组件——发一句任务，自主环自己规划、
-    执行、反思、落盘 Trace。
+    立即返回 run_id，自主环在后台运行；前端轮询 /api/autopilot/status/{run_id}
+    即可看到规划→执行→反思的实时进度。服务器常驻即可，不用单独启任何组件。
     """
     try:
-        from kernel.autopilot import run as _ap_run
-        result = await asyncio.to_thread(_ap_run, req.task, req.planner, req.run_id)
-        return {"ok": True, "result": result}
+        import uuid as _uuid
+        run_id = req.run_id or f"ap-{_uuid.uuid4().hex[:12]}"
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            asyncio.to_thread(_ap_run_safe, req.task, req.planner, run_id)
+        )
+        return {"ok": True, "run_id": run_id, "status": "running"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/autopilot/status/{run_id}")
+async def autopilot_status(run_id: str):
+    """轮询自主环实时状态（从 sqlite checkpoint 读取）。"""
+    try:
+        from kernel.run_state_store import load_checkpoint
+        snap = load_checkpoint(run_id)
+        if not snap:
+            return {"status": "starting", "run_id": run_id}
+        return {"status": snap.get("status", "running"), "state": snap.get("state", {})}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/do")
+async def autopilot_page():
+    """一句话自主执行入口页（打开即用，无需任何配置）。"""
+    try:
+        from fastapi.responses import HTMLResponse
+        with open(_AUTOPILOT_HTML, encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="autopilot 页面未找到")
 
 
 # ---- Manage Provider (for failover) ----
