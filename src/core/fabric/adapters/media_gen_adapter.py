@@ -86,12 +86,18 @@ class MediaGenAdapter(BaseAgentAdapter):
 
     def invoke(self, req: InvokeRequest) -> InvokeResult:
         payload = req.payload or {}
-        mode = (payload.get("mode") or "image").lower()
-        if mode == "image":
-            return self._gen_image(payload)
-        if mode == "video":
+        # 优先按能力分派（与 fabric 路由范式一致：route() 按 capability 派发，
+        # 适配器应尊重 req.capability 而非仅看 payload["mode"]）；payload.mode
+        # 仅作兼容降级（老调用方可能只传 mode）。这样 route(media.video) 落到
+        # 本适配器时，即使没带 mode 也能正确出视频，而不会默认当文生图。
+        cap = req.capability.value if hasattr(req.capability, "value") else str(req.capability)
+        mode = (payload.get("mode") or "").lower()
+        if cap == Capability.MEDIA_VIDEO.value or mode == "video":
             return self._gen_video(payload)
-        return InvokeResult(ok=False, error=f"未知 mode: {mode!r}（支持 image / video）")
+        if cap == Capability.MEDIA_IMAGE.value or mode == "image":
+            return self._gen_image(payload)
+        # 无明确线索：默认文生图（零风险兜底，兼容历史默认行为）
+        return self._gen_image(payload)
 
     # ---- 文生图（同步） ----
     def _gen_image(self, payload: dict) -> InvokeResult:
