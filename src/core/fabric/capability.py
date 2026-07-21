@@ -183,6 +183,9 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     "security-audit": [Capability.SECURITY_AUDIT],
     # ida-pro-mcp：本机 IDA Pro 逆向工程 MCP server（localhost-only，仅分析有权分析的二进制）
     "ida-pro-mcp": [Capability.RE_IDA],
+    # media-gen：国产智谱文生图/文生视频平面（CogView-4 + CogVideoX），
+    # 纯 stdlib urllib 调用，零依赖。替代 Scroll-World 绑定的国外模型。
+    "media-gen": [Capability.MEDIA_IMAGE, Capability.MEDIA_VIDEO],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -219,6 +222,8 @@ ENGINE_TIER: dict[str, str] = {
     "security-audit": TIER_HIGH,
     # ida-pro-mcp：本机 IDA Pro 逆向 MCP（本地优先/零成本/最强隐私）→ 高档
     "ida-pro-mcp": TIER_HIGH,
+    # media-gen：云端国产智谱（有成本，质量优）→ 中档
+    "media-gen": TIER_MEDIUM,
 }
 
 

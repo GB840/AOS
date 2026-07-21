@@ -38,6 +38,7 @@ _EXPECTED_ENGINES = {
     "file-io",
     "web-fetch",
     "web-crawl",       # crawl4ai 网页转 LLM 友好 Markdown（需 pip install crawl4ai）
+    "media-gen",      # 国产智谱文生图/文生视频（零依赖 urllib）
     "orchestrator",
     "codebase-memory-mcp",
     "threejs",

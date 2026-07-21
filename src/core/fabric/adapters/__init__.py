@@ -79,6 +79,11 @@ except Exception:  # noqa: BLE001 - 缺依赖（crawl4ai）则跳过，不拖垮
     Crawl4AIAdapter = None
 
 try:
+    from .media_gen_adapter import MediaGenAdapter
+except Exception:  # noqa: BLE001 - 零依赖；导入失败也置 None，不拖垮内核
+    MediaGenAdapter = None
+
+try:
     from .threejs_adapter import ThreejsAdapter
 except Exception:  # noqa: BLE001
     ThreejsAdapter = None
@@ -182,6 +187,7 @@ __all__ = [
         "SearchAdapter",
         "WebFetchAdapter",
         "Crawl4AIAdapter",
+        "MediaGenAdapter",
         "ThreejsAdapter",
         "STTAdapter",
         "TTSAdapter",
