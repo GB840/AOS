@@ -127,6 +127,11 @@ class MediaGenAdapter(BaseAgentAdapter):
 
     # ---- 文生视频（异步轮询） ----
     def _gen_video(self, payload: dict) -> InvokeResult:
+        # 长任务：智谱视频生成为异步轮询，轮询期间同步 time.sleep 阻塞当前线程。
+        # 调用方（尤其 async 端点）务必用 asyncio.to_thread 包裹 invoke，否则在
+        # 事件循环线程里阻塞会拖垮所有并发请求。main.py 的媒体调用路径已统一
+        # asyncio.to_thread 包裹（api/main.py 满屏 to_thread），故此处保持不变——
+        # 改成 async 反而破坏 sync 调用链（FabricHub.route/invoke_engine 均为 sync）。
         if not self._available:
             return InvokeResult(ok=False, error="未配置 ZHIPU_API_KEY")
         prompt = payload.get("prompt") or payload.get("text") or ""
