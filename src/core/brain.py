@@ -2063,7 +2063,8 @@ class UnifiedBrain:
         logger.info("Shutting down UnifiedBrain...")
         self.audit.log("system.shutdown", agent_id=self.identity.aid)
         self.audit.flush()
-        self.tracer.shutdown()
+        if hasattr(self.tracer, "shutdown"):
+            self.tracer.shutdown()
         # Deep DeerFlow shutdown (clears user contexts, flushes journal)
         self.deerflow.shutdown(wait=True)
         # Deep Hermes shutdown (waits for review thread, syncs memory, closes providers)
