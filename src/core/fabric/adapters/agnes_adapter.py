@@ -1,19 +1,13 @@
-"""Real Agnes AI adapter for the AOS open fabric - the MULTIMODAL plane.
+"""Real Agnes AI adapter for the AOS open fabric - the LLM GATEWAY plane.
 
-Agnes AI (apihub.agnes-ai.com) exposes an OpenAI-compatible surface:
-  * POST {base}/chat/completions    -> agnes-2.0-flash       (text, 512K ctx)
-  * POST {base}/images/generations  -> agnes-image-2.1-flash  (image, 文生图/图生图)
-  * POST {base}/videos              -> agnes-video-v2.0       (video, 异步)
-  * GET  {result_url}?video_id=...  -> 轮询视频结果
+Agnes AI (apihub.agnes-ai.com) 仅暴露 OpenAI 兼容的 chat/completions 文本端点，
+AOS 把它作为 LLM Gateway 使用。图/视频能力（images/generations、videos）在
+收圆后已退出 Agnes 的路由供给，改由 media-gen（国产智谱）/ comfyui 服务——
+对应「agnes 回归纯 LLM Gateway」的决策。
 
-This adapter is THIN: it translates AOS capability calls into Agnes HTTP
-calls. AOS never re-implements a model brain - it delegates to the real
-provider, honouring the user's hard rule: real OSS / real APIs + AOS on top.
-
-Config (from .env, injected by start_all.sh / fabric_scorecard.py):
-  AGNES_API_KEY      (required)
-  AGNES_BASE_URL     default https://apihub.agnes-ai.com/v1
-  AGNES_VIDEO_RESULT_URL  default {host}/agnesapi  (root-relative per Agnes docs)
+因此本适配器只 advertise LLM_GATEWAY；invoke 遇 media 能力会**诚实拒绝**
+（而非连不可达的 agnes 云端拿 503 误判假活），generate_image / generate_video
+便捷方法同样诚实拒绝，供显式调用时拿到清晰错误而非静默失败。
 """
 from __future__ import annotations
 
@@ -31,13 +25,7 @@ from ..capability import Capability
 AGNES_DEFAULTS: dict[str, str] = {
     "base_url": "https://apihub.agnes-ai.com/v1",
     "text_model": "agnes-2.0-flash",
-    "image_model": "agnes-image-2.1-flash",
-    "video_model": "agnes-video-v2.0",
 }
-
-# 视频轮询参数
-_VIDEO_POLL_INTERVAL = 5.0      # 秒
-_VIDEO_DEFAULT_TIMEOUT = 180.0  # 秒（生成时长当前 $0/秒，留足余量）
 
 
 def _requests():
@@ -46,36 +34,23 @@ def _requests():
     return requests
 
 
-def _derive_result_url(base: str, explicit: Optional[str]) -> str:
-    """视频结果端点：显式配置优先；否则由 Base URL 推导 host 根路径 + /agnesapi。"""
-    if explicit:
-        return explicit
-    host = base.rstrip("/")
-    if host.endswith("/v1"):
-        host = host[: -len("/v1")]
-    return host + "/agnesapi"
-
-
 class AgnesAdapter(BaseAgentAdapter):
-    """OpenAI-compatible LLM 适配器：文本为主（图像/视频便捷方法保留但未注册为路由能力，图/视频改由 media-gen/comfyui 服务）。"""
+    """OpenAI-compatible LLM 适配器：仅文本（图/视频已退出 Agnes 路由供给，改由 media-gen/comfyui 服务）。"""
 
     # 隔离进子进程时，必须显式回灌的密钥类环境变量（subprocess_iso 默认全剥离）。
     # 单一事实源：和 __init__ 里的 os.environ.get 读取保持一致，新增 key 改这一处。
     REQUIRED_ENV: tuple[str, ...] = (
         "AGNES_API_KEY",
         "AGNES_BASE_URL",
-        "AGNES_VIDEO_RESULT_URL",
     )
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        video_result_url: Optional[str] = None,
     ) -> None:
         self._api_key = api_key or os.environ.get("AGNES_API_KEY", "")
         self._base = (base_url or os.environ.get("AGNES_BASE_URL", AGNES_DEFAULTS["base_url"])).rstrip("/")
-        self._result_url = _derive_result_url(self._base, video_result_url or os.environ.get("AGNES_VIDEO_RESULT_URL"))
         self._health_cache: Optional[tuple[bool, float]] = None
 
     # ---- 接口实现 ----
@@ -90,10 +65,13 @@ class AgnesAdapter(BaseAgentAdapter):
         cap = req.capability.value if hasattr(req.capability, "value") else str(req.capability)
         if cap == Capability.LLM_GATEWAY.value:
             return self._chat(req)
-        if cap == Capability.MEDIA_IMAGE.value:
-            return self._image(req)
-        if cap == Capability.MEDIA_VIDEO.value:
-            return self._video(req)
+        # 收圆：agnes 已退出 media 供给（图/视频改由 media-gen / comfyui 服务）。
+        # invoke 遇 media 能力诚实拒绝，而非连不可达的 agnes 云端（503 误判假活）。
+        if cap in (Capability.MEDIA_IMAGE.value, Capability.MEDIA_VIDEO.value):
+            return InvokeResult(
+                ok=False,
+                error="agnes 已退出 media 供给：图/视频请改用 media-gen / comfyui 适配器",
+            )
         return InvokeResult(ok=False, error=f"agnes: unsupported capability {cap}")
 
     def health(self) -> bool:
@@ -136,18 +114,18 @@ class AgnesAdapter(BaseAgentAdapter):
         ))
 
     def generate_image(self, prompt: str, *, model: Optional[str] = None, **opts: Any) -> InvokeResult:
-        payload: dict[str, Any] = {"prompt": prompt, "model": model or AGNES_DEFAULTS["image_model"]}
-        payload.update(opts)
-        return self._image(InvokeRequest(capability=Capability.MEDIA_IMAGE, payload=payload))
+        # 收圆：agnes 已退出 media 供给，图改由 media-gen / comfyui 服务。
+        return InvokeResult(
+            ok=False,
+            error="agnes 已退出 media 供给：图请改用 media-gen / comfyui 适配器",
+        )
 
     def generate_video(self, prompt: str, *, model: Optional[str] = None,
-                       poll_timeout: float = _VIDEO_DEFAULT_TIMEOUT, **opts: Any) -> InvokeResult:
-        payload: dict[str, Any] = {
-            "prompt": prompt, "model": model or AGNES_DEFAULTS["video_model"],
-            "poll_timeout": poll_timeout,
-        }
-        payload.update(opts)
-        return self._video(InvokeRequest(capability=Capability.MEDIA_VIDEO, payload=payload))
+                       poll_timeout: float = 180.0, **opts: Any) -> InvokeResult:
+        return InvokeResult(
+            ok=False,
+            error="agnes 已退出 media 供给：视频请改用 media-gen / comfyui 适配器",
+        )
 
     # ---- 内部：HTTP 封装 ----
     def _headers(self) -> dict[str, str]:
@@ -178,108 +156,3 @@ class AgnesAdapter(BaseAgentAdapter):
         except Exception as e:  # 缺 key / 网络 / 上游错误
             logger.warning("agnes chat failed: %s", e)
             return InvokeResult(ok=False, error=f"agnes chat failed: {e!r}")
-
-    def _image(self, req: InvokeRequest) -> InvokeResult:
-        payload = req.payload or {}
-        model = payload.get("model", AGNES_DEFAULTS["image_model"])
-        prompt = payload.get("prompt") or payload.get("content") or ""
-        body: dict[str, Any] = {"model": model, "prompt": prompt}
-        for k in ("n", "size", "quality", "image", "images", "response_format"):
-            if k in payload:
-                body[k] = payload[k]
-        try:
-            r = _requests().post(
-                f"{self._base}/images/generations", headers=self._headers(), json=body, timeout=120,
-            )
-            r.raise_for_status()
-            data = r.json()
-            items = data.get("data", [])
-            return InvokeResult(ok=True, data={"images": items, "model": model, "raw": data})
-        except Exception as e:
-            logger.warning("agnes image failed: %s", e)
-            return InvokeResult(ok=False, error=f"agnes image failed: {e!r}")
-
-    def _video(self, req: InvokeRequest) -> InvokeResult:
-        payload = req.payload or {}
-        model = payload.get("model", AGNES_DEFAULTS["video_model"])
-        prompt = payload.get("prompt") or payload.get("content") or ""
-        body: dict[str, Any] = {"model": model, "prompt": prompt}
-        for k in ("image", "images", "duration", "aspect_ratio", "resolution"):
-            if k in payload:
-                body[k] = payload[k]
-        try:
-            r = _requests().post(
-                f"{self._base}/videos", headers=self._headers(), json=body, timeout=60,
-            )
-            r.raise_for_status()
-            data = r.json()
-            video_id = self._extract_video_id(data)
-            if not video_id:
-                return InvokeResult(ok=False, error=f"agnes video: no video_id in response: {data!r}")
-            url = self._poll_video(video_id, float(payload.get("poll_timeout", _VIDEO_DEFAULT_TIMEOUT)))
-            if url is None:
-                return InvokeResult(ok=False, error=f"agnes video: poll timeout for {video_id}")
-            return InvokeResult(ok=True, data={"video_id": video_id, "url": url, "model": model})
-        except Exception as e:
-            logger.warning("agnes video failed: %s", e)
-            return InvokeResult(ok=False, error=f"agnes video failed: {e!r}")
-
-    @staticmethod
-    def _extract_video_id(data: dict[str, Any]) -> str:
-        """从创建任务响应里尽力抽取 video_id（Agnes 字段名未完全公开，做防御性解析）。"""
-        for key in ("video_id", "id", "task_id"):
-            v = data.get(key)
-            if v:
-                return str(v).strip()
-        nested = data.get("data")
-        if isinstance(nested, dict):
-            for key in ("video_id", "id", "task_id"):
-                v = nested.get(key)
-                if v:
-                    return str(v).strip()
-        return ""
-
-    def _poll_video(self, video_id: str, timeout: float) -> Optional[str]:
-        """轮询视频结果端点，直到拿到 url 或超时 / 失败。"""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                r = _requests().get(
-                    self._result_url, params={"video_id": video_id},
-                    headers=self._headers(), timeout=30,
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    url = self._extract_video_url(data)
-                    if url:
-                        return url
-                    status = self._extract_status(data)
-                    if status in ("failed", "error", "expired"):
-                        logger.warning("agnes video %s terminal status=%s", video_id, status)
-                        return None
-            except Exception as e:
-                logger.debug("agnes video poll %s error: %s", video_id, e)
-            time.sleep(_VIDEO_POLL_INTERVAL)
-        return None
-
-    @staticmethod
-    def _extract_video_url(data: dict[str, Any]) -> Optional[str]:
-        url = data.get("url") or data.get("video_url")
-        if url:
-            return str(url)
-        nested = data.get("data")
-        if isinstance(nested, dict):
-            url = nested.get("url") or nested.get("video_url")
-            if url:
-                return str(url)
-        return None
-
-    @staticmethod
-    def _extract_status(data: dict[str, Any]) -> Optional[str]:
-        status = data.get("status")
-        if status:
-            return str(status).lower()
-        nested = data.get("data")
-        if isinstance(nested, dict) and nested.get("status"):
-            return str(nested["status"]).lower()
-        return None

@@ -155,3 +155,15 @@ def test_agnes_is_default_gateway_when_key_present():
     assert gw.list_models()[0].model_id.startswith("agnes")
     # 默认空 model_id 经 _ordered 落到链首（Agnes）
     assert gw._ordered("")[0] is gateways[0]
+
+
+def test_no_dead_media_methods():
+    """agnes 收圆后应彻底清除 _image/_video/_poll_video 等死代码方法。
+
+    这些方法是「agnes 退出 media 供给」前的连云端实现，收圆后 invoke 与
+    generate_* 均已诚实拒绝、不再调用。残留会成为误导性的不可达代码。
+    """
+    a = AgnesAdapter(api_key="sk-test")
+    for name in ("_image", "_video", "_poll_video", "_extract_video_id",
+                 "_extract_video_url", "_extract_status", "_derive_result_url"):
+        assert not hasattr(a, name), f"agnes 仍残留死代码方法 {name}"
