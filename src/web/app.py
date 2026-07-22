@@ -208,13 +208,80 @@ def render_autopilot_page():
         st.rerun()
 
 
+class _DegradedResult:
+    """brain 降级调用的统一返回：既是 dict（.get / []）又是空 list（可迭代）。
+
+    设计目标：让任何对降级 brain 的调用结果都能被现有 render 代码安全消费——
+    .get(key) 返回属性或默认；可迭代返回空（避免 [a['name'] for a in x] 崩）；
+    布尔为假（走错误分支）；str 给出可读降级提示。
+    """
+
+    def __init__(self, path: str):
+        self._path = path
+        self.ok = False
+        self.degraded = True
+        self.error = f"{path} 未加载（内核降级）"
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            return None
+
+    def __iter__(self):
+        return iter([])
+
+    def __len__(self):
+        return 0
+
+    def __bool__(self):
+        return False
+
+    def __str__(self):
+        return self.error
+
+
+class _SafeBrain:
+    """brain 内核不可用时的最小安全替身，避免整站白页。
+
+    任意属性链式访问返回另一个 _SafeBrain；任意调用返回 _DegradedResult；
+    少数被当字符串/字典特用的入口（chat / health_check / identity）给出合理默认。
+    """
+
+    def __init__(self, path: str = "brain"):
+        self._path = path
+
+    def __getattr__(self, name: str):
+        if name == "identity":
+            return type("BrainIdentity", (), {"aid": "unavailable", "name": "unavailable"})()
+        if name == "chat":
+            return lambda *a, **k: "（内核 brain 未加载，对话功能已降级）"
+        if name == "health_check":
+            return lambda *a, **k: {"status": "unavailable", "degraded": True}
+        return _SafeBrain(f"{self._path}.{name}")
+
+    def __call__(self, *a, **k):
+        return _DegradedResult(self._path)
+
+    def __bool__(self):
+        return False
+
+
 @st.cache_resource
 def get_brain():
     from core import get_brain
     return get_brain()
 
 
-brain = get_brain()
+try:
+    brain = get_brain()
+except Exception as _brain_err:  # noqa: BLE001
+    _LOG.warning("内核 brain 加载失败，控制台降级运行：%s", _brain_err)
+    brain = _SafeBrain()
+    st.session_state.brain_degraded = True
 
 PARTICLE_CLOUD_CSS = """
 <style>
@@ -356,6 +423,11 @@ def render_chat_message(msg, show_audio=True):
 
 
 with st.sidebar:
+    if st.session_state.get("brain_degraded"):
+        st.warning(
+            "⚠️ 内核 brain 未加载（部分依赖缺失），相关功能已降级运行。\n"
+            "完整功能请用 `bash start_all.sh`（aos venv）启动。"
+        )
     st.title("🧠 AOS v5.0")
     st.caption(f"AID: `{brain.identity.aid[:24]}...`")
     
