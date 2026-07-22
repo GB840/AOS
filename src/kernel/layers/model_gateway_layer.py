@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+import os
 import threading
 
 from ..interfaces import ModelGateway
@@ -30,6 +31,12 @@ class RouteStrategy:
 # 默认价格表（可替换 / 可扩展）。价格单位：token 美元单价。
 # 实际使用时替换为真实定价数据（litellm cost_map / 云厂商定价 API）。
 _DEFAULT_PRICE_REGISTRY: Dict[str, float] = {
+    # 开源本地模型：本地推理零边际成本，登记为 0（成本路由会优先选）
+    "ollama/qwen3:8b": 0.0,
+    "ollama/qwen2.5:7b": 0.0,
+    "ollama/deepseek-r1:8b": 0.0,
+    "ollama/llama3.1:8b": 0.0,
+    # 闭源兜底（opt-in）：保留价格用于成本追踪
     "zhipu/glm-4-flash": 0.0001,
     "openai/gpt-4o": 0.0025,
     "openai/gpt-4o-mini": 0.00015,
@@ -178,7 +185,14 @@ class ModelGatewayLayer:
 
     def _default_model(self) -> str:
         with self._lock:
-            return self._models[0] if self._models else "zhipu/glm-4-flash"
+            if self._models:
+                # 开源本地模型优先（ollama/ 开头），兑现「开源默认」
+                for m in self._models:
+                    if m.startswith("ollama/"):
+                        return m
+                return self._models[0]
+            # 无任何网关时：env 覆盖 > 历史默认（仍建议配置开源本地模型）
+            return os.environ.get("AOS_DEFAULT_MODEL", "zhipu/glm-4-flash")
 
     def _route_model(self, strategy: str, caps: Dict[str, bool]) -> str:
         if strategy == RouteStrategy.COST:

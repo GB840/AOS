@@ -106,6 +106,15 @@ def build_default_kernel(default_grant: bool = False,
     #    Agnes 置首：默认对话/推理走 agnes-2.0-flash，纯文本兜底下探 litellm/zhipu。
     gateways = []
     _agnes_gw = None
+    # ① 开源本地优先：Ollama（OpenAI 兼容原生 REST :11434，跑 Qwen/DeepSeek/Llama）
+    #    端点可达才纳入；不可达由后续开源/闭源网关兜底。
+    try:
+        from .plugins.ollama_gateway import OllamaModelGateway
+        ollama = OllamaModelGateway()
+        if ollama.list_models():  # OLLAMA_ENABLED!=0 且有端点才纳入
+            gateways.append(ollama)
+    except Exception as e:
+        print(f"[wiring] ollama 网关跳过: {e}")
     try:
         if os.environ.get("AGNES_API_KEY"):
             from .plugins.agnes_gateway import AgnesModelGateway
@@ -120,10 +129,13 @@ def build_default_kernel(default_grant: bool = False,
             gateways.append(mrs)
     except Exception as e:
         print(f"[wiring] mistralrs 网关跳过: {e}")
-    try:
-        gateways.append(LiteLLMModelGateway())
-    except Exception as e:
-        print(f"[wiring] litellm 网关登记失败: {e}")
+    # ② 闭源兜底（opt-in）：仅当配置智谱 key 或显式 AOS_ZHIPU_OPTIN=1 才纳入。
+    #    默认开源本地优先；不配置则完全无闭源依赖，兑现「无 API 分成」。
+    if os.environ.get("ZHIPU_API_KEY") or os.environ.get("AOS_ZHIPU_OPTIN") == "1":
+        try:
+            gateways.append(LiteLLMModelGateway())
+        except Exception as e:
+            print(f"[wiring] litellm 网关登记失败: {e}")
     try:
         from .plugins.cloud_gateway import CloudModelGateway
         cloud = CloudModelGateway()

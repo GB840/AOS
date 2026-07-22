@@ -191,3 +191,41 @@
 - WorkRally **不是我们要造的东西**（垂直闭源），但**是我们要对标的东西**（架构范式 + 质量标杆）+ **可选接入的云端能力**（有 Open API/CLI）。
 - 按选型铁律，单创OS 当前该做的不是追 WorkRally，而是**先把已有的 autopilot/opc/FabricHub/agency_roles 编排成 5 岗位闭环**（Phase 1），把"没有的"（报表芯粒、未来多租户/计费）用开源补上。
 - 是否现在就搭 `content.workrally` 可选适配器，取决于用户是否有 WorkRally 授权账号——有则接（opt-in），无则暂留接口位。
+
+---
+
+## 十一、已落地：开源默认路由 + 全栈可插拔扩展（2026-07-23）
+
+用户指令：①WorkRally 暂未购账号 → 留接口，且**所有能扩展的都留接口**；②Phase 1 动手（5 岗位 + 报表）；③解决"智谱 vs 开源"——全网搜开源技术，用开源。
+
+### 11.1 开源模型路线（解决第3点，已代码落地）
+**联网核实（2026-07-23，WebFetch）**：
+- **Ollama**：本地运行开源模型，OpenAI 兼容原生 REST（`:11434`），支持 Qwen/DeepSeek/Llama，可离线、数据不出本地。最轻量开源默认网关。
+- **vLLM**：高性能开源推理服务（Apache 2.0），`vllm serve` 提供 OpenAI 兼容 API，支持 200+ 架构（Qwen/DeepSeek），生产级、可量化。
+
+**代码改动（已提交）**：
+- 新增 `src/kernel/plugins/ollama_gateway.py`：Ollama 本地开源网关，零硬依赖（仅 urllib），优雅降级。
+- `src/kernel/wiring.py`：网关装配顺序改为 **开源本地优先** `[ollama → mistralrs → (智谱 opt-in) → cloud → agnes]`；智谱仅当 `ZHIPU_API_KEY` 或 `AOS_ZHIPU_OPTIN=1` 才入链，默认不引入闭源依赖。
+- `src/kernel/layers/model_gateway_layer.py`：`_default_model()` 开源（ollama/）优先；价格表加开源模型（成本 0），成本路由优先选开源；`AOS_DEFAULT_MODEL` 可覆盖。
+
+**效果**：默认跑开源本地模型（无 API 分成），智谱降级为可选兜底，彻底兑现"无第三方 API 分成"。
+
+### 11.2 全栈可插拔扩展点（解决"所有能扩展的都留接口"）
+- 新增 `src/kernel/plugins/extension.py`：**统一 opt-in 扩展注册表** `register_extension(name, factory, env_gate=, local_only=, description=)`。
+- 范式：env 门控 + 不可达静默跳过（复用 `fabric_hub.register_mcp_server` 思路），任何外部服务都走此机制，不复制样板。
+- **WorkRally 接口位已留**：`register_extension("workrally", ..., env_gate="WORKRALLY_TOKEN")`，未购账号时 `get_extension("workrally")` 返回 None 静默跳过，**零腾讯依赖**。未来有账号时只需填 `WorkRallyAdapter` 实现（调 workrally CLI/Open API），映射 `content.workrally` 供内容营销岗可选增强。
+
+### 11.3 5 岗位注册表 + 报表芯粒（解决第2点，已代码落地）
+- 新增 `src/kernel/plugins/opc_roles.py`：**OPC 5 岗位智能体注册表**（产品研发/市场调研/内容营销/客户服务/财务核算）。每个岗位映射现有已注册 capability（复用不重造），行业差异走 `knowledge_base` 钩子可插拔。
+- 新增 `src/kernel/plugins/report_agent.py`：**财务核算芯粒**（补财务岗工具缺口）。用开源 `openpyxl` 生成 xlsx 报表；`openpyxl` 不可用时自动降级 CSV，**零付费/零闭源依赖**。提供 `bom_cost`/`generate_report`/`profit_estimate`。
+
+### 11.4 验证（诚实边界）
+- **已验证（沙箱，12 项单测全过）**：5 岗位结构、报表生成（CSV fallback）、扩展注册与 WorkRally 静默跳过、Ollama 网关 health/list_models/chat 逻辑（mock）。
+- **未验证（需主机真环境）**：
+  - Ollama 网关真实连本地 Ollama 跑 Qwen/DeepSeek 出 token（需主机装 Ollama + 拉模型）。
+  - autopilot/opc 在真实 LLM 任务下派活给 5 岗位并出报表的端到端闭环（沙箱无真 LLM）。
+  - autopilot `_zhipu_generate` 直连 zhipu 的硬解耦未做；当前靠现有 `AOS_LLM_MODEL`/`AOS_LLM_BASE_URL` 开关 + 新 ollama 网关兜底，主机设 `AOS_LLM_BASE_URL=http://localhost:11434/v1`、`AOS_LLM_MODEL=qwen3:8b` 即可走开源。
+
+### 11.5 下一步
+- 主机装 Ollama + 拉 `qwen3:8b` → `bash start_all.sh` → 浏览器一句话验开源派活闭环。
+- 多租户/计费/支付（Phase 2/3）仍待建；是否搭 `content.workrally` 取决于购账号。
