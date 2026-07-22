@@ -257,3 +257,54 @@
 - `OllamaModelGateway`（抽象层）与 autopilot 的 `_ollama_generate`（stdlib 直连）是**两条并存的 ollama 路径**：抽象层供 kernel/app 路径，直连供 autopilot 反思兜底。功能不冲突，但确有重复，未来可统一（低优先）。
 - 多租户隔离 / 计费 / 支付（Phase 2/3）**仍 ZERO**，未动。
 - 老问题仍在：`app.py` 顶部 `brain` 绑架白页风险、仓库 13 个未跟踪杂文件。
+
+> 更正（2026-07-23 后续）：`app.py` 顶部 `brain` 绑架白页**已在 commit b7cfcac 修复**（加 `_SafeBrain` 降级替身 + 降级 banner，内核缺失时整站降级运行不崩）。此条不再成立。仓库 13 个未跟踪杂文件仍待归置。
+
+---
+
+## 十三、Terax 评估与接入（终端优先 AI 原生开发环境，2026-07-23）
+
+用户要求把 **Terax**（终端优先 AI 原生开发环境，ADE）"弄进去"。按选型铁律先**全网核实真实性/许可**再采纳。
+
+### 13.1 真实性核实（WebFetch 抓官网 + GitHub 仓库，非凭记忆）
+
+| 用户所述 | 核实结果 | 来源 |
+|---|---|---|
+| `crynta/terax-ai` 仓库 | ✅ 确认，标题 "Lightweight (7MB) Terminal-first AI-native dev workspace" | GitHub 仓库页 |
+| 开源协议 Apache-2.0 | ✅ 确认（官网页脚明确 "Apache-2.0 Open source"） | terax.app |
+| 7MB / 冷启 <300ms | ✅ 确认（官网：7MB on disk，~300ms cold start） | terax.app |
+| Tauri（Rust 后端） | ✅ 确认（仓库含 `src-tauri` + Cargo 依赖） | GitHub |
+| React 前端 | ⚠️ 强暗示未明文：仓库有 `components.json`(shadcn/ui)、`vite`、`biome`，用户称 React 19，但抓取片段未明写 | GitHub |
+| BYOK / 完全本地 | ✅ 确认（官网："BYOK or fully local"；AI 工作流段："Run fully offline through LM Studio"） | terax.app |
+| v0.8.2 | ⚠️ **校正**：官网下载区与 nix 源均显示 **v0.8.5**（用户所述为稍早版本） | terax.app / GitHub |
+| 7500+ Star | ❌ **未确认**：抓取片段无 Star 计数，以 GitHub 页面实时为准（不编造） | — |
+| 本地模型 Ollama/MLX | ⚠️ 官网仅明写 **LM Studio** 本地；Ollama/MLX 需另核，但"完全本地"哲学一致 | terax.app |
+| 跨平台 / WSL 一等公民 | ✅ 合理（Tauri 天然跨平台；官网列 macOS/Linux/Windows） | terax.app |
+
+**结论**：Terax 是**真实存在的开源（Apache-2.0）本地桌面应用**，定位与用户描述一致。需校正的只有版本号（v0.8.5 非 v0.8.2）与 Star 数（未核实，不采信）。
+
+### 13.2 与单创OS 的契合点（用户已指出，确认合理）
+
+1. **自用硬件开发主阵地**：在一个 7MB 窗口内完成全志驱动代码编写、编译命令、Git 版本管理——比多窗口切换更顺。
+2. **本地模型量化与测试**：接 Ollama/LM Studio 本地模型，在终端环境内做模型量化测试（与我们的开源默认路由一致）。
+3. **项目记忆沉淀**：`TERAX.md` 记架构/硬件规格/编译命令，符合我们 `memory.semantic` 长期记忆理念。
+4. **SaaS 差异化工具**：打包进单创OS 商用版，给租户提供开箱即用的终端开发环境（区别于纯网页 AI 平台）。
+
+### 13.3 选型决策（按用户铁律：现有复用 / 比外部差优化 / 没有用开源 / 全留接口）
+
+- Terax **不是我们要造的东西**（终端 IDE 是独立品类，重造无必要），也**不是我们要替代的东西**（它补的是"开发环境"这一层，单创OS 补的是"组织+调度+自进化"）。
+- 本质：**用开源技术补"终端开发环境"这一缺口**（我们缺原生 PTY 终端/编辑器/Git 图形）。按铁律"没有的用最新开源技术补"——直接复用 Terax（Apache-2.0，可商用），不自研。
+- 与 WorkRally 区别：WorkRally 是闭源云端（需 token、opt-in 增强）；Terax 是**本地开源（无需 token）**——所以它应是"装了就在、没装静默跳过"的真实 opt-in 本地扩展，而非永远占位。
+
+### 13.4 已落地的代码接入（可复核，单测守护）
+
+- `extension.py`：注册 `terax` 扩展——`local_only=True`（安全红线，只本机）、`env_gate=None`（本地开源无需 token）、factory 用 `shutil.which("terax")` 检测，**装了返回描述符、没装返回 None 静默跳过**。这是与 WorkRally 不同的"真扩展"（沙箱测试已覆盖：未装返回 None、PATH 命中返回 Apache-2.0 描述符）。
+- `opc_roles.py`：产品研发岗加 `dev.terax` 能力标签，标识"该岗位有 Terax 终端开发环境可用（opt-in 本地）"。
+- `singlechuang.py`：新增 `resolve_dev_env()` 真实消费 terax 扩展（与 `resolve_content_tools` 消费 WorkRally 同范式）；`plan_company` 给产品研发岗露出 `dev_env` 可用性。
+- 测试 `tests/test_singlechuang_platform.py` 扩到 **23 项**（新增 6 项覆盖 terax 注册/未装跳过/装后检测/角色映射/编排层消费）。
+
+### 13.5 诚实边界（不瞒）
+
+- Terax **适配器未做真调用**：当前是"检测二进制存在 + 返回描述符"的 opt-in 接口位，不是"从单创OS 一键拉起 Terax 并双向通信"的完整桥接（那是桌面应用集成，需主机实测 + 用户真装 Terax 才有意义）。
+- 端到端（单创OS 调度引擎在真任务下把"写驱动代码"派给产品研发岗、岗位提示用户用 Terax 终端环境）仍待主机实测。
+- Star 数、Ollama/MLX 支持、React 19 三项未从权威源确认，文档如实标注，不混入编造数据。

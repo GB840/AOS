@@ -95,3 +95,35 @@ register_extension(
     local_only=False,
     description="腾讯视频 WorkRally 漫剧生产平台（opt-in，需授权账号，仅可选增强）",
 )
+
+
+# ── Terax 接口位（opt-in，本地开源终端 IDE，无需 token）──
+# crynta/terax-ai：Terminal-first AI-native dev workspace（Apache-2.0，Tauri+Rust / React 前端）。
+# 约 7MB、冷启 ~300ms、BYOK 或完全本地（LM Studio）、自带 PTY 终端/编辑器/Git 图形/Web 预览/TERAX.md 记忆。
+# 与单创OS 契合：
+#   ① 自用硬件开发主阵地（全志驱动代码 / 编译命令 / Git，全在一个 7MB 窗口）；
+#   ② 可打包进 SaaS 给租户提供开箱即用的终端开发环境（差异化竞争力）。
+# 设计红线：本地 open-source 桌面应用，不需云端 token；factory 检测 PATH 上的 `terax` 二进制，
+#   存在则返回描述符，不存在返回 None（静默跳过，不阻塞主链路）。local_only=True（只本机，不触外部网络）。
+def _terax_factory() -> Any:
+    import shutil
+    bin_path = shutil.which("terax")
+    if not bin_path:
+        return None  # 未安装 -> 静默跳过
+    return {
+        "name": "terax",
+        "bin": bin_path,
+        "license": "Apache-2.0",
+        "local_only": True,
+        "launch_hint": f'"{bin_path}"',
+        "fits": "product_rd",  # 产品研发岗的终端开发主阵地
+    }
+
+
+register_extension(
+    "terax",
+    _terax_factory,
+    env_gate=None,          # 本地开源应用，无需 token；装了就在，没装就跳过
+    local_only=True,        # 安全红线：只本机，不触外部网络
+    description="Terax 终端优先 AI 原生开发环境（Apache-2.0 本地开源，产品研发岗终端主阵地，opt-in）",
+)

@@ -30,6 +30,7 @@ def plan_company(goal: str, industry: str = "default") -> Dict[str, Any]:
             "name": role.name,
             "capabilities": role.capabilities,
             "knowledge_base": role.knowledge_base or "",
+            "dev_env": resolve_dev_env() if key == "product_rd" else None,
         })
     return {
         "goal": goal,
@@ -66,6 +67,20 @@ def bom_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     return bom_cost(items)
 
 
+def resolve_dev_env() -> Dict[str, Any]:
+    """产品研发岗位的终端开发环境：默认无；Terax 仅当本机安装时 opt-in 提供。
+
+    这是 extension 扩展点的真实消费处——未安装 get_extension 返回 None，自动静默跳过，
+    零外部依赖，不锁死核心。与 WorkRally 的云端 opt-in 不同，Terax 是本地开源应用，
+    红线 local_only=True（绝不触外部网络）。
+    """
+    t = get_extension("terax")
+    if t is not None:
+        return {"available": True, **t}
+    return {"available": False, "name": "terax",
+            "note": "未安装；装后自动启用（Apache-2.0 本地开源，无 token）"}
+
+
 def profit_summary(revenue: float, cost: float) -> Dict[str, Any]:
     """财务岗位：利润预估（开源，无闭源依赖）。"""
     return profit_estimate(revenue, cost)
@@ -75,6 +90,7 @@ __all__ = [
     "plan_company",
     "build_financial_report",
     "resolve_content_tools",
+    "resolve_dev_env",
     "bom_summary",
     "profit_summary",
     "list_roles",

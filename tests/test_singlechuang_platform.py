@@ -101,6 +101,30 @@ class TestExtension(unittest.TestCase):
         del os.environ["SC_TEST_TOKEN"]
 
 
+class TestTeraxExtension(unittest.TestCase):
+    """Terax 是本地开源应用（Apache-2.0，无需 token）：装了就在、没装静默跳过。"""
+
+    def test_terax_registered_local_only(self):
+        exts = extension.list_extensions()
+        self.assertIn("terax", exts)
+        self.assertTrue(exts["terax"]["local_only"])   # 安全红线：只本机
+        self.assertTrue(exts["terax"]["enabled"])      # 无 env_gate -> 默认启用（但二进制未装则实例为 None）
+
+    def test_terax_not_installed_returns_none(self):
+        # 沙箱 PATH 上无 terax 二进制 -> factory 返回 None，静默跳过，不阻塞主链路
+        inst = extension.get_extension("terax")
+        self.assertIsNone(inst)
+
+    def test_terax_detected_when_on_path(self):
+        # 模拟本机已装 terax（PATH 命中）-> 返回描述符
+        import shutil
+        with mock.patch.object(shutil, "which", return_value="/usr/bin/terax"):
+            inst = extension.get_extension("terax")
+        self.assertIsNotNone(inst)
+        self.assertEqual(inst["license"], "Apache-2.0")
+        self.assertEqual(inst["fits"], "product_rd")
+
+
 class TestOllamaGateway(unittest.TestCase):
     def _gw(self):
         return ollama_gw.OllamaModelGateway()
@@ -168,6 +192,26 @@ class TestSingleChuangWiring(unittest.TestCase):
         self.assertEqual(b["total"], 45.0)
         p = singlechuang.profit_summary(100, 60)
         self.assertEqual(p["profit"], 40.0)
+
+    def test_product_rd_has_terax_capability(self):
+        role = opc_roles.get_role("product_rd")
+        self.assertIn("dev.terax", role.capabilities)  # 产品研发岗映射终端开发环境
+
+    def test_resolve_dev_env_not_installed(self):
+        # 沙箱无 terax -> available=False，但结构完整、不崩
+        env = singlechuang.resolve_dev_env()
+        self.assertIn("available", env)
+        self.assertFalse(env["available"])
+        self.assertEqual(env["name"], "terax")
+
+    def test_plan_company_exposes_dev_env(self):
+        out = singlechuang.plan_company("开发青少年护眼 AI 眼镜")
+        prd = [r for r in out["roles"] if r["role"] == "product_rd"][0]
+        self.assertIsNotNone(prd["dev_env"])
+        self.assertIn("available", prd["dev_env"])
+        # 其它岗位不应带 dev_env
+        others = [r for r in out["roles"] if r["role"] != "product_rd"]
+        self.assertTrue(all(r["dev_env"] is None for r in others))
 
 
 if __name__ == "__main__":

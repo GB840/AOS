@@ -15,6 +15,7 @@
 - inference.llm    推理/规划/反思
 - memory.semantic  记忆检索
 - finance.report   财务核算（report_agent 提供，开源 openpyxl）
+- dev.terax        终端开发环境（Terax，opt-in 本地开源，产品研发岗主阵地；由 extension 注册，未安装静默跳过）
 """
 from __future__ import annotations
 
@@ -38,8 +39,8 @@ OPC_ROLES: Dict[str, OPCRole] = {
     "product_rd": OPCRole(
         id="product_rd",
         name="产品研发智能体",
-        description="硬件选型、模型量化、嵌入式固件、代码生成、仓库沉淀",
-        capabilities=["action.code_exec", "inference.llm", "memory.semantic", "action.repo"],
+        description="硬件选型、模型量化、嵌入式固件、代码生成、仓库沉淀；终端开发环境由 Terax(opt-in) 提供",
+        capabilities=["action.code_exec", "inference.llm", "memory.semantic", "action.repo", "dev.terax"],
         workflow=["analyze", "deliver", "evolve"],
     ),
     "market_research": OPCRole(
