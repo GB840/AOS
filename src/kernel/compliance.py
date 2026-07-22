@@ -451,6 +451,7 @@ CAPABILITY_POLICY_ACTION = {
     "memory.semantic": "memory:read",
     "memory.write": "memory:write",
     "action.repo": "call:action.repo",
+    "opc.orchestrate": "call:opc.orchestrate",
 }
 
 _POLICY_ENGINE: "PolicyEngine | None" = None

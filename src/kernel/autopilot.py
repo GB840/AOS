@@ -120,6 +120,13 @@ def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
     # 路由（语义固定、无需引擎故障转移；也避免 hub 未注册 action.repo 时失败）。
     if capability == "action.repo":
         return _get_repo().invoke(InvokeRequest(capability=capability, payload=payload))
+    # 单创OS 编排：把创业目标映射到 OPC 5 岗位（复用注册表，不重造）
+    if capability == "opc.orchestrate":
+        from kernel.plugins.singlechuang import plan_company
+        goal = payload.get("task") or payload.get("goal") or ""
+        industry = payload.get("industry") or "default"
+        data = plan_company(goal, industry)
+        return InvokeResult(ok=bool(goal), data=data)
     hub = _get_hub()
     if hub is not None:
         # cognition.* 在 hub 注册表里统一归到 inference.llm 派发
@@ -336,6 +343,62 @@ def _zhipu_generate(prompt: str, timeout: float = 90.0) -> Optional[str]:
     except Exception:  # noqa: BLE001
         logger.warning("智谱直连生成失败", exc_info=True)
         return None
+
+
+def _openai_compat_generate(prompt: str, timeout: float = 90.0) -> Optional[str]:
+    """OpenAI 兼容端点生成（stdlib only），读取 AOS_LLM_BASE_URL / AOS_LLM_MODEL。
+
+    这是「开源默认路由」的真实落地：支持任何开源推理服务
+    （Ollama :11434/v1、vLLM、LM Studio 等），无需第三方闭源 key，
+    直接兑现用户「无 API 分成」诉求。无该 env 时返回 None（交给 Ollama 兜底）。
+    """
+    base = os.environ.get("AOS_LLM_BASE_URL")
+    if not base:
+        return None
+    import json as _json
+    import urllib.request
+    model = os.environ.get("AOS_LLM_MODEL", "qwen3:8b")
+    url = base.rstrip("/") + "/chat/completions"
+    body = _json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1024,
+        "temperature": 0.3,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        return (data.get("choices") or [{}])[0].get("message", {}).get("content") or None
+    except Exception:  # noqa: BLE001
+        logger.warning("OpenAI 兼容端点生成失败: %s", base, exc_info=True)
+        return None
+
+
+def _llm_generate(prompt: str, *, allow_zhipu: bool = True) -> Optional[str]:
+    """统一 LLM 生成入口，落实「开源默认 + 智谱 opt-in」：
+
+    1) AOS_LLM_BASE_URL（开源/OpenAI 兼容，如 Ollama、vLLM）→ 默认优先
+    2) 本机 Ollama（AOS_OLLAMA_URL，模型读 AOS_LLM_MODEL）→ 默认兜底
+    3) 智谱仅当 ZHIPU_API_KEY 且 AOS_ZHIPU_OPTIN=1 才启用（opt-in，非默认）
+    4) 都不通 → 返 None（交上层诚实降级，绝不谎报）
+    """
+    # 1) 开源/OpenAI 兼容端点优先
+    out = _openai_compat_generate(prompt)
+    if out:
+        return out
+    # 2) 本机 Ollama 兜底
+    try:
+        ollama_out = _ollama_generate(prompt, model=os.environ.get("AOS_LLM_MODEL"))
+        if ollama_out:
+            return ollama_out
+    except Exception:  # noqa: BLE001
+        pass
+    # 3) 智谱 opt-in（默认关闭，需显式开关）
+    if allow_zhipu and os.environ.get("AOS_ZHIPU_OPTIN") == "1" and os.environ.get("ZHIPU_API_KEY"):
+        return _zhipu_generate(prompt)
+    return None
 
 
 def _build_plan_prompt(task: str) -> str:
@@ -1175,8 +1238,23 @@ def _plan(task: str, planner: str):
             logger.warning("ag2 规划失败，降级 heuristic", exc_info=True)
 
     if not steps:
+        # 开源默认路由：Ollama/vLLM（AOS_LLM_BASE_URL）或本机 Ollama 优先；
+        # 仅 planner=="auto" 且显式 AOS_ZHIPU_OPTIN 时才退化到智谱（opt-in）。
+        if planner in ("ollama", "open_source", "local", "auto"):
+            try:
+                otext = _llm_generate(_build_plan_prompt(task),
+                                      allow_zhipu=(planner == "auto"))
+                if otext:
+                    osteps = parse_plan_to_steps(otext, _CAPS)
+                    if osteps:
+                        steps = osteps
+                        plan_text = otext.strip() or plan_text
+                        used_planner = "open_source"
+                        logger.info("规划使用开源 LLM（Ollama/vLLM）")
+            except Exception:  # noqa: BLE001
+                logger.warning("开源规划失败，降级", exc_info=True)
         # 智谱直连作为 ag2 不可用时的高质量 LLM 规划后端（已验证可用，零新依赖）
-        if planner in ("ag2", "zhipu"):
+        if not steps and planner in ("ag2", "zhipu"):
             try:
                 ztext = _zhipu_generate(_build_plan_prompt(task))
                 if ztext:
@@ -1564,9 +1642,9 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
                 logger.warning("ag2 反思产出假重设计，降级 ollama")
     except Exception as e:  # noqa: BLE001
         logger.warning("反思 ag2 失败，降级智谐/ollama: %s", e)
-    # 1.5) 智谱直连（ag2 不可用时的真实 LLM 反思后端，已验证可用，零新依赖）
+    # 1.5) 开源默认 LLM 反思后端（Ollama/vLLM 优先），智谱仅 opt-in 兜底
     try:
-        ztext = _zhipu_generate(prompt)
+        ztext = _llm_generate(prompt, allow_zhipu=True)
         if ztext:
             zsteps = parse_plan_to_steps(ztext, _CAPS)
             if zsteps:

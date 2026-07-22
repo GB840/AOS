@@ -1,11 +1,13 @@
 """单创OS 平台层轻量测试（避开重型 kernel 链，沙箱可跑）。
 
-覆盖：5岗位注册表、财务报表芯粒、opt-in 扩展注册(含 WorkRally 接口位)、Ollama 开源网关。
+覆盖：5岗位注册表、财务报表芯粒、opt-in 扩展注册(含 WorkRally 接口位)、Ollama 开源网关、
+以及 singlechuang 编排层对三件套的「真实消费」（证明它们不是死代码）。
 所有模块用 importlib 直接加载模块体，绕过 kernel.plugins.__init__ 的重型依赖。
 """
 import importlib.util
 import os
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -24,6 +26,16 @@ opc_roles = _load("sc_opc_roles", "kernel/plugins/opc_roles.py")
 report_agent = _load("sc_report_agent", "kernel/plugins/report_agent.py")
 extension = _load("sc_extension", "kernel/plugins/extension.py")
 ollama_gw = _load("sc_ollama_gw", "kernel/plugins/ollama_gateway.py")
+
+# 让 singlechuang 的相对导入解析到已加载模块（验证编排层真的消费三件套）
+sys.modules.setdefault("kernel", types.ModuleType("kernel"))
+_kp = types.ModuleType("kernel.plugins")
+_kp.__path__ = [os.path.join(SRC, "kernel", "plugins")]
+sys.modules["kernel.plugins"] = _kp
+sys.modules["kernel.plugins.opc_roles"] = opc_roles
+sys.modules["kernel.plugins.report_agent"] = report_agent
+sys.modules["kernel.plugins.extension"] = extension
+singlechuang = _load("kernel.plugins.singlechuang", "kernel/plugins/singlechuang.py")
 
 
 class TestOPCRoles(unittest.TestCase):
@@ -115,6 +127,47 @@ class TestOllamaGateway(unittest.TestCase):
         with mock.patch.object(gw, "_post", return_value=fake):
             resp = gw.chat("ollama/qwen3:8b", [])
         self.assertEqual(resp.content, "你好")
+
+
+class TestSingleChuangWiring(unittest.TestCase):
+    """证明 singlechuang 编排层真的消费了三件套（不是死代码）。"""
+
+    def test_plan_company_returns_five_roles(self):
+        out = singlechuang.plan_company("开发青少年护眼 AI 眼镜")
+        self.assertEqual(out["role_count"], 5)
+        self.assertEqual(out["roles"][0]["role"], "product_rd")
+        for r in out["roles"]:
+            self.assertTrue(r["capabilities"], "岗位能力清单不应为空")
+        # 财务岗必须带报表能力（report_agent 开源补位）
+        fin = [r for r in out["roles"] if r["role"] == "finance"][0]
+        self.assertIn("finance.report", fin["capabilities"])
+
+    def test_resolve_content_tools_no_workrally(self):
+        os.environ.pop("WORKRALLY_TOKEN", None)
+        tools = singlechuang.resolve_content_tools()
+        self.assertIn("content.video_maker", tools)
+        self.assertNotIn("content.workrally", tools)  # 无账号不暴露
+
+    def test_resolve_content_tools_with_workrally(self):
+        os.environ["WORKRALLY_TOKEN"] = "fake"
+        try:
+            extension.register_extension(
+                "workrally", lambda: "wr_instance", env_gate="WORKRALLY_TOKEN")
+            tools = singlechuang.resolve_content_tools()
+            self.assertIn("content.workrally", tools)  # 有账号 opt-in 追加
+        finally:
+            os.environ.pop("WORKRALLY_TOKEN", None)
+
+    def test_build_financial_report(self):
+        recs = [{"项目": "营收", "金额": 100}, {"项目": "成本", "金额": 60}]
+        res = singlechuang.build_financial_report(recs)
+        self.assertTrue(res["ok"])
+
+    def test_bom_and_profit_helpers(self):
+        b = singlechuang.bom_summary([{"name": "RK", "unit_price": 45, "qty": 1}])
+        self.assertEqual(b["total"], 45.0)
+        p = singlechuang.profit_summary(100, 60)
+        self.assertEqual(p["profit"], 40.0)
 
 
 if __name__ == "__main__":

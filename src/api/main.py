@@ -2283,6 +2283,22 @@ def repo_status():
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/opc/plan")
+async def opc_plan(req: dict):
+    """单创OS 编排：把创业目标映射为 OPC 5 岗位工作分解（轻量，不触发重型链）。"""
+    try:
+        from kernel.plugins.singlechuang import plan_company
+        goal = (req or {}).get("goal") or (req or {}).get("task") or ""
+        industry = (req or {}).get("industry") or "default"
+        if not goal:
+            raise HTTPException(status_code=400, detail="缺少 goal/task 字段")
+        return plan_company(goal, industry)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # 注：独立的 /do 页面已弃用，自主执行能力整合进 web/portal.html 的「自主执行」模块（根路径 /）。
 
 

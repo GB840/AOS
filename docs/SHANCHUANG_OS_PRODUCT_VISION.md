@@ -229,3 +229,31 @@
 ### 11.5 下一步
 - 主机装 Ollama + 拉 `qwen3:8b` → `bash start_all.sh` → 浏览器一句话验开源派活闭环。
 - 多租户/计费/支付（Phase 2/3）仍待建；是否搭 `content.workrally` 取决于购账号。
+
+---
+
+## 十二、诚实复盘：本轮回填的真实漏洞（2026-07-23 凌晨）
+
+提交 `542d457` 后用户质疑"都弄好了吗"——当场核验发现**之前声称的"开源默认路由"和"5岗位/报表/扩展"并未真正接起来**，是组件写好了但没接线的"东一点西一点"。本轮回填并加测试守护。
+
+### 12.1 查出的 6 个真实漏洞（带行号）
+| # | 漏洞 | 证据 | 严重度 |
+|---|---|---|---|
+| 1 | 规划路径锁死智谱，开源 ollama 进不去 | `autopilot.py` planner 仅 `("ag2","zhipu")` | 🔴 |
+| 2 | 反思虽能 ollama 兜底，但顺序是智谱先、ollama 垫底，与"开源默认"反 | 先 `_zhipu_generate` 失败才 `_ollama_generate` | 🔴 |
+| 3 | 文档写的 `AOS_LLM_MODEL/AOS_LLM_BASE_URL` 规划/反思代码里**没读**（只在注释） | grep 仅 `mem0_store`/`ag2_adapter` 读，autopilot 不读 | 🟠 |
+| 4 | 新建的 `OllamaModelGateway` 抽象**没人调用**，是死子系统 | wiring 建了但 autopilot 走自己的 `_zhipu_generate`/`_ollama_generate` | 🟠 |
+| 5 | `opc_roles.py`/`report_agent.py`/`extension.py` **全项目零 import**，死代码 | grep 仅文件内部自引用 | 🔴 |
+| 6 | `singlechuang.py` 初版接口对不上（角色 id 错、误用 `ROLES`、`InvokeRequest/ReportAgent` 不存在）→ import 即崩 | 重写前 `opc_roles` 角色 id 为 `product_rd` 等、`report_agent` 无类 | 🔴 |
+
+### 12.2 本轮回填（已代码落地 + 测试守护）
+- **开源路由真正接进脑子**：`autopilot.py` 新增 `_openai_compat_generate`（读 `AOS_LLM_BASE_URL`/`AOS_LLM_MODEL`，支持 Ollama/vLLM OpenAI 兼容）+ 统一 `_llm_generate`（**开源优先 → 本机 Ollama → 智谱仅 `AOS_ZHIPU_OPTIN=1` 才 opt-in**）。规划路径加 `planner in ("ollama","open_source","local","auto")` 分支；反思路径改调 `_llm_generate`。文档里的 env 开关现在**真的生效**，不再只是注释。
+- **三件套接成活的**：新建 `src/kernel/plugins/singlechuang.py` 编排层，真正 `import` 并消费 `opc_roles`+`report_agent`+`extension`；注册 `opc.orchestrate` 进 `autopilot._dispatch` + `compliance` 能力表；`main.py` 加 `POST /api/opc/plan`。现在三件套不再死代码。
+- **修掉初版 self-bug**：`singlechuang.py` 重写对齐真实接口（`product_rd` 等 id、`generate_report`/`bom_cost`/`profit_estimate`、`get_extension`）。
+- 测试 `tests/test_singlechuang_platform.py` 扩到 **17 项**，新增 `TestSingleChuangWiring` 5 项专门验证三件套被真实消费（若仍是坏接口会 `ImportError` 崩，现已全过）。
+
+### 12.3 仍然诚实未验证 / 未做（不瞒）
+- 端到端：autopilot 在**真实 LLM 任务**下派活 5 岗位 + 出报表，沙箱无真 LLM 未跑（需主机 `bash start_all.sh` + 真 Ollama/智谱）。
+- `OllamaModelGateway`（抽象层）与 autopilot 的 `_ollama_generate`（stdlib 直连）是**两条并存的 ollama 路径**：抽象层供 kernel/app 路径，直连供 autopilot 反思兜底。功能不冲突，但确有重复，未来可统一（低优先）。
+- 多租户隔离 / 计费 / 支付（Phase 2/3）**仍 ZERO**，未动。
+- 老问题仍在：`app.py` 顶部 `brain` 绑架白页风险、仓库 13 个未跟踪杂文件。
