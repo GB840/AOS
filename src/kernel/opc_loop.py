@@ -73,6 +73,11 @@ def build_default_stages() -> List[Stage]:
             prompt="完成以下业务的实际交付物（产出文件/执行代码/交付报告）：{business}",
         ),
         Stage(
+            id="evolve", name="进化·沉淀仓库", capability="action.repo",
+            side_effect=True, parallel_safe=False, confirm=True,
+            prompt="把本轮已验证的改进沉淀到代码仓库（git add/commit；除非显式授权不推送远端）：{business}",
+        ),
+        Stage(
             id="maintain", name="维护·回流", capability="inference.llm",
             side_effect=False, parallel_safe=True, confirm=False,
             prompt="汇总本轮业务运行结果（好评/复购/互动/获客失败原因），提炼可复用经验：{business}",
@@ -150,6 +155,18 @@ class OPCBusinessLoop:
             return self.config.executor
 
         def _default(stage, task_text, context):
+            # 仓库自进化阶段：直接调受控 repo 芯粒 commit，不走重型 autopilot.run
+            # （避免规划绕远 + 触发 LLM；符合「芯粒隔离 + 权限边界」）。
+            if stage.capability == "action.repo":
+                from kernel.plugins.repo_agent import RepoAgent, InvokeRequest
+                msg = (
+                    f"[AOS evolve] 业务「{self.config.business[:40]}」"
+                    f"第{context.get('cycle', 0)}轮沉淀"
+                )
+                return RepoAgent().invoke(InvokeRequest(
+                    capability="action.repo",
+                    payload={"operation": "commit", "message": msg, "confirm": True},
+                ))
             from kernel import autopilot
             return autopilot.run(task_text, planner=self.config.planner)
 

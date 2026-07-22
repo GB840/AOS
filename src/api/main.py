@@ -241,6 +241,14 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.warning("审核控制面 API 挂载失败: %s", e)
 
+# 代码炼化系统 API（/api/refinery/*，沙箱 + 全项目炼化闭环）
+try:
+    from api.refinery_api import mount_refinery_api
+    mount_refinery_api(app)
+    logger.info("代码炼化 API 已挂载: /api/refinery")
+except Exception as e:  # noqa: BLE001
+    logger.warning("代码炼化 API 挂载失败: %s", e)
+
 # Remotion 质量视频渲染 API（/api/video/remotion/*，Tier1 缺口③）
 try:
     from api.video_api import mount_video_api
@@ -2263,6 +2271,16 @@ async def autopilot_status(run_id: str):
         return {"status": snap.get("status", "running"), "state": snap.get("state", {})}
     except Exception as e:
         raise HTTPException(status_code=500, detail=_safe_detail(e))
+
+
+@app.get("/api/repo/status")
+def repo_status():
+    """轻量仓库状态（自主执行页「仓库进化」面板用，不触发重型链）。"""
+    try:
+        from kernel.plugins.repo_agent import get_repo_status
+        return get_repo_status()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
 
 
 # 注：独立的 /do 页面已弃用，自主执行能力整合进 web/portal.html 的「自主执行」模块（根路径 /）。

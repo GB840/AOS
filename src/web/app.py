@@ -188,6 +188,20 @@ def render_autopilot_page():
         st.subheader("🎯 最终交付")
         st.markdown(str(final))
 
+    # 仓库进化状态（让"仓库结合"可见：分支 / 改动 / 最近提交）
+    with st.expander("📦 仓库进化", expanded=False):
+        repo = make_api_request("/api/repo/status")
+        if repo.get("ok"):
+            st.caption(
+                f"分支: {repo.get('branch')} ｜ 工作树: "
+                f"{'有改动' if repo.get('dirty') else '干净'}"
+            )
+            log = repo.get("out") or ""
+            if log:
+                st.code(log[:600], language="bash")
+        elif repo.get("error"):
+            st.caption(f"仓库状态获取失败: {repo['error']}")
+
     st.caption(f"运行状态: {status}")
     if status not in ("done", "completed", "failed", "error"):
         _time.sleep(1.5)

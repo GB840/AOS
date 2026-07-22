@@ -70,6 +70,18 @@ def _get_ag2():
     return _ag2
 
 
+_repo: Any = None
+
+
+def _get_repo():
+    """仓库自进化芯粒惰性单例（action.repo）。"""
+    global _repo
+    if _repo is None:
+        from kernel.plugins.repo_agent import RepoAgent
+        _repo = RepoAgent()
+    return _repo
+
+
 # ---- ⑤ 融合 FabricHub 单一内核路由（默认启用）---------------------------
 # 默认走 FabricHub 统一路由：所有真实适配器调用经 FabricHub.route() 统一派发——
 # 统一能力路由 / 运行时故障转移 / 策略边界 / 白盒蒸馏（理念5/8），消除「autopilot
@@ -104,6 +116,10 @@ def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
     两条路径最终命中同一底层适配器，返回 InvokeResult(.data 同构)；
     autopilot 的真实闸门 / 量化指标逻辑无需改动即可作用于两条路径。
     """
+    # 仓库自进化芯粒（action.repo）：本地确定性操作、故障隔离点，不经 FabricHub
+    # 路由（语义固定、无需引擎故障转移；也避免 hub 未注册 action.repo 时失败）。
+    if capability == "action.repo":
+        return _get_repo().invoke(InvokeRequest(capability=capability, payload=payload))
     hub = _get_hub()
     if hub is not None:
         # cognition.* 在 hub 注册表里统一归到 inference.llm 派发
@@ -786,6 +802,12 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
             ok=rm["is_real"],
             data={**result.data, "real_metrics": rm},
         )
+
+    if capability == "action.repo":
+        # 仓库自进化芯粒：本地确定性操作，经 _dispatch 走隔离的 repo 芯粒
+        res = _dispatch("action.repo", payload)
+        rm = {"is_real": bool(getattr(res, "ok", False))}
+        return InvokeResult(ok=res.ok, data={**(res.data or {}), "real_metrics": rm})
 
     if capability == "memory.semantic":
         # 真实落盘：把上游产出的知识存进语义记忆（文件后端，离线确定可用，

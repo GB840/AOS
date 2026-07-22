@@ -450,6 +450,7 @@ CAPABILITY_POLICY_ACTION = {
     "cognition.planning": "call:cognition.planning",
     "memory.semantic": "memory:read",
     "memory.write": "memory:write",
+    "action.repo": "call:action.repo",
 }
 
 _POLICY_ENGINE: "PolicyEngine | None" = None
