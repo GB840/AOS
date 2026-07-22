@@ -53,12 +53,12 @@ def make_api_request(endpoint, method="GET", **kwargs):
     
     try:
         if method == "GET":
-            response = requests.get(url, headers=headers, params=kwargs.get("params"))
+            response = requests.get(url, headers=headers, params=kwargs.get("params"), timeout=30)
         elif method == "POST":
             if kwargs.get("files"):
-                response = requests.post(url, headers={k: v for k, v in headers.items() if k != "Content-Type"}, **kwargs)
+                response = requests.post(url, headers={k: v for k, v in headers.items() if k != "Content-Type"}, timeout=30, **kwargs)
             else:
-                response = requests.post(url, headers=headers, json=kwargs.get("json"))
+                response = requests.post(url, headers=headers, json=kwargs.get("json"), timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -77,7 +77,7 @@ def make_audio_request(endpoint, audio_bytes, **kwargs):
     try:
         files = {"audio": ("audio.wav", audio_bytes, "audio/wav")}
         data = {k: v for k, v in kwargs.items() if v is not None}
-        response = requests.post(url, headers=headers, files=files, data=data)
+        response = requests.post(url, headers=headers, files=files, data=data, timeout=60)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -85,6 +85,113 @@ def make_audio_request(endpoint, audio_bytes, **kwargs):
             return {"error": response.json() if response else str(e)}
         except Exception:
             return {"error": str(e)}
+
+
+def render_autopilot_page():
+    """🚀 自主执行页：一句话/语音 → AOS 自主规划→执行→反思→交付，全程可见。
+    提交后后台跑自主环，前端轮询 /api/autopilot/status 实时刷新（每 ~1.5s 一次）。"""
+    import time as _time
+
+    if "ap_run_id" not in st.session_state:
+        st.session_state.ap_run_id = None
+    if "ap_task" not in st.session_state:
+        st.session_state.ap_task = ""
+
+    st.markdown("**一句话描述任务，AOS 自主规划 → 执行 → 反思 → 交付，全程可见。**")
+
+    task_input = st.text_area(
+        "任务目标（一句话）",
+        value=st.session_state.ap_task,
+        height=80,
+        placeholder="例如：查今天 AI 领域最重要的三条新闻，写成一份简报",
+        key="ap_task_input",
+    )
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("🚀 开始执行", type="primary", key="ap_run_btn"):
+            if task_input.strip():
+                st.session_state.ap_task = task_input
+                with st.spinner("正在启动自主环..."):
+                    res = make_api_request(
+                        "/api/autopilot/run",
+                        method="POST",
+                        json={"task": task_input, "planner": "zhipu"},
+                    )
+                if res.get("error"):
+                    st.error(f"启动失败: {res['error']}")
+                else:
+                    st.session_state.ap_run_id = res.get("run_id")
+                    st.rerun()
+    with col2:
+        if st.button("🧹 重置", key="ap_reset_btn"):
+            st.session_state.ap_run_id = None
+            st.session_state.ap_task = ""
+            st.rerun()
+
+    run_id = st.session_state.ap_run_id
+    if not run_id:
+        return
+
+    snap = make_api_request(f"/api/autopilot/status/{run_id}")
+    if snap.get("error"):
+        st.error(f"查询状态失败: {snap['error']}")
+        return
+    status = snap.get("status", "running")
+    state = snap.get("state", {}) or {}
+
+    # 计划
+    plan = state.get("plan_text")
+    if plan:
+        st.subheader("📋 计划")
+        st.markdown(plan)
+
+    # 实时进度
+    live = state.get("live") or {}
+    if live:
+        done = live.get("done", 0)
+        total = live.get("total", 0)
+        if total:
+            st.progress(min(done / total, 1.0))
+        st.caption(f"进度 {done}/{total} ｜ 当前步: {live.get('capability', '')}")
+
+    # 各轮完整过程
+    for cyc in (state.get("all_traces") or []):
+        cyc_no = cyc.get("cycle")
+        st.markdown(f"**🔁 第 {cyc_no} 轮**")
+        for t in (cyc.get("trace") or []):
+            eng = t.get("engine") or "—"
+            cap = t.get("capability") or ""
+            ok = t.get("ok")
+            real = t.get("real")
+            badge = "✅" if ok else ("❌" if ok is False else "⏳")
+            real_badge = "🟢真实" if real is True else ("🟡模拟" if real is False else "⚪未知")
+            st.markdown(f"{badge} `{cap}` ｜ 用了: **{eng}** ｜ {real_badge}")
+            out = t.get("out") or t.get("error") or ""
+            if out:
+                st.caption(str(out)[:400])
+
+    # 反思记录
+    refl = state.get("reflection_log") or []
+    if refl:
+        st.subheader("🪞 反思记录")
+        for r in refl:
+            if isinstance(r, dict):
+                st.markdown(f"- **轮{r.get('cycle')} / {r.get('action')}**: {str(r.get('detail') or r.get('plan') or r.get('reason') or '')[:400]}")
+            else:
+                st.markdown(f"- {str(r)[:400]}")
+
+    # 最终交付
+    last = state.get("last") or {}
+    final = (last.get("execution") or {}).get("final")
+    if final:
+        st.subheader("🎯 最终交付")
+        st.markdown(str(final))
+
+    st.caption(f"运行状态: {status}")
+    if status not in ("done", "completed", "failed", "error"):
+        _time.sleep(1.5)
+        st.rerun()
 
 
 @st.cache_resource
@@ -250,7 +357,7 @@ with st.sidebar:
     
     page = st.radio(
         "导航",
-        ["💬 智能对话", "🧠 代码库记忆", "🤝 专家智能体", "🌐 搜索中心", "📚 知识库", "🔄 Loop循环", "👨‍💻 RuFlo开发", "🎬 ViMax视频", "🎨 ComfyUI视觉", "🎥 Pixelle短视频", "🎬 OpenMontage", "✂️ 视频剪辑", "🎛️ 模型网关", "🧠 知识图谱", "👥 Agent管理", "🎨 设计规范", "✅ 代码质检", "🗺️ 3D重建", "🌐 网页提取", "🤖 本地模型", "🖱️ UI-TARS自动化", "🎤 语音编辑", "🖼️ 多模态", "🛠️ 技能中心", "🤖 子智能体", "🗂️ 沙盒终端", "📁 项目导入", "📊 审计日志", "📝 实时日志", "📈 系统状态"],
+        ["💬 智能对话", "🧠 代码库记忆", "🤝 专家智能体", "🌐 搜索中心", "📚 知识库", "🔄 Loop循环", "🚀 自主执行", "👨‍💻 RuFlo开发", "🎬 ViMax视频", "🎨 ComfyUI视觉", "🎥 Pixelle短视频", "🎬 OpenMontage", "✂️ 视频剪辑", "🎛️ 模型网关", "🧠 知识图谱", "👥 Agent管理", "🎨 设计规范", "✅ 代码质检", "🗺️ 3D重建", "🌐 网页提取", "🤖 本地模型", "🖱️ UI-TARS自动化", "🎤 语音编辑", "🖼️ 多模态", "🛠️ 技能中心", "🤖 子智能体", "🗂️ 沙盒终端", "📁 项目导入", "📊 审计日志", "📝 实时日志", "📈 系统状态"],
         label_visibility="collapsed",
     )
     
@@ -432,7 +539,8 @@ elif page == "🎤 语音交互":
                     tts_response = requests.post(
                         f"{API_BASE_URL}/api/voice/tts",
                         params={"text": response, "speed": voice_speed},
-                        headers={"X-API-Key": st.session_state.api_key} if st.session_state.api_key else {}
+                        headers={"X-API-Key": st.session_state.api_key} if st.session_state.api_key else {},
+                        timeout=30
                     )
                     if tts_response.status_code == 200:
                         audio_b64 = base64.b64encode(tts_response.content).decode()
@@ -574,6 +682,12 @@ elif page == "🔄 Loop循环":
     - 🔄 Loop Engineering: 比拼"谁能设计出高质量的闭环机制"
     """)
 
+
+# ---- Autonomous Execution Page ----
+elif page == "🚀 自主执行":
+    st.title("🚀 AOS 自主执行")
+    st.caption("一句话 / 语音 → 自主规划 → 执行 → 反思 → 交付（全程可见）")
+    render_autopilot_page()
 
 # ---- ViMax Video Page ----
 elif page == "🎬 ViMax视频":

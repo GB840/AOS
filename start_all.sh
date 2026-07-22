@@ -85,7 +85,7 @@ if curl -s -m 4 -o /dev/null http://127.0.0.1:8501/web/ 2>/dev/null; then
   echo "[start_all] Web 控制台已在运行"
 else
   echo "[start_all] 启动 Web 控制台 (:8501, baseUrlPath=/web)..."
-  ( "$VENV_PY_DIR/streamlit" run web/console.py --server.port 8501 --server.headless true --browser.gatherUsageStats false --server.address 127.0.0.1 --server.baseUrlPath=/web > web_console.log 2>&1 & )
+  ( "$VENV_PY_DIR/streamlit" run src/web/app.py --server.port 8501 --server.headless true --browser.gatherUsageStats false --server.address 127.0.0.1 --server.baseUrlPath=/web > web_console.log 2>&1 & )
   sleep 8
 fi
 
