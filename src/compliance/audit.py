@@ -116,6 +116,10 @@ class AuditLogger:
                     total += 1
         return {"count": total, "by_event": counts}
 
+    def flush(self) -> None:
+        """刷新日志缓存（当前实现为NO-OP，保持接口兼容）"""
+        pass
+
 
 # 全局单例(线程安全懒加载)
 _logger_instance: Optional[AuditLogger] = None

@@ -120,9 +120,12 @@ def test_jwt_api_roundtrip(monkeypatch, tmp_path):
     import api.security as sec
     monkeypatch.setattr(sec, "_get_jwt_keys", lambda: (priv, pub))
     tok = create_access_token("alice")
-    assert decode_access_token(tok) == "alice"
-    # 篡改令牌 -> None
-    assert decode_access_token(tok + "x") is None
+    sub, status = decode_access_token(tok)
+    assert sub == "alice"
+    assert status == "valid"
+    sub2, status2 = decode_access_token(tok + "x")
+    assert sub2 is None
+    assert status2 == "invalid"
 
 
 # ---------- 恒定时间比较 (G5) ----------

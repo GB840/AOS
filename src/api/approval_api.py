@@ -21,7 +21,7 @@ import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -32,22 +32,53 @@ router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
 class CreateApprovalRequest(BaseModel):
     source: str = Field(..., description="发起方：evolve/workflow_runner/autopilot/autoskill")
-    title: str = Field(...)
-    description: str = ""
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field("", max_length=2000)
     risk_level: str = Field("medium", description="low/medium/high")
     payload: Dict[str, Any] = Field(default_factory=dict)
-    workflow_id: str = ""
-    run_id: str = ""
-    proposal_id: str = ""
-    ttl_seconds: int = Field(0, description="过期时间（秒），0=永不过期")
+    workflow_id: str = Field("", max_length=100)
+    run_id: str = Field("", max_length=100)
+    proposal_id: str = Field("", max_length=100)
+    ttl_seconds: int = Field(0, ge=0, le=86400 * 30, description="过期时间（秒），0=永不过期，最大30天")
+
+    @field_validator("source")
+    def validate_source(cls, v: str) -> str:
+        allowed = {"evolve", "workflow_runner", "autopilot", "autoskill"}
+        if v not in allowed:
+            raise ValueError(f"source 必须是 {allowed} 之一")
+        return v
+
+    @field_validator("risk_level")
+    def validate_risk_level(cls, v: str) -> str:
+        allowed = {"low", "medium", "high"}
+        if v not in allowed:
+            raise ValueError(f"risk_level 必须是 {allowed} 之一")
+        return v
 
 
 class DecideRequest(BaseModel):
-    decided_by: str = "anonymous"
-    note: str = ""
+    decided_by: str = Field("anonymous", max_length=100)
+    note: str = Field("", max_length=2000)
 
 
 # ── 工具函数 ──
+
+# ── 输入验证工具 ──
+
+import re
+
+_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,100}$")
+
+
+def _validate_id(value: str, name: str = "id") -> str:
+    """验证 ID 格式（字母数字下划线连字符，1-100字符）。"""
+    if not value or not _ID_PATTERN.match(value):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name} 格式无效：仅允许字母、数字、下划线和连字符，长度1-100"
+        )
+    return value
+
 
 def _store():
     try:
@@ -117,6 +148,7 @@ async def stats():
 @router.get("/{approval_id}")
 async def get_approval(approval_id: str):
     """获取审批详情。"""
+    _validate_id(approval_id, "approval_id")
     s = _store()
     ap = await asyncio.to_thread(s.get, approval_id)
     if ap is None:
@@ -127,6 +159,7 @@ async def get_approval(approval_id: str):
 @router.post("/{approval_id}/approve")
 async def approve(approval_id: str, body: DecideRequest):
     """批准审批。"""
+    _validate_id(approval_id, "approval_id")
     s = _store()
     result = await asyncio.to_thread(
         s.approve, approval_id, decided_by=body.decided_by, note=body.note
@@ -139,6 +172,7 @@ async def approve(approval_id: str, body: DecideRequest):
 @router.post("/{approval_id}/reject")
 async def reject(approval_id: str, body: DecideRequest):
     """拒绝审批。"""
+    _validate_id(approval_id, "approval_id")
     s = _store()
     result = await asyncio.to_thread(
         s.reject, approval_id, decided_by=body.decided_by, note=body.note
@@ -151,6 +185,7 @@ async def reject(approval_id: str, body: DecideRequest):
 @router.delete("/{approval_id}")
 async def delete_approval(approval_id: str):
     """删除审批（管理员）。"""
+    _validate_id(approval_id, "approval_id")
     s = _store()
     ok = await asyncio.to_thread(s.delete, approval_id)
     return {"status": "ok" if ok else "not_found", "id": approval_id}
@@ -166,6 +201,9 @@ async def resume_workflow(run_id: str, approval_id: str = ""):
 
     若关联的审批已通过，则从暂停处继续执行。
     """
+    _validate_id(run_id, "run_id")
+    if approval_id:
+        _validate_id(approval_id, "approval_id")
     try:
         from kernel.studio.workflow_runner import get_workflow_runner
         runner = get_workflow_runner()

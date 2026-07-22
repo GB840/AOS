@@ -285,7 +285,8 @@ class ContentDirector(BaseAgentAdapter):
     def _role_docstring(path: str) -> str:
         """安全读取角色 .py 的模块 docstring 人设（只解析 AST，不执行代码）。"""
         try:
-            tree = ast.parse(open(path, encoding="utf-8").read())
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
             doc = ast.get_docstring(tree)
             if doc:
                 return doc.strip()

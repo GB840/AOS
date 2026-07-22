@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -40,6 +41,7 @@ class PulseCollector:
     """数据采集器。"""
 
     def __init__(self):
+        self._lock = threading.RLock()
         self._metrics = self._load_metrics()
         self._buffer: List[Dict] = []
         self._max_buffer = 100
@@ -66,83 +68,88 @@ class PulseCollector:
         token_usage 字段格式：
             {model, prompt_tokens, completion_tokens, user_id, agent_id, run_id, duration_ms}
         """
-        event = {
-            "type": "workflow_run",
-            "workflow_id": workflow_id,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            **run_data,
-        }
-        self._buffer.append(event)
-        self._update_agent_metrics(workflow_id, run_data)
+        with self._lock:
+            event = {
+                "type": "workflow_run",
+                "workflow_id": workflow_id,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                **run_data,
+            }
+            self._buffer.append(event)
+            self._update_agent_metrics(workflow_id, run_data)
 
-        # Token 用量进 CostTracker
-        tu = run_data.get("token_usage")
-        if isinstance(tu, dict):
-            try:
-                tracker = self._get_cost_tracker()
-                if tracker is not None:
-                    tracker.record(
-                        workflow_id=workflow_id,
-                        user_id=tu.get("user_id", "anonymous"),
-                        agent_id=tu.get("agent_id", ""),
-                        model=tu.get("model", ""),
-                        prompt_tokens=int(tu.get("prompt_tokens", 0)),
-                        completion_tokens=int(tu.get("completion_tokens", 0)),
-                        duration_ms=float(tu.get("duration_ms", 0)),
-                        run_id=tu.get("run_id", run_data.get("run_id", "")),
-                    )
-            except Exception as e:  # noqa: BLE001
-                logger.debug("Token 用量记录失败: %s", e)
+            # Token 用量进 CostTracker
+            tu = run_data.get("token_usage")
+            if isinstance(tu, dict):
+                try:
+                    tracker = self._get_cost_tracker()
+                    if tracker is not None:
+                        tracker.record(
+                            workflow_id=workflow_id,
+                            user_id=tu.get("user_id", "anonymous"),
+                            agent_id=tu.get("agent_id", ""),
+                            model=tu.get("model", ""),
+                            prompt_tokens=int(tu.get("prompt_tokens", 0)),
+                            completion_tokens=int(tu.get("completion_tokens", 0)),
+                            duration_ms=float(tu.get("duration_ms", 0)),
+                            run_id=tu.get("run_id", run_data.get("run_id", "")),
+                        )
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("Token 用量记录失败: %s", e)
 
-        if len(self._buffer) >= self._max_buffer:
-            self._flush()
+            if len(self._buffer) >= self._max_buffer:
+                self._flush()
 
     def record_step(self, workflow_id: str, step_data: Dict[str, Any]) -> None:
         """记录单步执行。"""
-        event = {
-            "type": "step_run",
-            "workflow_id": workflow_id,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            **step_data,
-        }
-        self._buffer.append(event)
+        with self._lock:
+            event = {
+                "type": "step_run",
+                "workflow_id": workflow_id,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                **step_data,
+            }
+            self._buffer.append(event)
 
-        if len(self._buffer) >= self._max_buffer:
-            self._flush()
+            if len(self._buffer) >= self._max_buffer:
+                self._flush()
 
     def record_feedback(self, workflow_id: str, feedback: Dict[str, Any]) -> None:
         """记录用户反馈。"""
-        event = {
-            "type": "user_feedback",
-            "workflow_id": workflow_id,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "feedback": feedback,  # 嵌套保存，避免覆盖 type 等关键字段
-        }
-        self._buffer.append(event)
-        self._flush()
+        with self._lock:
+            event = {
+                "type": "user_feedback",
+                "workflow_id": workflow_id,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "feedback": feedback,  # 嵌套保存，避免覆盖 type 等关键字段
+            }
+            self._buffer.append(event)
+            self._flush()
 
     # ── 统计查询 ──
 
     def get_agent_metrics(self, workflow_id: str) -> Dict[str, Any]:
         """获取单个智能体的统计数据。"""
-        return self._metrics.get(workflow_id, {
-            "total_runs": 0,
-            "success_runs": 0,
-            "failed_runs": 0,
-            "success_rate": 0.0,
-            "avg_duration": 0.0,
-            "total_duration": 0.0,
-            "step_stats": {},
-            "last_run": "",
-        })
+        with self._lock:
+            return self._metrics.get(workflow_id, {
+                "total_runs": 0,
+                "success_runs": 0,
+                "failed_runs": 0,
+                "success_rate": 0.0,
+                "avg_duration": 0.0,
+                "total_duration": 0.0,
+                "step_stats": {},
+                "last_run": "",
+            })
 
     def get_all_metrics(self, limit: int = 50) -> List[Dict[str, Any]]:
         """获取所有智能体的统计（按使用量排序）。"""
-        items = []
-        for wf_id, m in self._metrics.items():
-            items.append({"workflow_id": wf_id, **m})
-        items.sort(key=lambda x: x.get("total_runs", 0), reverse=True)
-        return items[:limit]
+        with self._lock:
+            items = []
+            for wf_id, m in self._metrics.items():
+                items.append({"workflow_id": wf_id, **m})
+            items.sort(key=lambda x: x.get("total_runs", 0), reverse=True)
+            return items[:limit]
 
     def get_failure_analysis(self, workflow_id: str) -> Dict[str, Any]:
         """失败分析：哪些步骤最容易失败，原因是什么。"""
@@ -151,7 +158,10 @@ class PulseCollector:
         failure_reasons = defaultdict(int)
 
         # Hot path：内存 buffer 中尚未 flush 的事件
-        for event in self._buffer:
+        with self._lock:
+            buffer_snapshot = list(self._buffer)
+
+        for event in buffer_snapshot:
             if event.get("type") == "step_run" and event.get("workflow_id") == workflow_id:
                 if not event.get("ok", True):
                     step = event.get("step_name", "unknown")
@@ -202,7 +212,10 @@ class PulseCollector:
         events_path = _events_path()
 
         # 先读 buffer 里的（还没 flush 的）
-        for event in reversed(self._buffer):
+        with self._lock:
+            buffer_snapshot = list(self._buffer)
+
+        for event in reversed(buffer_snapshot):
             if event.get("type") == "user_feedback":
                 fb = event.get("feedback", {})
                 if not feedback_type or fb.get("type") == feedback_type:
@@ -307,53 +320,54 @@ class PulseCollector:
     # ── 内部方法 ──
 
     def _update_agent_metrics(self, workflow_id: str, run_data: Dict) -> None:
-        m = self._metrics.get(workflow_id, {
-            "total_runs": 0,
-            "success_runs": 0,
-            "failed_runs": 0,
-            "success_rate": 0.0,
-            "avg_duration": 0.0,
-            "total_duration": 0.0,
-            "step_stats": {},
-            "last_run": "",
-            "total_tokens": 0,
-            "total_cost_usd": 0.0,
-        })
+        with self._lock:
+            m = self._metrics.get(workflow_id, {
+                "total_runs": 0,
+                "success_runs": 0,
+                "failed_runs": 0,
+                "success_rate": 0.0,
+                "avg_duration": 0.0,
+                "total_duration": 0.0,
+                "step_stats": {},
+                "last_run": "",
+                "total_tokens": 0,
+                "total_cost_usd": 0.0,
+            })
 
-        m["total_runs"] += 1
-        status = run_data.get("status", "success")
-        if status == "success":
-            m["success_runs"] += 1
-        else:
-            m["failed_runs"] += 1
+            m["total_runs"] += 1
+            status = run_data.get("status", "success")
+            if status == "success":
+                m["success_runs"] += 1
+            else:
+                m["failed_runs"] += 1
 
-        total = m["total_runs"]
-        m["success_rate"] = round(m["success_runs"] / total * 100, 1) if total > 0 else 0
+            total = m["total_runs"]
+            m["success_rate"] = round(m["success_runs"] / total * 100, 1) if total > 0 else 0
 
-        duration = run_data.get("duration", 0)
-        m["total_duration"] += duration
-        m["avg_duration"] = round(m["total_duration"] / total, 2) if total > 0 else 0
-        m["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            duration = run_data.get("duration", 0)
+            m["total_duration"] += duration
+            m["avg_duration"] = round(m["total_duration"] / total, 2) if total > 0 else 0
+            m["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        # Token 成本累计
-        tu = run_data.get("token_usage")
-        if isinstance(tu, dict):
-            m["total_tokens"] = m.get("total_tokens", 0) + \
-                int(tu.get("prompt_tokens", 0)) + int(tu.get("completion_tokens", 0))
-            cost = 0.0
-            try:
-                from kernel.pulse.cost_tracker import estimate_cost
-                cost = estimate_cost(
-                    int(tu.get("prompt_tokens", 0)),
-                    int(tu.get("completion_tokens", 0)),
-                    tu.get("model", ""),
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            m["total_cost_usd"] = round(m.get("total_cost_usd", 0.0) + cost, 6)
+            # Token 成本累计
+            tu = run_data.get("token_usage")
+            if isinstance(tu, dict):
+                m["total_tokens"] = m.get("total_tokens", 0) + \
+                    int(tu.get("prompt_tokens", 0)) + int(tu.get("completion_tokens", 0))
+                cost = 0.0
+                try:
+                    from kernel.pulse.cost_tracker import estimate_cost
+                    cost = estimate_cost(
+                        int(tu.get("prompt_tokens", 0)),
+                        int(tu.get("completion_tokens", 0)),
+                        tu.get("model", ""),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                m["total_cost_usd"] = round(m.get("total_cost_usd", 0.0) + cost, 6)
 
-        self._metrics[workflow_id] = m
-        self._save_metrics()
+            self._metrics[workflow_id] = m
+            self._save_metrics()
 
     def _load_metrics(self) -> Dict[str, Any]:
         if os.path.exists(_metrics_path()):
@@ -365,31 +379,36 @@ class PulseCollector:
         return {}
 
     def _save_metrics(self) -> None:
-        try:
-            with open(_metrics_path(), "w", encoding="utf-8") as f:
-                json.dump(self._metrics, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.debug("保存指标失败: %s", e)
+        with self._lock:
+            try:
+                with open(_metrics_path(), "w", encoding="utf-8") as f:
+                    json.dump(self._metrics, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.debug("保存指标失败: %s", e)
 
     def _flush(self) -> None:
         """把缓冲的事件写入磁盘。"""
-        if not self._buffer:
-            return
-        try:
-            with open(_events_path(), "a", encoding="utf-8") as f:
-                for event in self._buffer:
-                    f.write(json.dumps(event, ensure_ascii=False) + "\n")
-            self._buffer.clear()
-        except Exception as e:
-            logger.debug("写入事件失败: %s", e)
+        with self._lock:
+            if not self._buffer:
+                return
+            try:
+                with open(_events_path(), "a", encoding="utf-8") as f:
+                    for event in self._buffer:
+                        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                self._buffer.clear()
+            except Exception as e:
+                logger.debug("写入事件失败: %s", e)
 
 
 # 单例
-_collector: Optional[PulseCollector] = None
+_instance: Optional[PulseCollector] = None
+_instance_lock = threading.Lock()
 
 
 def get_pulse_collector() -> PulseCollector:
-    global _collector
-    if _collector is None:
-        _collector = PulseCollector()
-    return _collector
+    global _instance
+    if _instance is None:
+        with _instance_lock:
+            if _instance is None:
+                _instance = PulseCollector()
+    return _instance

@@ -190,21 +190,31 @@ def format_env_report(env: Dict[str, Any]) -> str:
 
 
 def install_missing(tool_name: str) -> Tuple[bool, str]:
-    """尝试自动安装缺失的工具。返回 (成功, 消息)。"""
+    """尝试自动安装缺失的工具。返回 (成功, 消息)。
+
+    安全设计：
+    - 使用列表参数替代 shell=True，避免命令注入
+    - 仅支持白名单内的工具名
+    - 超时保护（300秒）
+    """
+    # 白名单定义：仅支持这些已知工具
     installers = {
-        "ffmpeg": "winget install ffmpeg",
-        "node": "winget install OpenJS.NodeJS.LTS",
-        "git": "winget install Git.Git",
-        "imagemagick": "winget install ImageMagick.ImageMagick",
-        "choco": 'powershell -c "Set-ExecutionPolicy Bypass -Scope Process; [System.Net.ServicePointManager]::SecurityProtocol = 3072; iex ((New-Object System.Net.WebClient).DownloadString(\'https://community.chocolatey.org/install.ps1\'))"',
+        "ffmpeg": ["winget", "install", "ffmpeg"],
+        "node": ["winget", "install", "OpenJS.NodeJS.LTS"],
+        "git": ["winget", "install", "Git.Git"],
+        "imagemagick": ["winget", "install", "ImageMagick.ImageMagick"],
+        "choco": ["powershell", "-Command",
+                  "Set-ExecutionPolicy Bypass -Scope Process; "
+                  "[System.Net.ServicePointManager]::SecurityProtocol = 3072; "
+                  "iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"],
     }
     cmd = installers.get(tool_name)
     if not cmd:
-        return False, f"不知道该工具 {tool_name} 的安装方式"
+        return False, f"不支持的安装目标: {tool_name!r}"
 
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=300,
+            cmd, shell=False, capture_output=True, text=True, timeout=300,
         )
         if result.returncode == 0:
             return True, f"{tool_name} 安装成功"

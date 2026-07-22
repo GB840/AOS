@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -89,6 +90,7 @@ class FailureMonitor:
     }
 
     def __init__(self, max_records: int = 1000) -> None:
+        self._lock = threading.RLock()
         self._records: List[FailureRecord] = []
         self._counts: Dict[FailureMode, int] = {m: 0 for m in FailureMode}
         self._total_tasks: int = 0
@@ -99,10 +101,12 @@ class FailureMonitor:
     # ---- 埋点 ----
 
     def record_task_start(self) -> None:
-        self._total_tasks += 1
+        with self._lock:
+            self._total_tasks += 1
 
     def record_success(self, agent_id: str = "", task_id: str = "") -> None:
-        self._total_success += 1
+        with self._lock:
+            self._total_success += 1
 
     def record(self, mode: FailureMode, agent_id: str = "",
                task_id: str = "", message: str = "",
@@ -111,10 +115,11 @@ class FailureMonitor:
             mode=mode, agent_id=agent_id, task_id=task_id,
             message=message, context=context or {},
         )
-        self._records.append(rec)
-        self._counts[mode] += 1
-        if len(self._records) > self._max_records:
-            self._records = self._records[-self._max_records:]
+        with self._lock:
+            self._records.append(rec)
+            self._counts[mode] += 1
+            if len(self._records) > self._max_records:
+                self._records = self._records[-self._max_records:]
 
         logger.warning("MAST 失败: mode=%s agent=%s task=%s msg=%s",
                        mode.value, agent_id, task_id, message[:80])
@@ -145,43 +150,46 @@ class FailureMonitor:
 
     def get_stats(self) -> Dict[str, Any]:
         """返回当前失败统计摘要。"""
-        total = self._total_tasks
-        failure_count = total - self._total_success
-        return {
-            "total_tasks": self._total_tasks,
-            "success_count": self._total_success,
-            "failure_count": failure_count,
-            # 真实任务数；空 monitor（total=0）失败率定义为零，不除零得 1.0
-            "failure_rate": round(failure_count / total, 4) if total > 0 else 0.0,
-            "uptime_seconds": round(time.time() - self._start_time),
-            "counts_by_mode": {m.value: c for m, c in self._counts.items()},
-            "top_failures": self._top_failures(5),
-            "alerts": self._check_alerts(),
-        }
+        with self._lock:
+            total = self._total_tasks
+            failure_count = total - self._total_success
+            return {
+                "total_tasks": self._total_tasks,
+                "success_count": self._total_success,
+                "failure_count": failure_count,
+                # 真实任务数；空 monitor（total=0）失败率定义为零，不除零得 1.0
+                "failure_rate": round(failure_count / total, 4) if total > 0 else 0.0,
+                "uptime_seconds": round(time.time() - self._start_time),
+                "counts_by_mode": {m.value: c for m, c in self._counts.items()},
+                "top_failures": self._top_failures(5),
+                "alerts": self._check_alerts(),
+            }
 
     def _top_failures(self, n: int) -> List[Dict[str, Any]]:
-        sorted_modes = sorted(self._counts.items(), key=lambda x: -x[1])
-        return [
-            {
-                "mode": m.value,
-                "count": c,
-                "baseline_rate": self.MAST_BASELINE_RATES.get(m, 0),
-                "actual_rate": round(c / (self._total_tasks or 1), 4),
-            }
-            for m, c in sorted_modes[:n] if c > 0
-        ]
+        with self._lock:
+            sorted_modes = sorted(self._counts.items(), key=lambda x: -x[1])
+            return [
+                {
+                    "mode": m.value,
+                    "count": c,
+                    "baseline_rate": self.MAST_BASELINE_RATES.get(m, 0),
+                    "actual_rate": round(c / (self._total_tasks or 1), 4),
+                }
+                for m, c in sorted_modes[:n] if c > 0
+            ]
 
     def _check_alerts(self) -> List[str]:
         """检查是否触发告警阈值（超过 MAST 基线 2 倍）。"""
-        alerts = []
-        total = self._total_tasks or 1
-        for mode, baseline in self.MAST_BASELINE_RATES.items():
-            actual = self._counts.get(mode, 0) / total
-            if actual > baseline * 2 and self._counts.get(mode, 0) >= 3:
-                alerts.append(
-                    f"{mode.value}: actual={actual:.1%} > baseline={baseline:.1%} (x2)"
-                )
-        return alerts
+        with self._lock:
+            alerts = []
+            total = self._total_tasks or 1
+            for mode, baseline in self.MAST_BASELINE_RATES.items():
+                actual = self._counts.get(mode, 0) / total
+                if actual > baseline * 2 and self._counts.get(mode, 0) >= 3:
+                    alerts.append(
+                        f"{mode.value}: actual={actual:.1%} > baseline={baseline:.1%} (x2)"
+                    )
+            return alerts
 
     # ---- 端到端探针 ----
 
@@ -217,26 +225,30 @@ class FailureMonitor:
         return probes
 
     def get_recent_failures(self, n: int = 20) -> List[Dict[str, Any]]:
-        return [
-            {
-                "mode": r.mode.value,
-                "agent_id": r.agent_id,
-                "task_id": r.task_id,
-                "message": r.message,
-                "timestamp": r.timestamp,
-            }
-            for r in self._records[-n:]
-        ]
+        with self._lock:
+            return [
+                {
+                    "mode": r.mode.value,
+                    "agent_id": r.agent_id,
+                    "task_id": r.task_id,
+                    "message": r.message,
+                    "timestamp": r.timestamp,
+                }
+                for r in self._records[-n:]
+            ]
 
 
 # ---- 全局单例 ----
 _monitor: Optional[FailureMonitor] = None
+_monitor_lock = threading.Lock()
 
 
 def get_failure_monitor() -> FailureMonitor:
     global _monitor
     if _monitor is None:
-        _monitor = FailureMonitor()
+        with _monitor_lock:
+            if _monitor is None:
+                _monitor = FailureMonitor()
     return _monitor
 
 

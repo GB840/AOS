@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -84,32 +85,39 @@ class InMemoryMemoryManager(MemoryManager):
 
     def __init__(self) -> None:
         self._store: Dict[str, Any] = {}
+        self._lock = threading.RLock()
 
     def get(self, key: str) -> Optional[Any]:
-        return self._store.get(key)
+        with self._lock:
+            return self._store.get(key)
 
     def set(self, key: str, value: Any) -> None:
-        self._store[key] = value
+        with self._lock:
+            self._store[key] = value
 
     def search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         q = query.lower()
-        results: List[tuple[int, Any]] = []
-        for k, v in self._store.items():
-            if q in str(k).lower():
-                results.append((0, {"key": k, "value": v}))
-            elif isinstance(v, str) and q in v.lower():
-                results.append((1, {"key": k, "value": v}))
-        results.sort(key=lambda x: x[0])
-        return [r[1] for r in results[:limit]]
+        with self._lock:
+            results: List[tuple[int, Any]] = []
+            for k, v in self._store.items():
+                if q in str(k).lower():
+                    results.append((0, {"key": k, "value": v}))
+                elif isinstance(v, str) and q in v.lower():
+                    results.append((1, {"key": k, "value": v}))
+            results.sort(key=lambda x: x[0])
+            return [r[1] for r in results[:limit]]
 
     def clear(self) -> None:
-        self._store.clear()
+        with self._lock:
+            self._store.clear()
 
     def keys(self) -> List[str]:
-        return list(self._store.keys())
+        with self._lock:
+            return list(self._store.keys())
 
     def remove(self, key: str) -> None:
-        self._store.pop(key, None)
+        with self._lock:
+            self._store.pop(key, None)
 
 
 class FileMemoryManager(MemoryManager):
@@ -123,44 +131,49 @@ class FileMemoryManager(MemoryManager):
     def __init__(self, filepath: str = ".aos_memory.jsonl") -> None:
         self._filepath = filepath
         self._store: Dict[str, Any] = {}
+        self._lock = threading.RLock()
         self._load()
 
     def _load(self) -> None:
-        import json
-        import os
-        if not os.path.exists(self._filepath):
-            return
-        try:
-            with open(self._filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        if "k" in entry:
-                            self._store[entry["k"]] = entry.get("v")
-                    except json.JSONDecodeError:
-                        pass
-        except OSError:
-            pass
+        with self._lock:
+            import json
+            import os
+            if not os.path.exists(self._filepath):
+                return
+            try:
+                with open(self._filepath, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                            if "k" in entry:
+                                self._store[entry["k"]] = entry.get("v")
+                        except json.JSONDecodeError:
+                            pass
+            except OSError:
+                pass
 
     def _save(self, key: str, value: Any) -> None:
-        import json
-        entry = json.dumps({"k": key, "v": value}, ensure_ascii=False,
-                           default=str)
-        try:
-            with open(self._filepath, "a", encoding="utf-8") as f:
-                f.write(entry + "\n")
-        except OSError:
-            pass
+        with self._lock:
+            import json
+            entry = json.dumps({"k": key, "v": value}, ensure_ascii=False,
+                               default=str)
+            try:
+                with open(self._filepath, "a", encoding="utf-8") as f:
+                    f.write(entry + "\n")
+            except OSError:
+                pass
 
     def get(self, key: str) -> Optional[Any]:
-        return self._store.get(key)
+        with self._lock:
+            return self._store.get(key)
 
     def set(self, key: str, value: Any) -> None:
-        self._store[key] = value
-        self._save(key, value)
+        with self._lock:
+            self._store[key] = value
+            self._save(key, value)
 
     def search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         q = query.lower()
@@ -174,15 +187,17 @@ class FileMemoryManager(MemoryManager):
         return [r[1] for r in results[:limit]]
 
     def clear(self) -> None:
-        self._store.clear()
-        import os
-        try:
-            os.remove(self._filepath)
-        except OSError:
-            pass
+        with self._lock:
+            self._store.clear()
+            import os
+            try:
+                os.remove(self._filepath)
+            except OSError:
+                pass
 
     def keys(self) -> List[str]:
-        return list(self._store.keys())
+        with self._lock:
+            return list(self._store.keys())
 
     def remove(self, key: str) -> None:
         if key in self._store:
@@ -190,15 +205,16 @@ class FileMemoryManager(MemoryManager):
             self._rewrite()
 
     def _rewrite(self) -> None:
-        import json
-        import os
-        try:
-            with open(self._filepath, "w", encoding="utf-8") as f:
-                for k, v in self._store.items():
-                    f.write(json.dumps({"k": k, "v": v}, ensure_ascii=False,
-                                       default=str) + "\n")
-        except OSError:
-            pass
+        with self._lock:
+            import json
+            import os
+            try:
+                with open(self._filepath, "w", encoding="utf-8") as f:
+                    for k, v in self._store.items():
+                        f.write(json.dumps({"k": k, "v": v}, ensure_ascii=False,
+                                           default=str) + "\n")
+            except OSError:
+                pass
 
 
 # ─── 工作流步骤 ─────────────────────────────────────────────────

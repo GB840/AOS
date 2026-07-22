@@ -45,10 +45,13 @@ def main() -> int:
         print("\n[CHAT] " + (r.data.get("content", "") if r.ok else r.error))
 
     if args.mode in ("image", "all"):
+        # 收圆：agnes 已退出 media 供给，generate_image 现诚实拒绝。
+        # 图/视频请改用 media-gen（国产智谱）适配器：D:/AOS/examples/scroll_world_demo.py
         r = a.generate_image(args.prompt, model=args.model)
         print("\n[IMAGE] " + (json.dumps(r.data, ensure_ascii=False) if r.ok else r.error))
 
     if args.mode == "video":
+        # 收圆：agnes 已退出 media 供给，generate_video 现诚实拒绝。
         print("\n[VIDEO] 提交异步任务并轮询结果（最多 180s）...")
         r = a.generate_video(args.prompt, model=args.model)
         print("[VIDEO] " + (json.dumps(r.data, ensure_ascii=False) if r.ok else r.error))

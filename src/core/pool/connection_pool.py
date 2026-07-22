@@ -80,7 +80,7 @@ class SQLiteConnectionFactory(ConnectionFactory[sqlite3.Connection]):
             return conn
         
         # 在独立线程中执行，避免阻塞事件循环
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _create)
     
     async def close_connection(self, conn: sqlite3.Connection) -> None:
@@ -90,8 +90,8 @@ class SQLiteConnectionFactory(ConnectionFactory[sqlite3.Connection]):
                 conn.close()
             except Exception as e:
                 logger.warning(f"关闭SQLite连接失败: {e}")
-        
-        loop = asyncio.get_event_loop()
+
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _close)
     
     async def validate_connection(self, conn: sqlite3.Connection) -> bool:
@@ -102,8 +102,8 @@ class SQLiteConnectionFactory(ConnectionFactory[sqlite3.Connection]):
                 cursor.execute("SELECT 1")
                 result = cursor.fetchone()
                 return result[0] == 1
-            
-            loop = asyncio.get_event_loop()
+
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, _test)
         except Exception as e:
             logger.warning(f"SQLite连接验证失败: {e}")

@@ -146,6 +146,7 @@ class ModelGatewayLayer:
         models: List[str] | None = None,
         price_registry: Dict[str, float] | None = None,
     ) -> None:
+        self._lock = threading.RLock()
         self._gateway = gateway
         self._models = models or [m.model_id for m in gateway.list_models()]
         self.cost_tracker = CostTracker(price_registry=price_registry)
@@ -176,7 +177,8 @@ class ModelGatewayLayer:
         return self._route_model(strategy, required_capabilities or {})
 
     def _default_model(self) -> str:
-        return self._models[0] if self._models else "zhipu/glm-4-flash"
+        with self._lock:
+            return self._models[0] if self._models else "zhipu/glm-4-flash"
 
     def _route_model(self, strategy: str, caps: Dict[str, bool]) -> str:
         if strategy == RouteStrategy.COST:
@@ -192,38 +194,42 @@ class ModelGatewayLayer:
     def _best_capability_model(self, caps: Dict[str, bool]) -> Optional[str]:
         if not caps:
             return None
-        scored: List[tuple[int, float, str]] = []
-        for mid in self._models:
-            mc = self._gateway.get_capabilities(mid)
-            score = 0
-            if caps.get("tools") and mc.supports_tools:
-                score += 2
-            if caps.get("vision") and mc.supports_vision:
-                score += 2
-            if caps.get("streaming") and mc.supports_streaming:
-                score += 1
-            if score > 0:
-                price = self.cost_tracker.price_registry.get(mid, 0.01)
-                scored.append((-score, price, mid))
-        scored.sort()
-        return scored[0][2] if scored else None
+        with self._lock:
+            scored: List[tuple[int, float, str]] = []
+            for mid in self._models:
+                mc = self._gateway.get_capabilities(mid)
+                score = 0
+                if caps.get("tools") and mc.supports_tools:
+                    score += 2
+                if caps.get("vision") and mc.supports_vision:
+                    score += 2
+                if caps.get("streaming") and mc.supports_streaming:
+                    score += 1
+                if score > 0:
+                    price = self.cost_tracker.price_registry.get(mid, 0.01)
+                    scored.append((-score, price, mid))
+            scored.sort()
+            return scored[0][2] if scored else None
 
     def _lowest_cost_model(self) -> str:
-        best = self._default_model()
-        best_price = float("inf")
-        for mid in self._models:
-            p = self.cost_tracker.price_registry.get(mid)
-            if p is not None and p < best_price:
-                best_price = p
-                best = mid
-        return best
+        with self._lock:
+            best = self._default_model()
+            best_price = float("inf")
+            for mid in self._models:
+                p = self.cost_tracker.price_registry.get(mid)
+                if p is not None and p < best_price:
+                    best_price = p
+                    best = mid
+            return best
 
     def list_models(self) -> List[ModelInfo]:
         return self._gateway.list_models()
 
     def add_model(self, model_id: str) -> None:
-        if model_id not in self._models:
-            self._models.append(model_id)
+        with self._lock:
+            if model_id not in self._models:
+                self._models.append(model_id)
 
     def set_price(self, model_id: str, usd_per_token: float) -> None:
-        self.cost_tracker.set_price(model_id, usd_per_token)
+        with self._lock:
+            self.cost_tracker.set_price(model_id, usd_per_token)

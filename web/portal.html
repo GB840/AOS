@@ -128,7 +128,20 @@ select.input { appearance: auto; }
 
 /* ---- 飞轮 ---- */
 .fw-form { display: grid; grid-template-columns: 1fr 160px; gap: 12px; margin-bottom: 14px; }
-.fw-output { background: var(--gray-900); color: #a5f3fc; border-radius: var(--radius); padding: 18px; font-size: 12px; font-family: "Cascadia Code", "Fira Code", monospace; white-space: pre-wrap; max-height: 420px; overflow-y: auto; line-height: 1.6; }
+.fw-status { font-size: 13px; color: var(--gray-500); padding: 4px 0 14px; }
+.fw-status.error { color: var(--red); }
+.fw-card { background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 12px; box-shadow: var(--shadow); }
+.fw-card h3 { font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.fw-stages { display: flex; flex-wrap: wrap; gap: 8px; }
+.fw-stage { font-size: 12px; color: var(--blue); background: var(--blue-light); padding: 4px 12px; border-radius: 20px; font-weight: 500; }
+.fw-kv { display: grid; grid-template-columns: 92px 1fr; gap: 6px 12px; font-size: 12px; }
+.fw-kv dt { color: var(--gray-400); }
+.fw-kv dd { color: var(--gray-700); word-break: break-word; }
+.fw-shot { font-size: 12px; color: var(--gray-600); padding: 6px 0; border-bottom: 1px solid var(--gray-100); }
+.fw-shot:last-child { border-bottom: none; }
+.fw-path { font-size: 11px; color: var(--gray-400); font-family: "Cascadia Code", monospace; word-break: break-all; }
+.fw-actions { display: flex; gap: 10px; margin-top: 12px; }
+.fw-review-body { background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; padding: 14px; font-size: 12px; color: var(--gray-700); white-space: pre-wrap; max-height: 360px; overflow-y: auto; margin-top: 10px; line-height: 1.7; }
 
 /* ---- 任务 ---- */
 .task-row { display: flex; align-items: center; justify-content: space-between; background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 8px; }
@@ -297,7 +310,8 @@ select.input { appearance: auto; }
   </div>
   <div id="fwResult" style="display:none">
     <p class="card-title">执行结果</p>
-    <div id="fwOutput" class="fw-output"></div>
+    <div id="fwOutput" class="fw-status"></div>
+    <div id="fwCards"></div>
   </div>
 </div>
 
@@ -620,8 +634,12 @@ async function runFlywheel() {
   var goal = document.getElementById('fwGoal').value.trim();
   if (!goal) { alert('请输入内容目标'); return; }
   var auto = document.getElementById('fwAuto').value === '1';
+  var status = document.getElementById('fwOutput');
+  var cards = document.getElementById('fwCards');
   document.getElementById('fwResult').style.display = 'block';
-  document.getElementById('fwOutput').textContent = '正在执行内容生产流水线...\n（选题 → 脚本 → 正文 → 策略，可能需要 30-60 秒）';
+  status.className = 'fw-status';
+  status.textContent = '正在执行内容生产流水线（选题 → 分析 → 脚本 → 镜头 → 审核包，可能需要 30-60 秒）...';
+  cards.innerHTML = '';
   try {
     var r = await fetch('/api/content/produce', {
       method: 'POST',
@@ -629,10 +647,90 @@ async function runFlywheel() {
       body: JSON.stringify({ goal: goal, auto_publish: auto })
     });
     var d = await r.json();
-    document.getElementById('fwOutput').textContent = JSON.stringify(d, null, 2);
+    if (!r.ok) { status.className = 'fw-status error'; status.textContent = '执行失败: ' + (d.detail || d.error || r.status); return; }
+    if (d.status && d.status !== 'ok') { status.className = 'fw-status error'; status.textContent = '执行未成功: ' + (d.error || d.status); return; }
+    status.textContent = '生产完成' + (d.published ? '（已自动发布）' : '（停在审核，待你确认后发布）');
+    renderFlywheel(d);
   } catch (e) {
-    document.getElementById('fwOutput').textContent = '执行出错: ' + e.message;
+    status.className = 'fw-status error';
+    status.textContent = '执行出错: ' + e.message;
   }
+}
+function fwVal(v) {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.join('、');
+  try { return JSON.stringify(v); } catch (e) { return String(v); }
+}
+function renderFlywheel(d) {
+  var cards = document.getElementById('fwCards');
+  var html = '';
+  // 流水线阶段
+  var stages = d.stages || [];
+  if (stages.length) {
+    html += '<div class="fw-card"><h3>流水线阶段</h3><div class="fw-stages">' +
+      stages.map(function(s) { return '<span class="fw-stage">' + esc(fwVal(s)) + '</span>'; }).join('') + '</div></div>';
+  }
+  // 选题分析
+  var an = d.analysis || {};
+  var keys = Object.keys(an);
+  if (keys.length) {
+    html += '<div class="fw-card"><h3>选题分析</h3><dl class="fw-kv">' +
+      keys.map(function(k) { return '<dt>' + esc(k) + '</dt><dd>' + esc(fwVal(an[k])) + '</dd>'; }).join('') + '</dl></div>';
+  }
+  // 脚本与镜头
+  if (d.script_path || (d.shots && d.shots.length)) {
+    html += '<div class="fw-card"><h3>脚本与分镜</h3>';
+    if (d.script_path) html += '<p class="fw-path">脚本：' + esc(d.script_path) + '</p>';
+    (d.shots || []).forEach(function(sh, i) {
+      html += '<div class="fw-shot">镜头 ' + (i + 1) + '：' + esc(fwVal(sh)) + '</div>';
+    });
+    html += '</div>';
+  }
+  // 检索素材
+  var mats = d.materials || [];
+  if (mats.length) {
+    html += '<div class="fw-card"><h3>检索素材（' + mats.length + '）</h3>' +
+      mats.slice(0, 12).map(function(m) { return '<div class="fw-shot">' + esc(fwVal(m)) + '</div>'; }).join('') + '</div>';
+  }
+  // 审核包（人机协作）
+  if (d.review_id) {
+    html += '<div class="fw-card"><h3>审核包</h3>' +
+      '<p style="font-size:12px;color:var(--gray-500)">内容已生成并停在审核环节，确认无误后可一键发布。</p>' +
+      '<p class="fw-path">review_id：' + esc(d.review_id) + (d.review_path ? ' · ' + esc(d.review_path) : '') + '</p>' +
+      '<div class="fw-actions">' +
+      '<button class="btn btn-ghost" onclick="viewReview(\'' + esc(d.review_id) + '\')">查看审核包</button>' +
+      '<button class="btn btn-primary" onclick="approveReview(\'' + esc(d.review_id) + '\')">审核通过并发布</button>' +
+      '</div><div id="fwReviewBox"></div></div>';
+  }
+  if (!html) html = '<div class="fw-card"><p style="font-size:12px;color:var(--gray-500)">本次未产出结构化内容，原始返回：</p><pre class="fw-review-body">' + esc(JSON.stringify(d, null, 2)) + '</pre></div>';
+  cards.innerHTML = html;
+}
+async function viewReview(rid) {
+  var box = document.getElementById('fwReviewBox');
+  box.innerHTML = '<p class="fw-status">读取审核包...</p>';
+  try {
+    var r = await fetch('/api/content/review/' + encodeURIComponent(rid));
+    var d = await r.json();
+    if (!r.ok) { box.innerHTML = '<p class="fw-status error">读取失败: ' + (d.detail || r.status) + '</p>'; return; }
+    box.innerHTML = '<div class="fw-review-body">' + esc(d.content || '（审核包为空）') + '</div>';
+  } catch (e) { box.innerHTML = '<p class="fw-status error">' + esc(e.message) + '</p>'; }
+}
+async function approveReview(rid) {
+  var box = document.getElementById('fwReviewBox');
+  box.innerHTML = '<p class="fw-status">正在发布...</p>';
+  try {
+    var r = await fetch('/api/content/approve/' + encodeURIComponent(rid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: '' })
+    });
+    var d = await r.json();
+    if (!r.ok) { box.innerHTML = '<p class="fw-status error">发布失败: ' + (d.detail || r.status) + '</p>'; return; }
+    if (d.status === 'ok') {
+      box.innerHTML = '<p class="fw-status" style="color:var(--green)">已发布' + (d.published_path ? '：' + esc(d.published_path) : '') + (d.ima_stored ? '（已入库）' : '') + '</p>';
+    } else {
+      box.innerHTML = '<p class="fw-status error">发布未成功: ' + esc(d.error || d.status) + '</p>';
+    }
+  } catch (e) { box.innerHTML = '<p class="fw-status error">' + esc(e.message) + '</p>'; }
 }
 
 // ---- 自主执行（一句话 → 看完整过程）----
@@ -780,8 +878,34 @@ async function loadSystem() {
   try {
     var r2 = await fetch('/api/stats');
     var d2 = await r2.json();
-    document.getElementById('sysStats').innerHTML = '<pre class="sys-pre">' + esc(JSON.stringify(d2, null, 2)) + '</pre>';
+    document.getElementById('sysStats').innerHTML = renderStats(d2);
   } catch (e) { document.getElementById('sysStats').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>'; }
+}
+function renderStats(d) {
+  if (!d || typeof d !== 'object') return '<p class="hint">无统计数据</p>';
+  var html = '';
+  Object.keys(d).forEach(function(section) {
+    var v = d[section];
+    var status = '';
+    var detail = '';
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      status = v.status || '';
+      var rest = Object.keys(v).filter(function(k) { return k !== 'status'; });
+      detail = rest.slice(0, 6).map(function(k) { return esc(k) + ': ' + esc(fwVal(v[k])); }).join(' · ');
+    } else {
+      detail = esc(fwVal(v));
+    }
+    var badge = '';
+    if (status) {
+      var ok = status === 'ok' || status === 'disabled';
+      var cls = ok ? 'done' : (status.indexOf('degraded') >= 0 || status === 'unavailable' ? 'failed' : 'running');
+      badge = '<span class="task-badge ' + cls + '">' + esc(status) + '</span>';
+    }
+    html += '<div style="padding:8px 0;border-bottom:1px solid var(--gray-100)">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px"><span style="font-size:12px;font-weight:600;color:var(--gray-700)">' + esc(section) + '</span>' + badge + '</div>' +
+      (detail ? '<div style="font-size:11px;color:var(--gray-500);word-break:break-word">' + detail + '</div>' : '') + '</div>';
+  });
+  return html || '<p class="hint">无统计数据</p>';
 }
 
 // ---- 工具 ----

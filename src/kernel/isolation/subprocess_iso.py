@@ -453,6 +453,7 @@ class SubprocessPool:
         self.task_us = task_us
         self.adapter_spec = adapter_spec
         self._workers: list[SubprocessIsolationLayer] = []
+        self._lock = threading.RLock()
 
     def _mk(self, idx: int) -> SubprocessIsolationLayer:
         return SubprocessIsolationLayer(
@@ -463,33 +464,36 @@ class SubprocessPool:
 
     def warmup(self) -> float:
         """预拉起 size 个热 worker，返回一次性 warmup_ms（可摊销）。"""
-        t0 = time.perf_counter()
-        for i in range(self.size):
-            w = self._mk(i)
-            w.start()
-            self._workers.append(w)
-        # 同步实际生效的传输（pipe 自动退 tcp 时保持一致）。
-        if self._workers:
-            self.transport = self._workers[0].transport
-        return (time.perf_counter() - t0) * 1000.0
+        with self._lock:
+            t0 = time.perf_counter()
+            for i in range(self.size):
+                w = self._mk(i)
+                w.start()
+                self._workers.append(w)
+            # 同步实际生效的传输（pipe 自动退 tcp 时保持一致）。
+            if self._workers:
+                self.transport = self._workers[0].transport
+            return (time.perf_counter() - t0) * 1000.0
 
     def acquire(self) -> tuple[SubprocessIsolationLayer, float]:
         """取一个热 worker（无需冷启动）。返回 (worker, assign_ms≈0)。
 
         若池空（正常不应发生，除非全部在回收），退回冷启动路径。
         """
-        t0 = time.perf_counter()
-        if self._workers:
-            w = self._workers.pop(0)
-        else:
-            w = self._mk(len(self._workers))
-            w.start()
-        assign_ms = (time.perf_counter() - t0) * 1000.0
-        return w, assign_ms
+        with self._lock:
+            t0 = time.perf_counter()
+            if self._workers:
+                w = self._workers.pop(0)
+            else:
+                w = self._mk(len(self._workers))
+                w.start()
+            assign_ms = (time.perf_counter() - t0) * 1000.0
+            return w, assign_ms
 
     def release(self, w: SubprocessIsolationLayer) -> None:
         """用完归还热 worker。"""
-        self._workers.append(w)
+        with self._lock:
+            self._workers.append(w)
 
     def recycle(self, w: SubprocessIsolationLayer) -> float:
         """替换一个（崩溃的）worker，返回 respawn_ms（后台容量恢复成本）。"""
@@ -497,21 +501,24 @@ class SubprocessPool:
             w.stop()
         except Exception:  # noqa: BLE001
             pass
-        t0 = time.perf_counter()
-        nw = self._mk(len(self._workers))
-        nw.start()
-        respawn_ms = (time.perf_counter() - t0) * 1000.0
-        self._workers.append(nw)
-        return respawn_ms
+        with self._lock:
+            t0 = time.perf_counter()
+            nw = self._mk(len(self._workers))
+            nw.start()
+            respawn_ms = (time.perf_counter() - t0) * 1000.0
+            self._workers.append(nw)
+            return respawn_ms
 
     @property
     def available(self) -> int:
-        return len(self._workers)
+        with self._lock:
+            return len(self._workers)
 
     def stop(self) -> None:
-        for w in self._workers:
-            try:
-                w.stop()
-            except Exception:  # noqa: BLE001
-                pass
-        self._workers = []
+        with self._lock:
+            for w in self._workers:
+                try:
+                    w.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._workers = []

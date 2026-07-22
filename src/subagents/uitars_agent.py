@@ -40,7 +40,9 @@ class UITarsSubAgent:
 
     def __init__(self, cli_command: Optional[str] = None, use_mcp: bool = False, mcp_port: int = 8090) -> None:
         self._cli_command = cli_command or "npx"
-        self._cli_args = ["-y", "@anthropic-ai/ui-tars"]
+        # 经核实：字节官方 UI-TARS 的 CLI 是 @agent-tars/cli（见 UI-TARS-desktop 仓库），
+        # @anthropic-ai/ui-tars 并非真实包，系与 Anthropic computer-use 混淆所致。
+        self._cli_args = ["-y", "@agent-tars/cli@latest"]
         self._use_mcp = use_mcp
         self._mcp_port = mcp_port
         self._mcp_base_url = f"http://localhost:{mcp_port}"

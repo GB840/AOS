@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -54,6 +55,7 @@ class HubStore:
     """智能体商店存储。"""
 
     def __init__(self, wf_store: WorkflowStore = None, pulse=None):
+        self._lock = threading.RLock()
         self._wf_store = wf_store or get_workflow_store()
         self._pulse = pulse or _default_pulse()
         self._reviews = self._load_reviews()
@@ -68,27 +70,25 @@ class HubStore:
                     sort: str = "popular", search: str = "",
                     limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
         """列出公开的智能体。"""
-        # 公开的工作流模板就是 Hub 里的智能体
         agents = self._wf_store.list(is_template=True, category=category,
                                       tag=tag, search=search, limit=100)
 
-        # 补全评分、使用量等 Hub 数据
-        enriched = []
-        for a in agents:
-            wf_id = a["id"]
-            stats = self._stats.get(wf_id, {})
-            reviews = self._reviews.get(wf_id, [])
-            avg_rating = sum(r.get("rating", 0) for r in reviews) / len(reviews) if reviews else 0
+        with self._lock:
+            enriched = []
+            for a in agents:
+                wf_id = a["id"]
+                stats = self._stats.get(wf_id, {})
+                reviews = self._reviews.get(wf_id, [])
+                avg_rating = sum(r.get("rating", 0) for r in reviews) / len(reviews) if reviews else 0
 
-            enriched.append({
-                **a,
-                "use_count": stats.get("use_count", a.get("run_count", 0)),
-                "rating": round(avg_rating, 1),
-                "review_count": len(reviews),
-                "agent_id": wf_id,
-            })
+                enriched.append({
+                    **a,
+                    "use_count": stats.get("use_count", a.get("run_count", 0)),
+                    "rating": round(avg_rating, 1),
+                    "review_count": len(reviews),
+                    "agent_id": wf_id,
+                })
 
-        # 排序
         if sort == "popular":
             enriched.sort(key=lambda x: x.get("use_count", 0), reverse=True)
         elif sort == "rating":
@@ -108,32 +108,33 @@ class HubStore:
         if not wf:
             return None
 
-        stats = self._stats.get(agent_id, {})
-        reviews = self._reviews.get(agent_id, [])
-        avg_rating = sum(r.get("rating", 0) for r in reviews) / len(reviews) if reviews else 0
+        with self._lock:
+            stats = self._stats.get(agent_id, {})
+            reviews = self._reviews.get(agent_id, [])
+            avg_rating = sum(r.get("rating", 0) for r in reviews) / len(reviews) if reviews else 0
 
-        return {
-            "id": wf.id,
-            "name": wf.name,
-            "description": wf.description,
-            "category": wf.category,
-            "tags": wf.tags,
-            "author": wf.author,
-            "version": wf.version,
-            "step_count": len(wf.steps),
-            "steps": [
-                {"name": s.name, "capability": s.capability, "description": s.description}
-                for s in wf.steps
-            ],
-            "rating": round(avg_rating, 1),
-            "review_count": len(reviews),
-            "use_count": stats.get("use_count", wf.run_count),
-            "avg_duration": wf.avg_duration,
-            "success_rate": wf.success_rate,
-            "updated_at": wf.updated_at,
-            "created_at": wf.created_at,
-            "is_public": wf.is_public,
-        }
+            return {
+                "id": wf.id,
+                "name": wf.name,
+                "description": wf.description,
+                "category": wf.category,
+                "tags": wf.tags,
+                "author": wf.author,
+                "version": wf.version,
+                "step_count": len(wf.steps),
+                "steps": [
+                    {"name": s.name, "capability": s.capability, "description": s.description}
+                    for s in wf.steps
+                ],
+                "rating": round(avg_rating, 1),
+                "review_count": len(reviews),
+                "use_count": stats.get("use_count", wf.run_count),
+                "avg_duration": wf.avg_duration,
+                "success_rate": wf.success_rate,
+                "updated_at": wf.updated_at,
+                "created_at": wf.created_at,
+                "is_public": wf.is_public,
+            }
 
     def use_agent(self, agent_id: str, input_data: Dict = None) -> Optional[Dict[str, Any]]:
         """使用一个智能体（运行它）。"""
@@ -143,15 +144,15 @@ class HubStore:
         try:
             run = runner.run(agent_id, input_data=input_data)
 
-            # 更新使用统计（Hub 本地统计，用于排序）
-            stats = self._stats.get(agent_id, {"use_count": 0})
-            stats["use_count"] = stats.get("use_count", 0) + 1
-            stats["last_used"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            self._stats[agent_id] = stats
-            self._save_stats()
+            with self._lock:
+                stats = self._stats.get(agent_id, {"use_count": 0})
+                stats["use_count"] = stats.get("use_count", 0) + 1
+                stats["last_used"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                self._stats[agent_id] = stats
+                self._save_stats()
+                use_count = stats["use_count"]
 
-            # 上报到 Pulse（通过 WorkflowRunner 已经上报了运行数据，这里补充 Hub 维度的使用统计）
-            self._report_hub_usage(agent_id, run)
+            self._report_hub_usage(agent_id, run, use_count)
 
             return {
                 "run_id": run.id,
@@ -180,20 +181,21 @@ class HubStore:
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
 
-        if agent_id not in self._reviews:
-            self._reviews[agent_id] = []
-        self._reviews[agent_id].append(review)
-        self._save_reviews()
+        with self._lock:
+            if agent_id not in self._reviews:
+                self._reviews[agent_id] = []
+            self._reviews[agent_id].append(review)
+            self._save_reviews()
 
-        # 上报用户反馈到 Pulse（供 Evolve 做用户满意度分析）
         self._report_feedback(agent_id, rating, comment)
 
         return True
 
     def get_reviews(self, agent_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         """获取评论列表。"""
-        reviews = self._reviews.get(agent_id, [])
-        return reviews[-limit:][::-1]  # 最新的在前
+        with self._lock:
+            reviews = self._reviews.get(agent_id, [])
+            return reviews[-limit:][::-1]
 
     # ── 发布 / 下架 ──
 
@@ -237,16 +239,14 @@ class HubStore:
 
     # ── Pulse 上报 ──
 
-    def _report_hub_usage(self, agent_id: str, run) -> None:
+    def _report_hub_usage(self, agent_id: str, run, use_count: int) -> None:
         """上报 Hub 使用数据到 Pulse。"""
         if not self._pulse:
             return
         try:
-            # 运行数据 WorkflowRunner 已经上报了，这里补充 Hub 维度
-            # （Pulse 的 record_run 是幂等可重复调用的，只是累加计数）
             self._pulse.record_run(agent_id, {
                 "source": "hub",
-                "use_count_hub": self._stats.get(agent_id, {}).get("use_count", 0),
+                "use_count_hub": use_count,
             })
         except Exception as e:
             logger.debug("Hub 使用上报 Pulse 失败: %s", e)
@@ -309,10 +309,13 @@ class HubStore:
 
 # 单例
 _hub: Optional[HubStore] = None
+_hub_lock = threading.Lock()
 
 
 def get_hub_store() -> HubStore:
     global _hub
     if _hub is None:
-        _hub = HubStore()
+        with _hub_lock:
+            if _hub is None:
+                _hub = HubStore()
     return _hub

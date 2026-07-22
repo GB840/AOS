@@ -125,12 +125,12 @@ def verify_api_key_hash(api_key: str, hashed_key: str) -> bool:
         # 输入验证
         if not api_key or not hashed_key:
             return False
-            
+
         # 验证哈希格式 (bcrypt哈希应该以$2b$开头且长度为60)
         if not hashed_key.startswith('$2b$') or len(hashed_key) != 60:
             logger.warning("API密钥哈希格式无效")
             return False
-        
+
         # 编码处理
         if isinstance(api_key, str):
             api_key_bytes = api_key.encode('utf-8')
@@ -140,17 +140,18 @@ def verify_api_key_hash(api_key: str, hashed_key: str) -> bool:
             hashed_key_bytes = hashed_key.encode('utf-8')
         else:
             hashed_key_bytes = hashed_key
-            
+
         # 使用bcrypt恒定时间比较
         return bcrypt.checkpw(api_key_bytes, hashed_key_bytes)
     except Exception as e:
-        # 即使发生异常也要执行虚假比较维持时序恒定
+        # 安全改进：异常时执行一次安全的假比较（不硬编码敏感字符串）
         try:
-            # 执行虚假比较防止时序信息泄露
-            bcrypt.checkpw(b"fake_key", b"$2b$12$fake_hash_for_constant_time_protection")
-        except Exception as e:
-            logger.warning("虚假 bcrypt 恒定时间比较失败: %s", e)
-        logger.error(f"API密钥验证异常(已防止时序泄露): {type(e).__name__}")
+            # 生成一个格式正确但无效的bcrypt哈希（恒定时间保护）
+            _fake_hash = ("$2b$12$" + "A" * 53).encode('utf-8')
+            bcrypt.checkpw(b"_aos_dummy_key_", _fake_hash)
+        except Exception:
+            pass
+        logger.error("API密钥验证异常(已防止时序泄露): %s", type(e).__name__)
         return False
 
 
@@ -267,8 +268,18 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # 1) 永远公开：根路径 + 健康探针（供 supervisor/负载均衡探活）
-        #    + 登录入口 /api/auth/token（换取 JWT，不可能要求先认证）。
-        if path == "/" or path.endswith("/health") or path.endswith("/health/deep") or path == "/api/auth/token":
+        #    + 登录入口 /api/auth/token（换取 JWT，不可能要求先认证）
+        #    + 静态前端页面（/studio/ /bidding/）：页面本身公开，API 调用仍走鉴权。
+        _PUBLIC_PREFIXES = ("/studio", "/bidding")
+        if (path == "/" or path.endswith("/health") or path.endswith("/health/deep")
+                or path == "/api/auth/token"
+                or any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)):
+            return await call_next(request)
+
+        # 1.5) 本地回环免鉴权（AGENTS.md §1.5「本地进程 — 全量放行」）：
+        #      桌面产品在本机运行，localhost 打开即用；远程入口仍强制 Token。
+        #      生产环境（经反向代理暴露）时 client.host 不再是回环地址，豁免自动失效。
+        if request.client and request.client.host in ("127.0.0.1", "::1", "localhost"):
             return await call_next(request)
 
         # 2) 上游网关子路径：由各自上游鉴权（架构性豁免，非弱鉴权）。

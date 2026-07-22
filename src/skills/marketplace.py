@@ -271,7 +271,7 @@ class SkillImporter:
     def import_from_url(self, url: str) -> Optional[SkillTemplate]:
         try:
             import requests
-            response = requests.get(url)
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
             template = SkillTemplate.from_yaml(response.text)
             logger.info(f"Imported skill template from URL: {url}")

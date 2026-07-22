@@ -255,13 +255,21 @@ class SecurityAuditAdapter(BaseAgentAdapter):
         return len(parts) >= 2 and parts[1] in subs
 
     def _heal_run(self, cmd: str, timeout: float = 120.0) -> Dict[str, Any]:
-        """执行一条白名单内的修复命令，返回 {ok, allowed, exit_code, stdout, stderr}。"""
+        """执行一条白名单内的修复命令，返回 {ok, allowed, exit_code, stdout, stderr}。
+
+        安全设计：
+        - 使用 shlex.split 解析命令字符串为列表
+        - 传递列表参数给 subprocess.run（shell=False）
+        - 杜绝 shell=True 带来的命令注入风险
+        """
         if not self._heal_allowed(cmd):
             return {"ok": False, "allowed": False,
                     "error": f"自愈命令不在白名单，拒绝自动执行：{cmd!r}"}
         try:
+            import shlex
+            cmd_parts = shlex.split(cmd)
             proc = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+                cmd_parts, shell=False, capture_output=True, text=True, timeout=timeout,
             )
             return {
                 "ok": proc.returncode == 0,
