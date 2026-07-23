@@ -452,6 +452,7 @@ CAPABILITY_POLICY_ACTION = {
     "memory.write": "memory:write",
     "action.repo": "call:action.repo",
     "opc.orchestrate": "call:opc.orchestrate",
+    "edu.course_gen": "call:edu.course_gen",  # 多智能体互动课堂生成（OpenMAIC，opt-in）
 }
 
 _POLICY_ENGINE: "PolicyEngine | None" = None

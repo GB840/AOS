@@ -127,6 +127,11 @@ def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
         industry = payload.get("industry") or "default"
         data = plan_company(goal, industry)
         return InvokeResult(ok=bool(goal), data=data)
+    # 多智能体互动课堂生成（OpenMAIC，MIT 开源；HTTP 桥接，本地隔离故障域，
+    # 不经 FabricHub 路由——语义固定、避免 hub 未注册 edu.course_gen 时失败）。
+    if capability == "edu.course_gen":
+        from kernel.plugins.openmaic_bridge import generate_course
+        return generate_course(payload)
     hub = _get_hub()
     if hub is not None:
         # cognition.* 在 hub 注册表里统一归到 inference.llm 派发
@@ -730,6 +735,18 @@ def _route(capability: str, payload: Dict[str, Any]) -> Any:
             ok=False,
             error=f"autopilot: 策略拒绝 {capability}（{verdict['matched_rule']}：{verdict['reason']}）",
         )
+
+    if capability == "edu.course_gen":
+        # 复用 _dispatch 的本地隔离路径（不经 hub，避免未注册能力时失败）。
+        # 真实闸门：OpenMAIC 未启用或生成未成功 -> generate_course 返回 ok=False，
+        # 绝不谎报成功（宪法 §6 诚实）。
+        res = _dispatch("edu.course_gen", payload)
+        if not (isinstance(res, InvokeResult) and res.ok):
+            return InvokeResult(
+                ok=False,
+                error="autopilot: " + (res.error if isinstance(res, InvokeResult) else "课程生成失败"),
+            )
+        return res
 
     if capability == "web.search":
         # 从各种可能的 payload 字段里提取搜索查询（兼容 ag2 规划的

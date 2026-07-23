@@ -127,3 +127,34 @@ register_extension(
     local_only=True,        # 安全红线：只本机，不触外部网络
     description="Terax 终端优先 AI 原生开发环境（Apache-2.0 本地开源，产品研发岗终端主阵地，opt-in）",
 )
+
+
+# ── OpenMAIC 接口位（opt-in，HTTP 桥接清华 THU-MAIC 多智能体互动课堂，MIT 开源）──
+# OpenMAIC：把行业知识/需求自动转化为「能讲、能练、能互动」的 AI 课堂。
+# 许可证：MIT（v0.3.0 起从 AGPL-3.0 重新授权；clone 实物 LICENSE 已核实为 MIT）。
+# 接入方式：独立 HTTP 服务（Next.js 端口 3000），AOS 只经 REST 调用，
+#   不耦合其 Node 运行时、不绑架主系统（宪法 §3 芯粒隔离、§4 不绑定厂商）。
+#   OpenMAIC 自管 LLM provider（.env.local / server-providers.yml），AOS 不直传 key。
+# 启用条件：配置 AOS_OPENMAIC_URL（如 http://localhost:3000）；未配置 get_extension
+#   返回 None，静默跳过，零 OpenMAIC 依赖，不锁死核心。
+# 设计红线：local_only=False（允许用户部署在信任内网/本机；非 token 红线），
+#   但仅在可信网络运行 OpenMAIC；工厂仅在 URL 存在时构造，可达性由 bridge.health() 判定。
+def _openmaic_factory() -> Any:
+    base = os.environ.get("AOS_OPENMAIC_URL")
+    if not base:
+        return None  # 未配置 -> 静默跳过（opt-in 核心纪律）
+    base = base.rstrip("/")
+    try:
+        from .openmaic_bridge import OpenMAICBridge
+        return OpenMAICBridge(base_url=base)
+    except Exception:
+        return None
+
+
+register_extension(
+    "openmaic",
+    _openmaic_factory,
+    env_gate="AOS_OPENMAIC_URL",  # 仅在用户显式配置服务地址时启用
+    local_only=False,             # 信任内网/本机部署；非 token 红线
+    description="OpenMAIC 多智能体互动课堂生成（清华 THU-MAIC，MIT 开源；HTTP 桥接，自管 LLM，opt-in）",
+)

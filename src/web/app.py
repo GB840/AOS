@@ -443,7 +443,7 @@ with st.sidebar:
     
     page = st.radio(
         "导航",
-        ["💬 智能对话", "🧠 代码库记忆", "🤝 专家智能体", "🌐 搜索中心", "📚 知识库", "🔄 Loop循环", "🚀 自主执行", "👨‍💻 RuFlo开发", "🎬 ViMax视频", "🎨 ComfyUI视觉", "🎥 Pixelle短视频", "🎬 OpenMontage", "✂️ 视频剪辑", "🎛️ 模型网关", "🧠 知识图谱", "👥 Agent管理", "🎨 设计规范", "✅ 代码质检", "🗺️ 3D重建", "🌐 网页提取", "🤖 本地模型", "🖱️ UI-TARS自动化", "🎤 语音编辑", "🖼️ 多模态", "🛠️ 技能中心", "🤖 子智能体", "🗂️ 沙盒终端", "📁 项目导入", "📊 审计日志", "📝 实时日志", "📈 系统状态"],
+        ["💬 智能对话", "🧠 代码库记忆", "🤝 专家智能体", "🌐 搜索中心", "📚 知识库", "🔄 Loop循环", "🚀 自主执行", "👨‍💻 RuFlo开发", "🎬 ViMax视频", "🎨 ComfyUI视觉", "🎥 Pixelle短视频", "🎬 OpenMontage", "✂️ 视频剪辑", "🎛️ 模型网关", "🧠 知识图谱", "👥 Agent管理", "🎨 设计规范", "✅ 代码质检", "🗺️ 3D重建", "🌐 网页提取", "🤖 本地模型", "🖱️ UI-TARS自动化", "🎤 语音编辑", "🖼️ 多模态", "🛠️ 技能中心", "🤖 子智能体", "🗂️ 沙盒终端", "📁 项目导入", "📊 审计日志", "📝 实时日志", "📈 系统状态", "📚 OpenMAIC 课堂"],
         label_visibility="collapsed",
     )
     
@@ -4494,6 +4494,62 @@ elif page == "📈 系统状态":
                 )
     except Exception as e:
         st.error(f"加载系统状态失败: {e}")
+
+elif page == "📚 OpenMAIC 课堂":
+    st.title("📚 OpenMAIC 多智能体互动课堂")
+    st.caption("清华 THU-MAIC 开源（MIT）· 把需求变成「能讲、能练、能互动」的 AI 课堂 · 经 /api/edu/course 桥接")
+    st.info(
+        "需先在本机/信任内网启动 OpenMAIC 服务，并在 .env 配置 AOS_OPENMAIC_URL（如 http://localhost:3000）。\n"
+        "未配置时调用会如实返回错误，不会谎报成功。"
+    )
+
+    requirement = st.text_area(
+        "课程需求（必填）",
+        height=120,
+        placeholder="例：为中小学生制作一门「青少年护眼科普」互动课堂，含讲解、问答与练习",
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        enable_web_search = st.checkbox("启用联网检索", value=False)
+        enable_image = st.checkbox("生成配图", value=False)
+    with col2:
+        enable_video = st.checkbox("生成视频", value=False)
+        enable_tts = st.checkbox("生成语音(朗读)", value=False)
+    agent_mode = st.selectbox("智能体模式", ["default", "generate"], index=0)
+
+    if st.button("🚀 生成互动课堂", type="primary"):
+        if not requirement.strip():
+            st.warning("请填写课程需求")
+        else:
+            with st.spinner("正在生成（OpenMAIC 自管 LLM，可能需数分钟）..."):
+                resp = make_api_request(
+                    "/api/edu/course",
+                    method="POST",
+                    json={
+                        "requirement": requirement,
+                        "enable_web_search": enable_web_search,
+                        "enable_image": enable_image,
+                        "enable_video": enable_video,
+                        "enable_tts": enable_tts,
+                        "agent_mode": agent_mode,
+                    },
+                )
+            if isinstance(resp, dict) and resp.get("ok"):
+                st.success("✅ 课堂生成完成")
+                st.markdown(f"**标题**：{resp.get('title')}")
+                st.markdown(f"**场景数**：{resp.get('scenes_count')}")
+                url = resp.get("url")
+                if url:
+                    st.markdown(f"**课堂地址**：{url}")
+                    st.link_button("打开课堂", url)
+                with st.expander("原始结果"):
+                    st.json(resp.get("result", {}))
+            elif isinstance(resp, dict) and resp.get("error") is not None:
+                err = resp["error"]
+                err_msg = err.get("detail") if isinstance(err, dict) else err
+                st.error(f"生成失败：{err_msg}")
+            else:
+                st.error(f"未知响应：{resp}")
 
 st.divider()
 st.caption(f"AOS v5.0 | {brain.identity.aid}")

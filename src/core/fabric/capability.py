@@ -118,9 +118,16 @@ class Capability(str, Enum):
     # 防御型本地漏洞自查（只读、仅本机；仅用公开 CVE 元数据，绝不携带/运行 exploit）。
     # 把「exploitarium 式零日情报」转化为对**自己环境**的巡检能力，而非攻击能力。
     SECURITY_AUDIT = "security.audit"
+    # 代码炼化（沙箱隔离 + 静态分析 + 优化 + 测试 + 进化闭环）。
+    # 与 CODE_UNDERSTANDING（只读索引/搜索）正交：炼化会修改代码并验证。
+    CODE_REFINE = "code.refine"
     # 逆向工程（经本机 IDA Pro MCP server；仅分析你有权分析的二进制，localhost-only）。
     # 把 mrexodia/ida-pro-mcp 这类真实开源逆向工具弄进 AOS 供给面，落实「万物为我所用」。
     RE_IDA = "re.ida"
+    # 多智能体互动课堂生成（OpenMAIC，清华 THU-MAIC，MIT 开源；HTTP 桥接，自管 LLM）。
+    # 把行业知识/需求转化为「能讲、能练、能互动」的 AI 课堂——与内容营销岗的
+    # 课程化/科普化/培训素材能力正交互补（课程是「教育型内容」，可转营销素材）。
+    EDU_COURSE_GEN = "edu.course_gen"
 
 
 # ============================================================================
@@ -179,11 +186,16 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     "content-director": [Capability.CONTENT_PRODUCE],
     # security-audit：防御型本地漏洞自查（仅本机、只读、用公开 CVE 元数据）
     "security-audit": [Capability.SECURITY_AUDIT],
+    # refinery：代码炼化引擎（沙箱隔离 + 分析 + 优化 + 测试 + 进化闭环）
+    "refinery": [Capability.CODE_REFINE, Capability.SECURITY_AUDIT],
     # ida-pro-mcp：本机 IDA Pro 逆向工程 MCP server（localhost-only，仅分析有权分析的二进制）
     "ida-pro-mcp": [Capability.RE_IDA],
     # media-gen：国产智谱文生图/文生视频平面（CogView-4 + CogVideoX），
     # 纯 stdlib urllib 调用，零依赖。替代 Scroll-World 绑定的国外模型。
     "media-gen": [Capability.MEDIA_IMAGE, Capability.MEDIA_VIDEO],
+    # openmaic：清华 THU-MAIC 多智能体互动课堂生成（MIT 开源）。HTTP 桥接、
+    # 自管 LLM，不耦合 Node 运行时，作为可插拔教育能力芯粒（opt-in）。
+    "openmaic": [Capability.EDU_COURSE_GEN],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -218,10 +230,14 @@ ENGINE_TIER: dict[str, str] = {
     "content-director": TIER_HIGH,
     # security-audit：本地只读漏洞自查（零成本/最强隐私/纯防御）→ 高档
     "security-audit": TIER_HIGH,
+    # refinery：本地代码炼化（零成本/沙箱隔离/最强隐私）→ 高档
+    "refinery": TIER_HIGH,
     # ida-pro-mcp：本机 IDA Pro 逆向 MCP（本地优先/零成本/最强隐私）→ 高档
     "ida-pro-mcp": TIER_HIGH,
     # media-gen：云端国产智谱（有成本，质量优）→ 中档
     "media-gen": TIER_MEDIUM,
+    # openmaic：HTTP 桥接 OpenMAIC 服务（依赖该服务运行 + 其自管 LLM）→ 中档
+    "openmaic": TIER_MEDIUM,
 }
 
 

@@ -81,6 +81,20 @@ def resolve_dev_env() -> Dict[str, Any]:
             "note": "未安装；装后自动启用（Apache-2.0 本地开源，无 token）"}
 
 
+def resolve_course_tools() -> Dict[str, Any]:
+    """内容营销岗位的课程/教育素材工具：OpenMAIC 仅当配置并可达时 opt-in 提供。
+
+    这是 extension 扩展点的真实消费处——未配置 AOS_OPENMAIC_URL 或不可达时
+    get_extension 返回 None，自动静默跳过，零 OpenMAIC 依赖，不锁死核心。
+    与 Terax 的本地隔离不同，OpenMAIC 是独立 HTTP 服务（MIT 开源、自管 LLM）。
+    """
+    om = get_extension("openmaic")
+    if om is not None:
+        return {"available": True, **om}
+    return {"available": False, "name": "openmaic",
+            "note": "未配置 AOS_OPENMAIC_URL 或 OpenMAIC 未启动；配置后自动启用（MIT 开源，自管 LLM）"}
+
+
 def profit_summary(revenue: float, cost: float) -> Dict[str, Any]:
     """财务岗位：利润预估（开源，无闭源依赖）。"""
     return profit_estimate(revenue, cost)
@@ -91,6 +105,7 @@ __all__ = [
     "build_financial_report",
     "resolve_content_tools",
     "resolve_dev_env",
+    "resolve_course_tools",
     "bom_summary",
     "profit_summary",
     "list_roles",

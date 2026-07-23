@@ -249,6 +249,14 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.warning("代码炼化 API 挂载失败: %s", e)
 
+# 单创OS API（/api/danchuang/*，AI一人公司操作系统）
+try:
+    from api.danchuang_api import register_routes
+    register_routes(app)
+    logger.info("单创OS API 已挂载: /api/danchuang")
+except Exception as e:  # noqa: BLE001
+    logger.warning("单创OS API 挂载失败: %s", e)
+
 # Remotion 质量视频渲染 API（/api/video/remotion/*，Tier1 缺口③）
 try:
     from api.video_api import mount_video_api
@@ -2293,6 +2301,29 @@ async def opc_plan(req: dict):
         if not goal:
             raise HTTPException(status_code=400, detail="缺少 goal/task 字段")
         return plan_company(goal, industry)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/edu/course")
+def edu_course(req: dict):
+    """单创OS 教育芯粒：把需求生成「多智能体互动课堂」（OpenMAIC，MIT 开源，opt-in）。
+
+    同步阻塞式：提交 OpenMAIC 异步 job 并轮询至终态后返回完整结果（含课堂 URL）。
+    OpenMAIC 自管 LLM，课程生成长任务可能数分钟；未配置 AOS_OPENMAIC_URL 时
+    返回 502 并明确 error（绝不谎报成功，宪法 §6 诚实）。
+    """
+    try:
+        from kernel.plugins.openmaic_bridge import generate_course
+        payload = req or {}
+        if not (payload.get("requirement") or payload.get("task") or payload.get("goal")):
+            raise HTTPException(status_code=400, detail="缺少 requirement/task/goal 字段")
+        res = generate_course(payload)
+        if not res.ok:
+            raise HTTPException(status_code=502, detail=res.error)
+        return res.data
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
