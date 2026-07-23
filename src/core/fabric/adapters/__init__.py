@@ -166,6 +166,11 @@ try:
 except Exception:  # noqa: BLE001
     RefineAdapter = None
 
+try:
+    from .refinery_adapter import RefineryAdapter
+except Exception:  # noqa: BLE001
+    RefineryAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -184,6 +189,7 @@ __all__ = [
         "Mem0Adapter",
         "OpenClawAdapter",
         "RefineAdapter",
+        "RefineryAdapter",
         "SearchAdapter",
         "WebFetchAdapter",
         "Crawl4AIAdapter",

@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AOS 代码炼化系统</title>
+<style>
+  /* ── 全局主题变量 ── */
+  :root {
+    --bg: #1a1a2e;
+    --card: #16213e;
+    --card-2: #1c2a4a;
+    --text: #e0e0e0;
+    --text-dim: #8a8aa0;
+    --accent: #0f3460;
+    --accent-2: #1a4f8a;
+    --border: #2a3a5a;
+    --green: #4ade80;
+    --yellow: #facc15;
+    --red: #f87171;
+    --blue: #60a5fa;
+    --purple: #c084fc;
+    --shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── 滚动条 ── */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent-2); }
+
+  /* ── 顶部标题栏 ── */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: linear-gradient(135deg, #16213e 0%, #0f3460 100%);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  }
+  .topbar-inner {
+    max-width: 1600px; margin: 0 auto;
+    padding: 14px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .logo {
+    font-size: 22px; font-weight: 700;
+    background: linear-gradient(90deg, #60a5fa, #c084fc);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .subtitle { color: var(--text-dim); font-size: 13px; margin-left: 8px; }
+  .status-wrap { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+  .status-dot.offline { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .status-dot.unknown { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .status-text { font-size: 13px; color: var(--text-dim); }
+  .api-key-btn {
+    background: var(--accent); color: var(--text); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    transition: background 0.2s;
+  }
+  .api-key-btn:hover { background: var(--accent-2); }
+
+  /* ── 布局 ── */
+  .container { max-width: 1600px; margin: 0 auto; padding: 20px 24px 40px; }
+
+  /* ── 项目输入区 ── */
+  .input-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px; margin-bottom: 20px; box-shadow: var(--shadow);
+  }
+  .input-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .input-row label { font-weight: 600; color: var(--text); white-space: nowrap; }
+  .input-row input[type="text"] {
+    flex: 1; min-width: 240px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 14px; border-radius: 6px; font-size: 14px; outline: none;
+    transition: border-color 0.2s;
+  }
+  .input-row input[type="text"]:focus { border-color: var(--accent-2); }
+  .btn {
+    padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 14px; font-weight: 600; transition: all 0.2s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-2); }
+  .btn-secondary { background: var(--card-2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover:not(:disabled) { background: var(--border); }
+  .btn-danger { background: #4a2538; color: var(--red); border: 1px solid #6a3548; }
+
+  /* ── 主网格布局 ── */
+  .main-grid {
+    display: grid; grid-template-columns: 340px 1fr; gap: 20px;
+  }
+  @media (max-width: 960px) {
+    .main-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── 卡片通用 ── */
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: var(--shadow);
+  }
+  .card-header {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-title { font-weight: 600; font-size: 15px; }
+  .card-body { padding: 16px 18px; }
+
+  /* ── 任务列表 ── */
+  .task-list { max-height: 720px; overflow-y: auto; }
+  .task-item {
+    padding: 12px 14px; border-bottom: 1px solid var(--border);
+    cursor: pointer; transition: background 0.15s;
+  }
+  .task-item:hover { background: var(--card-2); }
+  .task-item.active { background: var(--accent); }
+  .task-id { font-size: 12px; color: var(--text-dim); font-family: monospace; }
+  .task-desc { font-size: 13px; margin: 4px 0; color: var(--text); word-break: break-all; }
+  .task-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600;
+  }
+  .badge-success { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .badge-running { background: rgba(96, 165, 250, 0.15); color: var(--blue); }
+  .badge-failed { background: rgba(248, 113, 113, 0.15); color: var(--red); }
+  .badge-pending { background: rgba(250, 204, 21, 0.15); color: var(--yellow); }
+  .badge-neutral { background: rgba(138, 138, 160, 0.15); color: var(--text-dim); }
+  .empty-hint { padding: 40px 20px; text-align: center; color: var(--text-dim); font-size: 13px; }
+
+  /* ── 质量评分 ── */
+  .score-block {
+    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+  }
+  .score-number {
+    font-size: 72px; font-weight: 800; line-height: 1;
+    min-width: 120px; text-align: center;
+  }
+  .score-green { color: var(--green); text-shadow: 0 0 20px rgba(74, 222, 128, 0.3); }
+  .score-yellow { color: var(--yellow); text-shadow: 0 0 20px rgba(250, 204, 21, 0.3); }
+  .score-red { color: var(--red); text-shadow: 0 0 20px rgba(248, 113, 113, 0.3); }
+  .score-label { font-size: 14px; color: var(--text-dim); text-align: center; margin-top: 4px; }
+  .score-info { flex: 1; min-width: 200px; }
+  .score-info .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+  .score-info .row .k { color: var(--text-dim); }
+  .score-info .row .v { color: var(--text); font-weight: 600; }
+
+  /* ── 柱状图（纯CSS） ── */
+  .chart-section { margin-top: 18px; }
+  .chart-section h4 { font-size: 14px; margin-bottom: 10px; color: var(--text); }
+  .bar-chart { display: flex; gap: 6px; align-items: flex-end; height: 140px; padding: 8px 0; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
+  .bar {
+    width: 80%; min-height: 4px; border-radius: 4px 4px 0 0;
+    transition: height 0.4s ease; position: relative;
+  }
+  .bar-value {
+    position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; color: var(--text-dim); white-space: nowrap;
+  }
+  .bar-label { font-size: 11px; color: var(--text-dim); text-align: center; word-break: break-all; }
+
+  /* ── 问题表格 ── */
+  .issue-table-wrap { overflow-x: auto; margin-top: 12px; }
+  table.issue-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.issue-table th, table.issue-table td {
+    padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.issue-table th { color: var(--text-dim); font-weight: 600; background: var(--card-2); position: sticky; top: 0; }
+  table.issue-table td.msg { white-space: normal; max-width: 360px; word-break: break-all; }
+  table.issue-table tr:hover td { background: var(--card-2); }
+  .sev-error { color: var(--red); font-weight: 600; }
+  .sev-warning { color: var(--yellow); font-weight: 600; }
+  .sev-info { color: var(--blue); font-weight: 600; }
+
+  /* ── 进化统计 ── */
+  .evo-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+  }
+  .evo-item {
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px; text-align: center;
+  }
+  .evo-num { font-size: 28px; font-weight: 700; color: var(--blue); }
+  .evo-name { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  /* ── 加载状态 ── */
+  .loading {
+    display: inline-block; width: 16px; height: 16px;
+    border: 2px solid var(--border); border-top-color: var(--blue);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-block { padding: 60px 20px; text-align: center; color: var(--text-dim); }
+  .loading-block .loading { width: 28px; height: 28px; border-width: 3px; margin-bottom: 12px; }
+
+  /* ── Toast ── */
+  .toast-container {
+    position: fixed; top: 80px; right: 24px; z-index: 1000;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .toast {
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    padding: 12px 16px; border-radius: 8px; box-shadow: var(--shadow);
+    min-width: 280px; max-width: 420px; font-size: 13px;
+    display: flex; align-items: flex-start; gap: 10px;
+    animation: slideIn 0.25s ease;
+  }
+  @keyframes slideIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  .toast-error { border-left: 3px solid var(--red); }
+  .toast-success { border-left: 3px solid var(--green); }
+  .toast-info { border-left: 3px solid var(--blue); }
+  .toast-close { margin-left: auto; cursor: pointer; color: var(--text-dim); background: none; border: none; font-size: 16px; }
+
+  /* ── 弹窗 ── */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+    z-index: 200; display: none; align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    max-width: 720px; width: 100%; max-height: 85vh; overflow: hidden;
+    display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .modal-title { font-size: 16px; font-weight: 700; }
+  .modal-close { background: none; border: none; color: var(--text-dim); font-size: 22px; cursor: pointer; line-height: 1; }
+  .modal-body { padding: 20px; overflow-y: auto; }
+  .detail-row { display: flex; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .detail-row .k { width: 130px; color: var(--text-dim); flex-shrink: 0; }
+  .detail-row .v { color: var(--text); word-break: break-all; flex: 1; }
+  .detail-section { margin-top: 16px; }
+  .detail-section h4 { font-size: 14px; margin-bottom: 8px; color: var(--blue); }
+  pre.detail-pre {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; overflow-x: auto; font-size: 12px; color: var(--text);
+    max-height: 300px;
+  }
+
+  .section-title { font-size: 15px; font-weight: 600; margin: 18px 0 10px; color: var(--text); }
+  .hint-text { color: var(--text-dim); font-size: 13px; padding: 12px 0; }
+  a.link { color: var(--blue); text-decoration: none; }
+  a.link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<!-- 顶部标题栏 -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <span class="logo">⚗️ AOS 代码炼化系统</span>
+    <span class="subtitle">Refinery · 代码质量分析与自动重构</span>
+    <div class="status-wrap">
+      <span class="status-dot unknown" id="statusDot"></span>
+      <span class="status-text" id="statusText">检测中…</span>
+      <button class="api-key-btn" id="apiKeyBtn" title="设置 API Key">🔑 API Key</button>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- 项目输入区 -->
+  <section class="input-card">
+    <div class="input-row">
+      <label for="projectPath">项目路径</label>
+      <input type="text" id="projectPath" value="d:\AOS" placeholder="例如：d:\AOS">
+      <button class="btn btn-primary" id="runBtn">⚡ 开始炼化</button>
+      <button class="btn btn-secondary" id="analyzeBtn">🔍 仅分析</button>
+      <button class="btn btn-secondary" id="refreshTasksBtn">🔄 刷新任务</button>
+    </div>
+  </section>
+
+  <!-- 主网格：任务列表 + 分析报告 -->
+  <div class="main-grid">
+
+    <!-- 左侧：任务列表 -->
+    <aside class="card">
+      <div class="card-header">
+        <span class="card-title">📋 任务列表</span>
+        <span class="badge badge-neutral" id="taskCount">0</span>
+      </div>
+      <div class="task-list" id="taskList">
+        <div class="empty-hint">点击「刷新任务」加载</div>
+      </div>
+    </aside>
+
+    <!-- 右侧：分析报告 -->
+    <section class="card">
+      <div class="card-header">
+        <span class="card-title">📊 分析报告</span>
+        <span class="status-text" id="reportHint">尚未分析</span>
+      </div>
+      <div class="card-body" id="reportBody">
+        <div class="empty-hint">输入项目路径后点击「仅分析」或「开始炼化」</div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- 底部：进化统计 -->
+  <section class="card" style="margin-top: 20px;">
+    <div class="card-header">
+      <span class="card-title">🧬 进化统计</span>
+      <button class="api-key-btn" id="refreshEvoBtn">🔄 刷新</button>
+    </div>
+    <div class="card-body" id="evoBody">
+      <div class="empty-hint">点击刷新加载进化统计</div>
+    </div>
+  </section>
+
+</div>
+
+<!-- 任务详情弹窗 -->
+<div class="modal-mask" id="taskModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modalTitle">任务详情</span>
+      <button class="modal-close" id="modalClose">×</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- Toast 容器 -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ════════════════════════════════════════════
+// AOS 代码炼化系统 - 前端逻辑
+// ════════════════════════════════════════════
+
+const API_BASE = '/api';
+let currentTaskId = null;
+
+// ── 工具函数 ──
+function getHeaders(json = false) {
+  const h = { "X-API-Key": localStorage.getItem("aos_api_key") || "" };
+  if (json) h["Content-Type"] = "application/json";
+  return h;
+}
+
+async function apiFetch(path, options = {}) {
+  const url = API_BASE + path;
+  const resp = await fetch(url, options);
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try { const e = await resp.json(); msg = e.detail || e.message || e.error || msg; } catch (_) {}
+    throw new Error(msg);
+  }
+  const ct = resp.headers.get('content-type') || '';
+  if (ct.includes('application/json')) return resp.json();
+  return resp.text();
+}
+
+// ── Toast 提示 ──
+function toast(msg, type = 'error', duration = 4000) {
+  const container = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  const icon = type === 'error' ? '❌' : type === 'success' ? '✅' : 'ℹ️';
+  el.innerHTML = `<span>${icon}</span><span style="flex:1">${escapeHtml(msg)}</span><button class="toast-close">×</button>`;
+  el.querySelector('.toast-close').onclick = () => el.remove();
+  container.appendChild(el);
+  setTimeout(() => el.remove(), duration);
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function setLoading(el, text = '加载中…') {
+  el.innerHTML = `<div class="loading-block"><div class="loading"></div><div>${escapeHtml(text)}</div></div>`;
+}
+
+// ── 状态指示灯 ──
+function setStatus(state, text) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  dot.className = 'status-dot ' + state;
+  txt.textContent = text;
+}
+
+async function checkHealth() {
+  try {
+    await apiFetch('/refinery/tasks', { headers: getHeaders() });
+    setStatus('', '服务在线');
+  } catch (e) {
+    setStatus('offline', '服务离线');
+  }
+}
+
+// ── 任务列表 ──
+async function loadTasks() {
+  const listEl = document.getElementById('taskList');
+  setLoading(listEl, '加载任务列表…');
+  try {
+    const data = await apiFetch('/refinery/tasks', { headers: getHeaders() });
+    const tasks = Array.isArray(data) ? data : (data.tasks || data.items || []);
+    renderTasks(tasks);
+  } catch (e) {
+    listEl.innerHTML = `<div class="empty-hint">加载失败：${escapeHtml(e.message)}</div>`;
+    toast('加载任务列表失败：' + e.message);
+  }
+}
+
+function renderTasks(tasks) {
+  const listEl = document.getElementById('taskList');
+  const countEl = document.getElementById('taskCount');
+  countEl.textContent = tasks.length;
+  if (!tasks.length) {
+    listEl.innerHTML = `<div class="empty-hint">暂无任务</div>`;
+    return;
+  }
+  listEl.innerHTML = tasks.map(t => {
+    const status = (t.status || 'unknown').toLowerCase();
+    const badgeClass = `badge-${{completed:'success',success:'success',running:'running',failed:'failed',error:'failed',pending:'pending',queued:'pending'}[status] || 'neutral'}`;
+    const id = t.task_id || t.id || t._id || '';
+    const desc = t.description || t.project_root || '(无描述)';
+    const time = t.created_at || t.start_time || t.timestamp || '';
+    return `<div class="task-item ${id === currentTaskId ? 'active' : ''}" data-id="${escapeHtml(id)}">
+      <div class="task-id">${escapeHtml(id)}</div>
+      <div class="task-desc">${escapeHtml(desc)}</div>
+      <div class="task-meta">
+        <span class="badge ${badgeClass}">${escapeHtml(status)}</span>
+        ${time ? `<span class="task-id">${escapeHtml(time)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  listEl.querySelectorAll('.task-item').forEach(el => {
+    el.onclick = () => openTaskDetail(el.dataset.id);
+  });
+}
+
+// ── 任务详情弹窗 ──
+async function openTaskDetail(taskId) {
+  if (!taskId) return;
+  currentTaskId = taskId;
+  document.querySelectorAll('.task-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === taskId);
+  });
+  const modal = document.getElementById('taskModal');
+  const titleEl = document.getElementById('modalTitle');
+  const bodyEl = document.getElementById('modalBody');
+  titleEl.textContent = '任务详情 · ' + taskId;
+  setLoading(bodyEl, '加载任务详情…');
+  modal.classList.add('show');
+  try {
+    const t = await apiFetch(`/refinery/tasks/${encodeURIComponent(taskId)}`, { headers: getHeaders() });
+    renderTaskDetail(t);
+  } catch (e) {
+    bodyEl.innerHTML = `<div class="empty-hint">加载失败：${escapeHtml(e.message)}</div>`;
+    toast('加载任务详情失败：' + e.message);
+  }
+}
+
+function renderTaskDetail(t) {
+  const bodyEl = document.getElementById('modalBody');
+  const status = (t.status || 'unknown').toLowerCase();
+  const badgeClass = `badge-${{completed:'success',success:'success',running:'running',failed:'failed',error:'failed',pending:'pending',queued:'pending'}[status] || 'neutral'}`;
+  const fields = [
+    ['任务 ID', t.task_id || t.id || t._id],
+    ['状态', `<span class="badge ${badgeClass}">${escapeHtml(status)}</span>`],
+    ['项目路径', t.project_root],
+    ['描述', t.description],
+    ['创建时间', t.created_at || t.start_time],
+    ['结束时间', t.end_time || t.finished_at],
+    ['耗时', t.duration != null ? (t.duration + (typeof t.duration === 'number' ? ' ms' : '')) : ''],
+    ['自动应用', t.auto_apply != null ? (t.auto_apply ? '是' : '否') : ''],
+    ['运行测试', t.run_tests != null ? (t.run_tests ? '是' : '否') : ''],
+  ];
+  let html = fields.map(([k, v]) => v != null && v !== '' ? `<div class="detail-row"><span class="k">${escapeHtml(k)}</span><span class="v">${v}</span></div>` : '').join('');
+
+  // 质量评分
+  const score = t.quality_score != null ? t.quality_score : (t.result && t.result.quality_score);
+  if (score != null) {
+    html += `<div class="detail-section"><h4>质量评分</h4><div class="score-block"><div><div class="score-number ${scoreColorClass(score)}">${Number(score).toFixed ? Number(score).toFixed(1) : score}</div><div class="score-label">分数</div></div></div></div>`;
+  }
+
+  // 问题数量
+  const issues = t.issues || (t.result && t.result.issues) || [];
+  if (Array.isArray(issues) && issues.length) {
+    html += `<div class="detail-section"><h4>问题列表 (${issues.length})</h4>`;
+    html += `<div class="issue-table-wrap"><table class="issue-table"><thead><tr><th>文件</th><th>行号</th><th>严重程度</th><th>类别</th><th>规则</th><th>消息</th></tr></thead><tbody>`;
+    html += issues.slice(0, 50).map(i => `<tr>
+      <td>${escapeHtml(i.file || i.path || i.filename || '')}</td>
+      <td>${escapeHtml(i.line || i.line_number || '')}</td>
+      <td class="sev-${sevClass(i.severity || i.level)}">${escapeHtml(i.severity || i.level || '')}</td>
+      <td>${escapeHtml(i.category || i.type || '')}</td>
+      <td>${escapeHtml(i.rule || i.rule_id || '')}</td>
+      <td class="msg">${escapeHtml(i.message || i.msg || '')}</td>
+    </tr>`).join('');
+    html += `</tbody></table></div>`;
+    if (issues.length > 50) html += `<div class="hint-text">仅显示前 50 条，共 ${issues.length} 条</div>`;
+    html += `</div>`;
+  }
+
+  // 原始 JSON
+  html += `<div class="detail-section"><h4>原始数据</h4><pre class="detail-pre">${escapeHtml(JSON.stringify(t, null, 2))}</pre></div>`;
+  bodyEl.innerHTML = html;
+}
+
+function sevClass(sev) {
+  const s = String(sev || '').toLowerCase();
+  if (s.includes('err') || s.includes('crit')) return 'error';
+  if (s.includes('warn')) return 'warning';
+  return 'info';
+}
+
+function scoreColorClass(score) {
+  const n = Number(score);
+  if (n >= 80) return 'score-green';
+  if (n >= 60) return 'score-yellow';
+  return 'score-red';
+}
+
+// ── 分析 / 炼化 ──
+async function runRefinery(autoApply) {
+  const path = document.getElementById('projectPath').value.trim();
+  if (!path) { toast('请输入项目路径'); return; }
+  const btn = autoApply ? document.getElementById('runBtn') : document.getElementById('analyzeBtn');
+  btn.disabled = true;
+  const original = btn.innerHTML;
+  btn.innerHTML = '<span class="loading"></span> 处理中…';
+  const reportBody = document.getElementById('reportBody');
+  const reportHint = document.getElementById('reportHint');
+  reportHint.textContent = autoApply ? '炼化中…' : '分析中…';
+  setLoading(reportBody, autoApply ? '正在炼化代码…' : '正在分析代码…');
+
+  try {
+    const endpoint = autoApply ? '/refinery/run' : '/refinery/analyze';
+    const body = autoApply
+      ? { project_root: path, description: '从 Web 界面发起', auto_apply: true, run_tests: true }
+      : { project_root: path };
+    const data = await apiFetch(endpoint, {
+      method: 'POST',
+      headers: getHeaders(true),
+      body: JSON.stringify(body)
+    });
+    reportHint.textContent = autoApply ? '炼化完成' : '分析完成';
+    renderReport(data, autoApply);
+    toast(autoApply ? '炼化任务已完成' : '分析完成', 'success');
+    // 刷新任务列表
+    loadTasks().catch(() => {});
+  } catch (e) {
+    reportHint.textContent = '失败';
+    reportBody.innerHTML = `<div class="empty-hint" style="color:var(--red)">操作失败：${escapeHtml(e.message)}</div>`;
+    toast((autoApply ? '炼化' : '分析') + '失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+function renderReport(data, isRun) {
+  const body = document.getElementById('reportBody');
+  // 兼容多种返回结构
+  const score = data.quality_score != null ? data.quality_score
+    : (data.score != null ? data.score
+    : (data.result && data.result.quality_score));
+  const issues = data.issues || (data.result && data.result.issues) || [];
+  const summary = data.summary || (data.result && data.result.summary) || {};
+  const taskId = data.task_id || data.id;
+
+  let html = '';
+
+  // 质量评分
+  html += `<div class="score-block">`;
+  if (score != null) {
+    const n = Number(score);
+    html += `<div>
+      <div class="score-number ${scoreColorClass(score)}">${isNaN(n) ? escapeHtml(score) : n.toFixed(1)}</div>
+      <div class="score-label">质量评分</div>
+    </div>`;
+  } else {
+    html += `<div><div class="score-number score-red" style="font-size:36px">N/A</div><div class="score-label">无评分</div></div>`;
+  }
+  html += `<div class="score-info">`;
+  html += `<div class="row"><span class="k">任务 ID</span><span class="v">${escapeHtml(taskId || '—')}</span></div>`;
+  html += `<div class="row"><span class="k">问题总数</span><span class="v">${issues.length}</span></div>`;
+  html += `<div class="row"><span class="k">分析文件数</span><span class="v">${escapeHtml(summary.files_analyzed || data.files_analyzed || '—')}</span></div>`;
+  if (isRun) {
+    html += `<div class="row"><span class="k">已应用修复</span><span class="v">${escapeHtml(data.fixes_applied || data.applied || summary.fixes_applied || '—')}</span></div>`;
+    html += `<div class="row"><span class="k">测试结果</span><span class="v">${escapeHtml(data.tests_passed != null ? (data.tests_passed ? '通过' : '失败') : '—')}</span></div>`;
+  }
+  html += `</div></div>`;
+
+  // 问题统计柱状图
+  if (issues.length) {
+    html += renderIssueCharts(issues);
+  }
+
+  // 问题列表表格
+  if (issues.length) {
+    html += `<div class="section-title">问题列表（${issues.length} 条）</div>`;
+    html += `<div class="issue-table-wrap"><table class="issue-table"><thead><tr><th>文件</th><th>行号</th><th>严重程度</th><th>类别</th><th>规则</th><th>消息</th></tr></thead><tbody>`;
+    html += issues.slice(0, 200).map(i => `<tr>
+      <td>${escapeHtml(i.file || i.path || i.filename || '')}</td>
+      <td>${escapeHtml(i.line || i.line_number || '')}</td>
+      <td class="sev-${sevClass(i.severity || i.level)}">${escapeHtml(i.severity || i.level || '')}</td>
+      <td>${escapeHtml(i.category || i.type || '')}</td>
+      <td>${escapeHtml(i.rule || i.rule_id || '')}</td>
+      <td class="msg">${escapeHtml(i.message || i.msg || '')}</td>
+    </tr>`).join('');
+    html += `</tbody></table></div>`;
+    if (issues.length > 200) html += `<div class="hint-text">仅显示前 200 条，共 ${issues.length} 条</div>`;
+  } else {
+    html += `<div class="hint-text">✅ 未发现明显问题</div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+function renderIssueCharts(issues) {
+  // 按严重程度
+  const sevMap = {};
+  const catMap = {};
+  issues.forEach(i => {
+    const sev = (i.severity || i.level || 'unknown');
+    sevMap[sev] = (sevMap[sev] || 0) + 1;
+    const cat = (i.category || i.type || 'other');
+    catMap[cat] = (catMap[cat] || 0) + 1;
+  });
+  const sevColor = { error: 'var(--red)', critical: 'var(--red)', warning: 'var(--yellow)', warn: 'var(--yellow)', info: 'var(--blue)', unknown: 'var(--text-dim)' };
+  const catColors = ['var(--blue)', 'var(--purple)', 'var(--green)', 'var(--yellow)', 'var(--red)', '#60a5fa', '#c084fc', '#4ade80'];
+
+  const sevMax = Math.max(1, ...Object.values(sevMap));
+  const catMax = Math.max(1, ...Object.values(catMap));
+
+  let html = '<div class="chart-section"><h4>按严重程度统计</h4><div class="bar-chart">';
+  Object.entries(sevMap).forEach(([k, v]) => {
+    const h = Math.round((v / sevMax) * 100);
+    html += `<div class="bar-col">
+      <div class="bar" style="height:${h}%; background:${sevColor[k.toLowerCase()] || 'var(--accent-2)'}"><span class="bar-value">${v}</span></div>
+      <div class="bar-label">${escapeHtml(k)}</div>
+    </div>`;
+  });
+  html += '</div></div>';
+
+  html += '<div class="chart-section"><h4>按类别统计</h4><div class="bar-chart">';
+  Object.entries(catMap).forEach(([k, v], idx) => {
+    const h = Math.round((v / catMax) * 100);
+    const color = catColors[idx % catColors.length];
+    html += `<div class="bar-col">
+      <div class="bar" style="height:${h}%; background:${color}"><span class="bar-value">${v}</span></div>
+      <div class="bar-label">${escapeHtml(k)}</div>
+    </div>`;
+  });
+  html += '</div></div>';
+  return html;
+}
+
+// ── 进化统计 ──
+async function loadEvolution() {
+  const body = document.getElementById('evoBody');
+  setLoading(body, '加载进化统计…');
+  try {
+    const data = await apiFetch('/refinery/evolution/stats', { headers: getHeaders() });
+    renderEvolution(data);
+  } catch (e) {
+    body.innerHTML = `<div class="empty-hint">加载失败：${escapeHtml(e.message)}</div>`;
+    toast('加载进化统计失败：' + e.message);
+  }
+}
+
+function renderEvolution(data) {
+  const body = document.getElementById('evoBody');
+  const items = [
+    ['蒸馏模式数', data.total_patterns || data.patterns_count || data.pattern_count || 0],
+    ['成功率', data.success_rate != null ? (data.success_rate + (typeof data.success_rate === 'number' && data.success_rate <= 1 ? '%' : '')) : '—'],
+    ['总炼化次数', data.total_runs || data.total_refinements || data.runs || 0],
+    ['成功次数', data.successful_runs || data.successes || 0],
+    ['失败次数', data.failed_runs || data.failures || 0],
+    ['已学习模式', data.learned_patterns || data.active_patterns || 0],
+    ['平均耗时', data.avg_duration != null ? (data.avg_duration + ' ms') : '—'],
+    ['覆盖项目数', data.projects_covered || data.unique_projects || 0],
+  ];
+  let html = '<div class="evo-grid">';
+  items.forEach(([name, val]) => {
+    html += `<div class="evo-item"><div class="evo-num">${escapeHtml(val)}</div><div class="evo-name">${escapeHtml(name)}</div></div>`;
+  });
+  html += '</div>';
+
+  // 模式列表
+  if (data.patterns || data.top_patterns) {
+    const patterns = data.patterns || data.top_patterns || [];
+    if (Array.isArray(patterns) && patterns.length) {
+      html += `<div class="section-title">热门蒸馏模式</div>`;
+      html += `<div class="issue-table-wrap"><table class="issue-table"><thead><tr><th>模式</th><th>出现次数</th><th>成功率</th><th>类别</th></tr></thead><tbody>`;
+      patterns.slice(0, 20).forEach(p => {
+        html += `<tr>
+          <td class="msg">${escapeHtml(p.name || p.pattern || p.id || '')}</td>
+          <td>${escapeHtml(p.count || p.occurrences || p.frequency || 0)}</td>
+          <td>${escapeHtml(p.success_rate != null ? p.success_rate : '—')}</td>
+          <td>${escapeHtml(p.category || p.type || '')}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
+    }
+  }
+  body.innerHTML = html;
+}
+
+// ── API Key 设置 ──
+function promptApiKey() {
+  const current = localStorage.getItem("aos_api_key") || '';
+  const val = window.prompt('请输入 AOS API Key：', current);
+  if (val != null) {
+    localStorage.setItem("aos_api_key", val);
+    toast('API Key 已保存', 'success');
+    checkHealth();
+  }
+}
+
+// ── 事件绑定 ──
+document.getElementById('runBtn').onclick = () => runRefinery(true);
+document.getElementById('analyzeBtn').onclick = () => runRefinery(false);
+document.getElementById('refreshTasksBtn').onclick = () => loadTasks();
+document.getElementById('refreshEvoBtn').onclick = () => loadEvolution();
+document.getElementById('apiKeyBtn').onclick = promptApiKey;
+document.getElementById('modalClose').onclick = () => document.getElementById('taskModal').classList.remove('show');
+document.getElementById('taskModal').onclick = (e) => {
+  if (e.target.id === 'taskModal') document.getElementById('taskModal').classList.remove('show');
+};
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.getElementById('taskModal').classList.remove('show');
+});
+
+// ── 初始化 ──
+checkHealth();
+loadTasks();
+loadEvolution();
+</script>
+</body>
+</html>
