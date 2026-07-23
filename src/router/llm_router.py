@@ -482,9 +482,44 @@ class LLMRouter:
             self.providers[provider]["available"] = True
             return result
         except Exception as e:
-            logger.warning(f"{provider_name} 调用失败: {e}")
-            self.providers[provider]["available"] = False
+            # 不再永久拉黑供应商：一次瞬时失败（冷启动/并发/网络抖动）不应让该
+            # 供应商整场会话失效，下次 chat() 仍会重试它（避免“没有一个能用”）。
+            logger.warning(f"{provider_name} 调用失败（本次跳过，不永久禁用）: {e}")
             raise
+
+    def _call_litellm_fallback(self, messages: List[Dict], **kwargs) -> Optional[str]:
+        """终极兜底：经统一 litellm 推理平面（BYOK 同款）调用默认模型。
+
+        老路由的本地/第三方供应商（ollama/mistralrs/siliconflow/baidu/xfyun）
+        在多数部署里没有可用 key，应回退到已验证可用的 zhipu（经 env 配置）。
+        延迟导入避免与 router 启动耦合；litellm 首次导入较慢但会被 sys.modules 缓存。
+        """
+        if not messages:
+            return None
+        try:
+            from core.fabric.adapters.litellm_adapter import LiteLLMAdapter, InvokeRequest
+            from core.fabric.capability import Capability
+        except Exception as e:
+            logger.warning("litellm 适配器不可用，跳过兜底: %s", e)
+            return None
+        model = kwargs.get("model") or "glm-4-flash"
+        if not model.startswith("zhipu/"):
+            model = f"zhipu/{model}"
+        payload = {
+            "model": model,
+            "api_base": config.ZHIPU_BASE_URL,
+            "messages": messages,
+            "opts": {"custom_llm_provider": "openai"},
+        }
+        try:
+            res = LiteLLMAdapter().invoke(InvokeRequest(Capability.LLM_GATEWAY, payload=payload))
+            if res.ok:
+                return (res.data or {}).get("content")
+            logger.warning("litellm 兜底返回失败: %s", res.error)
+            return None
+        except Exception as e:
+            logger.warning("litellm 兜底异常: %s", e)
+            return None
 
     def chat(self, messages: List[Dict], task_type: TaskType = TaskType.GENERAL, **kwargs) -> Dict[str, Any]:
         priority = self._get_provider_priority(task_type)
@@ -520,6 +555,21 @@ class LLMRouter:
                 last_error = e
                 logger.warning(f"提供商 {provider.value} 不可用，尝试下一个")
                 continue
+
+        # 终极兜底：老路由全部供应商失败时，回退到统一 litellm 推理平面
+        # （BYOK 同款，已验证 zhipu key 可用），消除“没有一个能用”。
+        try:
+            fb = self._call_litellm_fallback(messages, **kwargs)
+            if fb is not None:
+                return {
+                    "content": fb,
+                    "provider": "litellm(兜底)",
+                    "model": kwargs.get("model") or "zhipu/glm-4-flash",
+                    "task_type": task_type.value,
+                    "success": True,
+                }
+        except Exception as e:  # 兜底自身异常不应吞掉原始错误
+            logger.warning(f"litellm 兜底异常（忽略，沿用原始错误）: {e}")
 
         return {
             "content": f"所有模型均不可用，最后错误: {str(last_error)}",
