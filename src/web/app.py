@@ -59,6 +59,15 @@ def make_api_request(endpoint, method="GET", **kwargs):
                 response = requests.post(url, headers={k: v for k, v in headers.items() if k != "Content-Type"}, timeout=30, **kwargs)
             else:
                 response = requests.post(url, headers=headers, json=kwargs.get("json"), timeout=30)
+        elif method == "PUT":
+            if kwargs.get("files"):
+                response = requests.put(url, headers={k: v for k, v in headers.items() if k != "Content-Type"}, timeout=30, **kwargs)
+            else:
+                response = requests.put(url, headers=headers, json=kwargs.get("json"), timeout=30)
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers, timeout=30)
+        else:
+            raise ValueError(f"不支持的请求方法: {method}")
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -459,6 +468,209 @@ with st.sidebar:
     
     st.divider()
     st.caption(f"v5.0 | {datetime.now().strftime('%H:%M')}")
+
+
+# ---- BYOK 模型密钥设置页 ----
+def render_byok_page():
+    st.title("🔑 模型密钥 BYOK（自带 Key · 加密隔离）")
+    st.caption(
+        "预置国内主流大模型供应商，填你自己的 API Key 即可用；密钥经 Fernet 加密落库，"
+        "按租户隔离，不建共享 Key 池。租户任务（对话/自主执行/长程规划）自动走你填的默认 Key。"
+    )
+
+    # 租户身份检查：BYOK 按 X-API-Key 租户隔离，需合法的租户 sk- Key
+    if not st.session_state.get("api_key"):
+        st.warning("⚠️ 未检测到租户 API Key。请先在左侧侧边栏「API Key」处填写你的租户 Key（sk- 开头）。")
+        st.info("BYOK 设置按租户隔离存储；自用模式下即你在单创OS获得的 sk- 密钥，商用 SaaS 模式下每个商户各自持有。")
+        return
+
+    # 拉取预设（缓存到 session_state，避免每次交互重拉）
+    if "byok_presets" not in st.session_state:
+        with st.spinner("加载供应商预设..."):
+            presets_resp = make_api_request("/api/danchuang/byok/presets")
+        if isinstance(presets_resp, dict) and presets_resp.get("error") is not None:
+            err = presets_resp["error"]
+            st.error(f"加载预设失败：{err.get('detail') if isinstance(err, dict) else err}")
+            return
+        st.session_state.byok_presets = presets_resp.get("providers", []) if isinstance(presets_resp, dict) else []
+
+    presets = st.session_state.byok_presets
+    if not presets:
+        st.warning("暂无可用供应商预设。")
+        return
+
+    preset_map = {p["id"]: p for p in presets}
+
+    tab1, tab2, tab3 = st.tabs(["➕ 添加 / 更新", "📋 已保存", "💬 对话验证"])
+
+    # —— Tab1：添加 / 更新 ——
+    with tab1:
+        st.subheader("添加或更新模型供应商 Key")
+        provider_id = st.selectbox(
+            "选择供应商",
+            options=list(preset_map.keys()),
+            format_func=lambda pid: f"{preset_map[pid]['name']}（{pid}）",
+        )
+        preset = preset_map[provider_id]
+        models = preset.get("models", [])
+        if models:
+            model_id = st.selectbox(
+                "选择模型",
+                options=[m["id"] for m in models],
+                format_func=lambda mid: next(
+                    (f"{m.get('name', mid)}{'（已弃用）' if m.get('deprecated') else ''}" for m in models if m["id"] == mid),
+                    mid,
+                ),
+            )
+        else:
+            model_id = st.text_input("模型 id（该供应商预设未列模型，请手动填写）", value="")
+
+        api_key = st.text_input(
+            "你的 API Key",
+            type="password",
+            help=f"仅保存在你本租户加密库中，明文不落盘。{preset.get('auth_hint', '')}",
+        )
+        api_base = st.text_input(
+            "自定义端点（可选，留空用预设）",
+            value="",
+            placeholder=preset.get("base_url", ""),
+        )
+        doc = preset.get("doc_url")
+        if doc:
+            st.markdown(f"📖 申请 / 文档：[点击查看]({doc})")
+
+        is_default = st.checkbox("设为租户默认供应商（对话 / 自主执行将自动走它）", value=False)
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔌 测试连通性", use_container_width=True):
+                if not api_key:
+                    st.warning("请先填写 API Key")
+                else:
+                    with st.spinner("调用供应商验证..."):
+                        r = make_api_request(
+                            "/api/danchuang/byok/test",
+                            method="POST",
+                            json={
+                                "provider": provider_id,
+                                "api_key": api_key,
+                                "model": model_id or None,
+                                "api_base": api_base or None,
+                            },
+                        )
+                    if isinstance(r, dict):
+                        if r.get("error") is not None:
+                            st.error(f"❌ 验证失败：{r['error']}")
+                        elif r.get("ok") is True:
+                            st.success(f"✅ 连通成功（{r.get('model')}）")
+                        elif r.get("ok") is False:
+                            st.error(f"❌ 验证失败：{r.get('error') or '未知错误'}")
+                        else:
+                            st.error(f"未知响应：{r}")
+        with col_b:
+            if st.button("💾 保存（加密）", type="primary", use_container_width=True):
+                if not api_key:
+                    st.warning("请先填写 API Key")
+                else:
+                    with st.spinner("加密保存中..."):
+                        r = make_api_request(
+                            "/api/danchuang/byok/save",
+                            method="POST",
+                            json={
+                                "provider": provider_id,
+                                "api_key": api_key,
+                                "model": model_id or None,
+                                "api_base": api_base or None,
+                                "is_default": is_default,
+                            },
+                        )
+                    if isinstance(r, dict):
+                        if r.get("error") is not None:
+                            st.error(f"❌ 保存失败：{r['error']}")
+                        elif r.get("ok") is True:
+                            st.success(
+                                f"✅ 已加密保存：{provider_id} / {r.get('model')}"
+                                + ("（已设为默认）" if is_default else "")
+                            )
+                            if "byok_keys" in st.session_state:
+                                del st.session_state.byok_keys
+                        elif r.get("ok") is False:
+                            st.error(f"❌ 保存失败：{r.get('error') or '未知错误'}")
+                        else:
+                            st.error(f"未知响应：{r}")
+
+    # —— Tab2：已保存 ——
+    with tab2:
+        st.subheader("本租户已保存的供应商（密钥已掩码）")
+        if st.button("🔄 刷新列表"):
+            if "byok_keys" in st.session_state:
+                del st.session_state.byok_keys
+        if "byok_keys" not in st.session_state:
+            with st.spinner("加载..."):
+                r = make_api_request("/api/danchuang/byok/list")
+            if isinstance(r, dict) and r.get("error") is not None:
+                st.error(f"加载失败：{r['error']}")
+                st.session_state.byok_keys = []
+            else:
+                st.session_state.byok_keys = r.get("keys", []) if isinstance(r, dict) else []
+
+        keys = st.session_state.byok_keys
+        if not keys:
+            st.info("尚未保存任何供应商 Key。去「添加 / 更新」页填一个吧。")
+        else:
+            for k in keys:
+                c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+                with c1:
+                    st.markdown(f"**{k.get('provider')}**")
+                with c2:
+                    st.markdown(k.get("model", ""))
+                with c3:
+                    st.markdown(f"`{k.get('key_masked', '')}`")
+                with c4:
+                    if k.get("is_default"):
+                        st.markdown("⭐ 默认")
+                    elif st.button("设为默认", key=f"def_{k['provider']}"):
+                        rr = make_api_request(f"/api/danchuang/byok/{k['provider']}/default", method="PUT")
+                        if isinstance(rr, dict) and rr.get("success"):
+                            st.success("已设为默认")
+                            del st.session_state.byok_keys
+                            st.rerun()
+                        else:
+                            st.error(f"失败：{rr}")
+                if st.button("🗑️ 删除", key=f"del_{k['provider']}"):
+                    rr = make_api_request(f"/api/danchuang/byok/{k['provider']}", method="DELETE")
+                    if isinstance(rr, dict) and rr.get("success"):
+                        st.success("已删除")
+                        del st.session_state.byok_keys
+                        st.rerun()
+                    else:
+                        st.error(f"删除失败：{rr}")
+
+    # —— Tab3：对话验证 ——
+    with tab3:
+        st.subheader("用本租户模型直接对话（验证闭环）")
+        st.info("走你「设为默认」的供应商 Key；未设默认会提示先保存并设为默认。")
+        prompt = st.text_area("输入内容", height=100, placeholder="说点什么…")
+        if st.button("🚀 发送", type="primary"):
+            if not prompt.strip():
+                st.warning("请输入内容")
+            else:
+                with st.spinner("调模型中（走你填的默认供应商 Key）..."):
+                    r = make_api_request(
+                        "/api/danchuang/byok/chat",
+                        method="POST",
+                        json={"prompt": prompt},
+                    )
+                if isinstance(r, dict):
+                    if r.get("error") is not None:
+                        st.error(f"❌ 失败：{r['error']}")
+                    elif r.get("ok") is True:
+                        st.success(f"✅ {r.get('model')}")
+                        st.markdown(r.get("content", ""))
+                    elif r.get("ok") is False:
+                        st.error(f"❌ 失败：{r.get('error') or '未知错误'}")
+                    else:
+                        st.error(f"未知响应：{r}")
 
 
 # ---- Chat Page ----
@@ -4550,6 +4762,9 @@ elif page == "📚 OpenMAIC 课堂":
                 st.error(f"生成失败：{err_msg}")
             else:
                 st.error(f"未知响应：{resp}")
+
+elif page == "🔑 模型密钥 BYOK":
+    render_byok_page()
 
 st.divider()
 st.caption(f"AOS v5.0 | {brain.identity.aid}")
