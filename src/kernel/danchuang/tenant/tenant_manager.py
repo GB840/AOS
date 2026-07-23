@@ -102,6 +102,25 @@ class TenantManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_tenant ON usage_log(tenant_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_timestamp ON usage_log(timestamp)")
 
+            # BYOK：租户自有模型供应商密钥（key_cipher 为 Fernet 密文，绝不落明文）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tenant_provider_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tenant_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    api_base TEXT NOT NULL,
+                    key_cipher TEXT NOT NULL,
+                    key_hash TEXT NOT NULL,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
+                    UNIQUE (tenant_id, provider)
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tpk_tenant ON tenant_provider_keys(tenant_id)")
+
             conn.commit()
             logger.info(f"租户数据库初始化完成: {self.db_path}")
         finally:
@@ -570,3 +589,154 @@ class TenantManager:
             return success
         finally:
             conn.close()
+
+    # ── BYOK：租户自有模型供应商密钥（加密落库 + 租户隔离）────────
+
+    def save_provider_key(
+        self,
+        tenant_id: str,
+        provider: str,
+        model: str,
+        api_base: str,
+        key_cipher: str,
+        key_hash: str,
+        is_default: bool = False,
+    ) -> bool:
+        """保存（或更新）租户的某个供应商密钥。
+
+        密钥以 Fernet 密文（key_cipher）落库，明文密钥不落盘。
+        tenant_id + provider 唯一；首个保存的供应商自动成为默认。
+        """
+        now = time.time()
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM tenant_provider_keys WHERE tenant_id = ? LIMIT 1",
+                (tenant_id,),
+            )
+            exists_any = cursor.fetchone() is not None
+            set_default = 1 if (is_default or not exists_any) else 0
+            if set_default:
+                cursor.execute(
+                    "UPDATE tenant_provider_keys SET is_default = 0 WHERE tenant_id = ?",
+                    (tenant_id,),
+                )
+            cursor.execute(
+                """
+                INSERT INTO tenant_provider_keys
+                    (tenant_id, provider, model, api_base, key_cipher, key_hash, is_default, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, provider) DO UPDATE SET
+                    model=excluded.model,
+                    api_base=excluded.api_base,
+                    key_cipher=excluded.key_cipher,
+                    key_hash=excluded.key_hash,
+                    is_default=excluded.is_default,
+                    updated_at=excluded.updated_at
+                """,
+                (tenant_id, provider, model, api_base, key_cipher, key_hash, set_default, now, now),
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def get_provider_key(self, tenant_id: str, provider: str) -> Optional[Dict[str, Any]]:
+        """取某供应商密钥记录（含密文，调用方负责解密）。"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM tenant_provider_keys WHERE tenant_id = ? AND provider = ?",
+                (tenant_id, provider),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_default_provider_key(self, tenant_id: str) -> Optional[Dict[str, Any]]:
+        """取租户默认供应商密钥（无默认则取首个）。"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM tenant_provider_keys WHERE tenant_id = ? AND is_default = 1 LIMIT 1",
+                (tenant_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            cursor.execute(
+                "SELECT * FROM tenant_provider_keys WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 1",
+                (tenant_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_provider_keys(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """列出租户已保存的供应商（仅元数据，不含密钥/密文）。"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT provider, model, api_base, key_hash, is_default, created_at, updated_at "
+                "FROM tenant_provider_keys WHERE tenant_id = ? "
+                "ORDER BY is_default DESC, created_at ASC",
+                (tenant_id,),
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "provider": r["provider"],
+                    "model": r["model"],
+                    "api_base": r["api_base"],
+                    "key_masked": _mask_key(r["key_hash"]),
+                    "is_default": bool(r["is_default"]),
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def delete_provider_key(self, tenant_id: str, provider: str) -> bool:
+        """删除租户的某个供应商密钥。"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM tenant_provider_keys WHERE tenant_id = ? AND provider = ?",
+                (tenant_id, provider),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def set_default_provider(self, tenant_id: str, provider: str) -> bool:
+        """将某供应商设为租户默认（同租户内唯一默认）。"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE tenant_provider_keys SET is_default = 0 WHERE tenant_id = ?",
+                (tenant_id,),
+            )
+            cursor.execute(
+                "UPDATE tenant_provider_keys SET is_default = 1 WHERE tenant_id = ? AND provider = ?",
+                (tenant_id, provider),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+
+def _mask_key(hash_hex: str) -> str:
+    """用 key 哈希末 6 位做掩码展示（哈希不可逆，安全）。"""
+    return f"****{hash_hex[-6:]}" if hash_hex else "****"

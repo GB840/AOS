@@ -121,3 +121,127 @@ def load_jwt_keys(
         "生产环境缺少 JWT 非对称密钥：请设置环境变量 "
         f"{JWT_PRIV_ENV}/{JWT_PUB_ENV}，或在 {sec_dir} 放置 {PRIV_FILENAME}/{PUB_FILENAME}。"
     )
+
+
+# ═══════════════════════════════════════════════════════
+#  BYOK 对称加密（Fernet）
+#  用于加密租户自有的模型供应商 API Key，落库 tenant_provider_keys。
+#  主密钥解析优先级：
+#    1. 环境变量 AOS_BYOK_MASTER_KEY（PEM 字符串 / 任意口令）
+#    2. 文件 <BASE_DIR>/.secrets/byok/byok.key（Fernet 原始密钥）
+#    3. 开发环境：自动生成 Fernet 密钥并持久化
+#    4. 生产环境：缺失即 fail-fast
+# ═══════════════════════════════════════════════════════
+
+import base64
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+BYOK_MASTER_ENV = "AOS_BYOK_MASTER_KEY"
+BYOK_DIRNAME = "byok"
+BYOK_FILENAME = "byok.key"
+
+_master_fernet = None
+
+
+def _byok_key_path(base_dir: Path) -> Path:
+    return Path(base_dir) / ".secrets" / BYOK_DIRNAME / BYOK_FILENAME
+
+
+def _is_raw_fernet_key(value: str) -> bool:
+    """判断字符串是否已是合法 Fernet 密钥（url-safe base64，解码后 32 字节）。"""
+    try:
+        return len(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))) == 32
+    except Exception:
+        return False
+
+
+def _derive_fernet(passphrase: str) -> Fernet:
+    """从任意口令派生 Fernet 密钥（HKDF-SHA256）。"""
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b"aos-byok",
+        info=b"aos-byok-master",
+    )
+    return Fernet(base64.urlsafe_b64encode(hkdf.derive(passphrase.encode("utf-8"))))
+
+
+def _app_env() -> str:
+    return os.environ.get("AOS_ENV", os.environ.get("APP_ENV", "development"))
+
+
+def _default_base() -> Path:
+    # keystore.py at <root>/src/utils/keystore.py
+    return Path(__file__).resolve().parents[2]
+
+
+def load_fernet_master(
+    base_dir: Path | None = None,
+    app_env: str | None = None,
+    *,
+    force_generate: bool = False,
+) -> Fernet:
+    """返回（并缓存）BYOK 主密钥 Fernet 实例。"""
+    global _master_fernet
+    if _master_fernet is not None:
+        return _master_fernet
+
+    base_dir = Path(base_dir) if base_dir else _default_base()
+    app_env = app_env or _app_env()
+
+    # 1) 环境变量（最优先，适合容器 / K8s Secret）
+    env_key = os.environ.get(BYOK_MASTER_ENV)
+    if env_key:
+        _master_fernet = Fernet(env_key) if _is_raw_fernet_key(env_key) else _derive_fernet(env_key)
+        return _master_fernet
+
+    # 2) 文件回退
+    path = _byok_key_path(base_dir)
+    if path.is_file():
+        raw = _load_pem(path)
+        if raw:
+            _master_fernet = Fernet(raw) if _is_raw_fernet_key(raw) else _derive_fernet(raw)
+            return _master_fernet
+
+    # 3) 生成（仅开发环境或显式 force_generate）
+    if force_generate or app_env != "production":
+        key = Fernet.generate_key()
+        write_secret_file(path, key.decode("utf-8"))
+        _master_fernet = Fernet(key)
+        logger.warning(
+            "⚠️ 已自动生成 BYOK 主密钥并持久化到 %s（开发环境）。"
+            "生产环境请设置环境变量 %s，勿依赖自动生成。",
+            path,
+            BYOK_MASTER_ENV,
+        )
+        return _master_fernet
+
+    # 4) 生产环境缺失 -> fail-fast
+    raise RuntimeError(
+        f"生产环境缺少 BYOK 主密钥：请设置环境变量 {BYOK_MASTER_ENV}，"
+        f"或在 {path} 放置密钥文件。"
+    )
+
+
+def encrypt_secret(
+    plaintext: str,
+    *,
+    base_dir: Path | None = None,
+    app_env: str | None = None,
+) -> str:
+    """加密明文密钥，返回可落库的密文字符串。"""
+    f = load_fernet_master(base_dir, app_env)
+    return f.encrypt(plaintext.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_secret(
+    ciphertext: str,
+    *,
+    base_dir: Path | None = None,
+    app_env: str | None = None,
+) -> str:
+    """解密密文，返回明文密钥。"""
+    f = load_fernet_master(base_dir, app_env)
+    return f.decrypt(ciphertext.encode("utf-8")).decode("utf-8")

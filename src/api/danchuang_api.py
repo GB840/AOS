@@ -420,5 +420,72 @@ def register_routes(app: FastAPI) -> None:
         os = _get_os()
         return os.system_status().to_dict()
 
+    # ═══════════════════════════════════════════════════════
+    #  第九区：BYOK 模型供应商（自助填 Key + 加密隔离）
+    # ═══════════════════════════════════════════════════════
+
+    class ByokSaveRequest(BaseModel):
+        provider: str = Field(..., description="供应商 id，见 /byok/presets")
+        api_key: str = Field(..., description="用户自己的 API Key")
+        model: Optional[str] = Field(None, description="模型 id，默认取预设首个")
+        api_base: Optional[str] = Field(None, description="自定义端点，默认取预设")
+        is_default: bool = Field(False, description="是否设为租户默认")
+
+    class ByokTestRequest(BaseModel):
+        provider: str = Field(..., description="供应商 id")
+        api_key: str = Field(..., description="待测试的 API Key")
+        model: Optional[str] = Field(None, description="模型 id")
+        api_base: Optional[str] = Field(None, description="自定义端点")
+
+    class ByokChatRequest(BaseModel):
+        prompt: str = Field(..., description="对话内容")
+        provider: Optional[str] = Field(None, description="指定供应商，缺省用租户默认")
+
+    try:
+        from kernel.danchuang.tenant.byok import ByokStore
+        _byok = ByokStore()
+
+        @router.get("/byok/presets", summary="列出可填 Key 的国内主流模型供应商")
+        async def byok_presets():
+            return {"providers": _byok.list_presets()}
+
+        @router.post("/byok/test", summary="用真实 Key 测试供应商连通性")
+        async def byok_test(req: ByokTestRequest, x_api_key: Optional[str] = Header(None)):
+            _get_tenant_from_key(x_api_key)
+            return _byok.test_provider(req.provider, req.api_key, req.model, req.api_base)
+
+        @router.post("/byok/save", summary="保存（加密）供应商 Key")
+        async def byok_save(req: ByokSaveRequest, x_api_key: Optional[str] = Header(None)):
+            tenant = _get_tenant_from_key(x_api_key)
+            tid = tenant["tenant_id"] if isinstance(tenant, dict) else tenant.tenant_id
+            return _byok.save(tid, req.provider, req.api_key, req.model, req.api_base, req.is_default)
+
+        @router.get("/byok/list", summary="列出本租户已保存的供应商")
+        async def byok_list(x_api_key: Optional[str] = Header(None)):
+            tenant = _get_tenant_from_key(x_api_key)
+            tid = tenant["tenant_id"] if isinstance(tenant, dict) else tenant.tenant_id
+            return {"keys": _byok.list_keys(tid)}
+
+        @router.delete("/byok/{provider}", summary="删除供应商 Key")
+        async def byok_delete(provider: str, x_api_key: Optional[str] = Header(None)):
+            tenant = _get_tenant_from_key(x_api_key)
+            tid = tenant["tenant_id"] if isinstance(tenant, dict) else tenant.tenant_id
+            return {"success": _byok.delete(tid, provider)}
+
+        @router.put("/byok/{provider}/default", summary="设为租户默认供应商")
+        async def byok_set_default(provider: str, x_api_key: Optional[str] = Header(None)):
+            tenant = _get_tenant_from_key(x_api_key)
+            tid = tenant["tenant_id"] if isinstance(tenant, dict) else tenant.tenant_id
+            return {"success": _byok.set_default(tid, provider)}
+
+        @router.post("/byok/chat", summary="用本租户模型供应商直接对话（验证闭环）")
+        async def byok_chat(req: ByokChatRequest, x_api_key: Optional[str] = Header(None)):
+            tenant = _get_tenant_from_key(x_api_key)
+            tid = tenant["tenant_id"] if isinstance(tenant, dict) else tenant.tenant_id
+            return _byok.chat(tid, req.prompt, req.provider)
+
+    except Exception as e:  # BYOK 模块异常不应拖垮整个 API
+        logger.error("BYOK 路由加载失败（已跳过）: %s", e, exc_info=True)
+
     app.include_router(router)
-    logger.info("单创OS API v2.0 已挂载: /api/danchuang (共 40+ 端点)")
+    logger.info("单创OS API v2.0 已挂载: /api/danchuang (含 BYOK 第九区)")

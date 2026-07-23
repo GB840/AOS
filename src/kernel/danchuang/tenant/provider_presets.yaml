@@ -1,0 +1,212 @@
+# 单创OS · 国内主流大模型供应商预设（BYOK 自助填 Key）
+#
+# 核实日期: 2026-07-23，来源各厂商官方文档（非凭记忆）。
+# 用户流程：前端下拉选 provider -> 填自己的 API Key -> 测试 -> 保存（加密落库）。
+# 所有厂商均提供 OpenAI 兼容端点，AOS 复用自有 LiteLLM 平面透传，不重新发明路由。
+#
+# 字段说明：
+#   id          供应商唯一 id（保存时用作主键）
+#   name        展示名
+#   base_url    OpenAI 兼容端点
+#   api_key_env 该厂商官方环境变量名（仅作提示/文档，BYOK 由用户自己填）
+#   doc_url     申请 Key 的官网/控制台
+#   auth_hint   Key 格式提示
+#   models[]    代表模型（id 即请求时的 model 名）
+
+providers:
+  - id: deepseek
+    name: DeepSeek
+    base_url: https://api.deepseek.com
+    api_key_env: DEEPSEEK_API_KEY
+    doc_url: https://platform.deepseek.com
+    auth_hint: "控制台申请的 API Key，格式 sk-..."
+    models:
+      - id: deepseek-v4-flash
+        name: DeepSeek V4 Flash
+      - id: deepseek-v4-pro
+        name: DeepSeek V4 Pro
+      - id: deepseek-chat
+        name: DeepSeek Chat（2026-07-24 弃用）
+        deprecated: true
+
+  - id: zhipu
+    name: 智谱 GLM
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    api_key_env: ZHIPU_API_KEY
+    doc_url: https://open.bigmodel.cn
+    auth_hint: "智谱开放平台申请的 API Key"
+    models:
+      - id: glm-4-plus
+        name: GLM-4-Plus
+      - id: glm-4-flash
+        name: GLM-4-Flash
+      - id: glm-4-air
+        name: GLM-4-Air
+      - id: glm-4-long
+        name: GLM-4-Long
+
+  - id: qwen
+    name: 通义千问（阿里百炼）
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+    doc_url: https://dashscope.console.aliyun.com
+    auth_hint: "百炼平台 API-KEY，sk-... 格式"
+    models:
+      - id: qwen-max
+        name: Qwen-Max
+      - id: qwen-plus
+        name: Qwen-Plus
+      - id: qwen-turbo
+        name: Qwen-Turbo
+      - id: qwen-flash
+        name: Qwen-Flash
+      - id: qwq-plus
+        name: QwQ-Plus（推理）
+      - id: qwen-long
+        name: Qwen-Long
+
+  - id: moonshot
+    name: Kimi（月之暗面）
+    base_url: https://api.moonshot.cn/v1
+    api_key_env: MOONSHOT_API_KEY
+    doc_url: https://platform.moonshot.cn
+    auth_hint: "月之暗面开放平台 API Key"
+    models:
+      - id: moonshot-v1-8k
+        name: Moonshot V1 8K
+      - id: moonshot-v1-32k
+        name: Moonshot V1 32K
+      - id: moonshot-v1-128k
+        name: Moonshot V1 128K
+
+  - id: baidu_qianfan
+    name: 文心千帆（百度）
+    base_url: https://qianfan.baidubce.com/v2
+    api_key_env: QIANFAN_API_KEY
+    doc_url: https://cloud.baidu.com/doc/qianfan
+    auth_hint: "千帆 API Key，格式 bce-v3/ALTAK-..."
+    models:
+      - id: ernie-4.0-8k
+        name: ERNIE 4.0 8K
+      - id: ernie-4.0-turbo-8k
+        name: ERNIE 4.0 Turbo 8K
+      - id: ernie-3.5-8k
+        name: ERNIE 3.5 8K
+      - id: ernie-speed-8k
+        name: ERNIE Speed 8K
+
+  - id: xfyun_spark
+    name: 讯飞星火
+    base_url: https://spark-api-open.xf-yun.com/v1
+    api_key_env: SPARK_API_KEY
+    doc_url: https://www.xfyun.cn/doc/spark/HTTP%E5%85%BC%E5%AE%B9%E6%8E%A5%E5%8F%A3.html
+    auth_hint: "讯飞开放平台 API Key（部分模型还需 AppId/Secret，按厂商文档）"
+    models:
+      - id: generalv3.5
+        name: 星火 V3.5
+      - id: 4.0Ultra
+        name: 星火 4.0 Ultra
+      - id: pro-128k
+        name: 星火 Pro 128K
+      - id: lite
+        name: 星火 Lite
+
+  - id: minimax
+    name: MiniMax
+    base_url: https://api.minimax.io/v1
+    api_key_env: MINIMAX_API_KEY
+    doc_url: https://platform.minimax.io
+    auth_hint: "MiniMax 开放平台 Token Plan Key（sk-...）"
+    models:
+      - id: MiniMax-M2.7
+        name: MiniMax M2.7
+      - id: MiniMax-M2.7-highspeed
+        name: MiniMax M2.7 HighSpeed
+      - id: abab6.5s-chat
+        name: ABAB 6.5S
+
+  - id: baichuan
+    name: 百川智能
+    base_url: https://api.baichuan-ai.com/v1
+    api_key_env: BAICHUAN_API_KEY
+    doc_url: https://platform.baichuan-ai.com
+    auth_hint: "百川开放平台 API Key"
+    models:
+      - id: Baichuan4
+        name: Baichuan4
+      - id: Baichuan4-Turbo
+        name: Baichuan4-Turbo
+      - id: Baichuan4-Air
+        name: Baichuan4-Air
+
+  - id: hunyuan
+    name: 腾讯混元
+    base_url: https://hunyuan.tencentcloudapi.com/v1
+    api_key_env: HUNYUAN_API_KEY
+    doc_url: https://cloud.tencent.com/document/product/1729
+    auth_hint: "腾讯云 SecretId/SecretKey 或混元专用 Key"
+    models:
+      - id: hunyuan-turbo-latest
+        name: Hunyuan Turbo
+      - id: hunyuan-large
+        name: Hunyuan Large
+      - id: hunyuan-pro
+        name: Hunyuan Pro
+      - id: hunyuan-standard
+        name: Hunyuan Standard
+      - id: hunyuan-lite
+        name: Hunyuan Lite
+
+  - id: stepfun
+    name: 阶跃星辰
+    base_url: https://api.stepfun.com/v1
+    api_key_env: STEPFUN_API_KEY
+    doc_url: https://platform.stepfun.com
+    auth_hint: "阶跃开放平台 API Key"
+    models:
+      - id: step-1-128k
+        name: Step-1 128K
+      - id: step-1-flash
+        name: Step-1 Flash
+      - id: step-2-16k
+        name: Step-2 16K
+
+  - id: doubao
+    name: 豆包（火山方舟）
+    base_url: https://ark.cn-beijing.volces.com/api/v3
+    api_key_env: ARK_API_KEY
+    doc_url: https://console.volcengine.com/ark
+    auth_hint: "火山方舟 API Key（ARK_API_KEY）"
+    models:
+      - id: doubao-seed-1-6-250615
+        name: Doubao Seed 1.6
+      - id: doubao-pro-32k
+        name: Doubao Pro 32K
+      - id: doubao-1-5-thinking-vision-pro
+        name: Doubao 1.5 Thinking Vision Pro
+
+  - id: lingyi
+    name: 零一万物
+    base_url: https://api.lingyiwanwu.com/v1
+    api_key_env: LINGYI_API_KEY
+    doc_url: https://platform.lingyiwanwu.com
+    auth_hint: "零一万物开放平台 API Key"
+    models:
+      - id: yi-lightning
+        name: Yi Lightning
+      - id: yi-large
+        name: Yi Large
+
+  - id: siliconflow
+    name: 硅基流动（聚合）
+    base_url: https://api.siliconflow.cn/v1
+    api_key_env: SILICONFLOW_API_KEY
+    doc_url: https://cloud.siliconflow.cn
+    auth_hint: "硅基流动 API Key（一个 Key 直连多家开源模型）"
+    models:
+      - id: deepseek-ai/DeepSeek-V3
+        name: DeepSeek-V3（SiliconFlow）
+      - id: Qwen/Qwen2.5-72B-Instruct
+        name: Qwen2.5-72B（SiliconFlow）
+      - id: Pro/deepseek-ai/DeepSeek-R1
+        name: DeepSeek-R1（SiliconFlow 加速）
