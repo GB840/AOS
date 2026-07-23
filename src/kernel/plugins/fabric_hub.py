@@ -327,16 +327,6 @@ class FabricHub:
             self.register_code_team()
         except Exception as e:  # noqa: BLE001 - 芯粒注册失败不拖垮枢纽
             _LOG.warning("默认注册 code_team 引擎失败: %s", e)
-        # FreeLLMAPI：OpenAI 兼容聚合 LLM 供应商（MIT，github.com/tashfeenahmed/freellmapi，
-        # 11k+ stars）。把多家免费档聚合成 /v1/chat/completions。仅当 AOS_FREELLMAPI_URL
-        # 配置时注册进推理面（opt-in）；未配置静默跳过。定位：开发/测试阶段模型对比用，
-        # 非护眼眼镜量产商用通道（免费档 ToS 限制，详见适配器 docstring）。
-        if os.environ.get("AOS_FREELLMAPI_URL"):
-            try:
-                from core.fabric.adapters.freellmapi_adapter import FreeLLMAPIAdapter
-                self._registry.register(FreeLLMAPIAdapter())
-            except Exception as e:  # noqa: BLE001 - 远端/网络故障不拖垮枢纽
-                _LOG.warning("FreeLLMAPI 适配器注册失败(将跳过): %s", e)
         # ComfyUI 本地视觉生产引擎：接成可路由芯粒（media.image / media.video），
         # 让一句话 prompt 经 hub 自动落到本地 ComfyUI 出图（本地优先于云端 agnes）。
         try:
