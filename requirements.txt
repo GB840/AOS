@@ -1,112 +1,24 @@
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-pydantic>=2.6.0
-pydantic-settings>=2.1.0
-pyyaml>=6.0
-python-multipart>=0.0.6
+# =============================================================================
+# 已废弃 —— 依赖真相见 pyproject.toml [project].dependencies
+# 本文件仅作向后兼容保留（verify_setup.py / 旧文档仍引用它）。
+# 新环境请用:  uv pip install -e ".[dev,test]"
+# =============================================================================
+# 单创OS核心依赖
+fastapi>=0.100.0
+uvicorn>=0.20.0
+pydantic>=2.0.0
 
-openai>=1.12.0
-requests>=2.31.0
-websocket-client>=1.7.0
-chromadb>=0.4.22
-python-dotenv>=1.0.0
+# AI 编排引擎（真正开源库）
+langgraph>=1.0.0
+langchain-core>=1.0.0
+crewai>=1.0.0
 
-streamlit>=1.30.0
-streamlit-webrtc>=0.45.0
-plotly>=5.18.0
+# 本地大模型（可选，根据硬件配置安装）
+# transformers>=4.30.0
+# torch>=2.0.0
+# llama-cpp-python>=0.2.0
 
-# 子智能体依赖
-# jiuwenswarm (OpenClaw) — 本地路径安装: pip install -e C:\Users\Administrator\jiuwenclaw
-httpx>=0.27.0
-
-# 开源项目依赖
-cognee>=1.0.0
-duckduckgo-search>=5.3.0
-jina>=3.26.0
-
-# Hermes-Agent (Nous Research, 真实加载 external/hermes-agent) 的 Windows 专属依赖.
-# 缺失会导致 `from run_agent import AIAgent` 实例化失败 -> AOS 回退到自带 HermesAgent.
-# hermes-agent 的 pyproject 将其列为 Windows 平台依赖, 这里显式固定以便复现.
-concurrent-log-handler==0.9.29
-
-# ============================================================
-# 生产必需依赖（AOS 启动 / 核心功能）—— 此前漏声明，2026-07-09 补全
-# 以下包被 src 顶层或核心生产路径 import，必须随 aos venv 安装，否则 AOS 启动即崩。
-# 来源：用户 8 条清单之「依赖声明 / mcp SDK 未声明」映射 + 实际 import 审计。
-# ============================================================
-
-# MCP: 显式锁定 mcp==1.28.0，目的是满足 ag2==0.14.0 的传递依赖约束（ag2 锁 mcp==1.28.0）。
-# 注意（诚实修正，避免误导）：AOS 自有 `src/mcp/` 包（本地实现）与 PyPI 的 mcp SDK 同名但相互独立；
-#       main.py 顶层 `from mcp import MCPMessage` 实际解析到本地 `src/mcp/` 包，并非本 PyPI 包。
-#       仍显式声明本 PyPI mcp==1.28.0，是为了与 ag2 的锁版一致，
-#       否则 `pip install -r requirements.txt` 会因 mcp 版本冲突而 ResolutionImpossible 失败。
-mcp==1.28.0
-
-# AG2 (AutoGen 社区分叉, MIT): /api/groupchat 生产路径驱动真实多智能体编排。
-ag2==0.14.0
-
-# LiteLLM: 推理平面 (inference.llm) 统一 LLM 网关，fabric 默认 live。
-litellm>=1.91.0
-
-# PyJWT: /api/auth/token 签发 JWT（安全层 Bearer 认证）。
-# 下限由 mcp==1.28.0 决定：mcp 要求 pyjwt[crypto]>=2.10.1，故此处 >=2.10.1。
-# AOS 仅用 jwt.encode/decode（2.x API 稳定），取最新 2.x 即可。
-PyJWT>=2.10.1
-
-# psycopg2: PostgresStateBackend 可插拔状态后端（STATE_BACKEND=postgres 时启用）。
-psycopg2-binary==2.9.12
-
-# 异步 SQLite：src/core/pool/connection_pool.py 顶层 `import aiosqlite`，
-# 缺失会导致 AOS 启动即 ImportError（2026-07-11 实测）。必须随 aos venv 安装。
-aiosqlite>=0.19.0
-
-# 认证平面：src/api/security.py 顶层 `import bcrypt`，API Key 哈希校验（恒定时间）。
-bcrypt>=4.1.0
-
-# 统一网关：src/api/gateway.py 顶层 `import aiohttp`，反向代理 /web /openclaw /deerflow。
-aiohttp>=3.10.0  # 3.9.x 含已知 SSRF CVE（审计 S-18），最低锁 3.10.0
-
-# ============================================================
-# 2026-07-11 依赖审计补齐（诊断 Phase 0.5）
-# 以下 6 个包在 src/ 中被顶层 import，但此前未声明。
-# 全新环境 pip install -r requirements.txt 后缺失即崩。
-# 来源：全量 import 扫描交叉比对 requirements.txt。
-# ============================================================
-
-# SQLModel: src/core/database/base.py + engine.py + 7 个模型文件顶层 `from sqlmodel import ...`。
-# 缺失 = AOS 启动即 ImportError。10 个文件依赖。
-sqlmodel>=0.0.14
-
-# Temporal: src/deerflow/echo_workflow.py 顶层 `from temporalio import workflow, activity`。
-# 缺失 = DeerFlow 工作流模块无法加载。
-temporalio>=1.4.0
-
-# cachetools: src/utils/cache_manager.py 顶层 `from cachetools import TTLCache, LRUCache`。
-# 缺失 = 缓存管理模块无法导入。
-cachetools>=5.3.0
-
-# pandas: src/web/app.py 顶层 `import pandas as pd`。
-# 缺失 = Streamlit UI 启动即崩（streamlit 已在依赖中，pandas 是其隐含前提）。
-pandas>=2.0.0
-
-# protobuf + grpcio: src/common/*_pb2.py 顶层 `from google.protobuf import ...`，
-# src/common/*_pb2_grpc.py + src/meta_orchestrator/server.py 顶层 `import grpc`。
-# 此前靠 chromadb / mcp 传递安装，但传递依赖不保证版本稳定，显式声明防断裂。
-protobuf>=4.25.0
-grpcio>=1.60.0
-
-# 智谱 SDK：litellm 走 zhipu 时走 OpenAI 兼容透传，本身不需要 zhipuai 包
-# （AOS src 中无任何 `import zhipuai`）。且 zhipuai 元数据锁 pyjwt<2.9.0，
-# 与 mcp 要求的 pyjwt>=2.10.1 硬冲突，会令 `pip install -r` ResolutionImpossible。
-# 故不列入必需依赖；如需独立使用 zhipuai SDK，请单独 `pip install --no-deps zhipuai`。
-# zhipuai>=2.1.5  # 取消注释仅作版本参考，勿与 mcp 同装
-
-# ============================================================
-# 可选基础设施平面（装到 AOS_EXTRA_SITE 指向的 venv，默认 default）
-# 均为懒导入：仅当对应能力被配置/启用才 import，缺失则 fabric 优雅降级。
-# 版本为当前已装实测值，供复现参考（注释掉表示不强制装进 aos venv）。
-# ============================================================
-# mem0ai>=2.0.0          # 语义记忆平面  src/core/memory/mem0_store.py
-# langfuse>=4.13.0       # 可观测/追踪平面 src/core/observability/langfuse_tracer.py
-# browser-use>=0.11.0    # ACI/动手平面   src/core/fabric/adapters/aci_browser_adapter.py
-# wasmtime>=<按需>        # Wasm 沙箱(可选) src/core/platform/sandbox.py 懒导入，缺失仅禁用 WasmSandbox
+# 数据与工具
+numpy>=1.24.0
+PyYAML>=6.0
+requests>=2.30.0

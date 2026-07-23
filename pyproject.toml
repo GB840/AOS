@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "aos-kernel"
@@ -21,12 +21,20 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-requires-python = ">=3.10"
-# 注意: 本 pyproject 仅描述「aos-kernel 最小内核」打包(物种思维/可信记忆等核心模块,
-# stdlib-only 可独立 import)。AOS 完整运行时(FastAPI 网关 / MCP / 多智能体 / 记忆后端等)
-# 的重依赖见仓库根 requirements.txt, 由 Dockerfile / Makefile `install` 安装, 不在此列。
-# 二者分工: pyproject = 内核可分发构件; requirements.txt = 完整可运行系统的依赖真相。
-dependencies = []  # Zero heavy dependencies — stdlib only (见 requirements.txt 获取完整运行时)
+requires-python = ">=3.11"
+# 统一依赖声明：pyproject.toml 是唯一真相。
+# 旧的 requirements.txt 已废弃，由 `uv pip compile` 按需生成锁文件。
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "pydantic>=2.0.0",
+    "langgraph>=1.0.0",
+    "langchain-core>=1.0.0",
+    "crewai>=1.0.0",
+    "numpy>=1.24.0",
+    "PyYAML>=6.0",
+    "requests>=2.30.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0"]
