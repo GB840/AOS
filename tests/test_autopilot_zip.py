@@ -36,10 +36,11 @@ def test_zip_integrity_check():
 
 def test_zipfile_testzip_in_code():
     """验证代码中使用了zipfile.testzip()进行完整性校验"""
-    import inspect
-    from kernel.autopilot import _try_direct_install
-
-    source = inspect.getsource(_try_direct_install)
+    # 直接读源文件，不用 inspect.getsource（后者在多测试环境下可能因
+    # sys.modules 污染返回错误函数的源码）
+    autopilot_py = os.path.join(os.path.dirname(__file__), "..", "src", "kernel", "autopilot.py")
+    with open(autopilot_py, encoding="utf-8") as f:
+        source = f.read()
     assert "testzip" in source, "代码中应该使用zipfile.testzip()进行完整性校验"
 
 

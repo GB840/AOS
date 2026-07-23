@@ -43,5 +43,6 @@ if not RUN_NATIVE:
     # 必须跳过收集，否则会杀死整个 pytest 进程。
     collect_ignore += [
         "test_memory.py",
+        "test_memory_root.py",
         "test_agency_roles_consolidation.py",
     ]

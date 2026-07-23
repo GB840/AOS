@@ -28,7 +28,11 @@ extension = _load("sc_extension", "kernel/plugins/extension.py")
 ollama_gw = _load("sc_ollama_gw", "kernel/plugins/ollama_gateway.py")
 
 # 让 singlechuang 的相对导入解析到已加载模块（验证编排层真的消费三件套）
-sys.modules.setdefault("kernel", types.ModuleType("kernel"))
+# 注意：必须给 stub kernel 设 __path__，否则会污染真正的 kernel 包，
+# 导致其它测试 from kernel.refinery import ... 时报 'kernel' is not a package。
+_k = types.ModuleType("kernel")
+_k.__path__ = [os.path.join(SRC, "kernel")]
+sys.modules.setdefault("kernel", _k)
 _kp = types.ModuleType("kernel.plugins")
 _kp.__path__ = [os.path.join(SRC, "kernel", "plugins")]
 sys.modules["kernel.plugins"] = _kp

@@ -6,10 +6,13 @@ from core.fabric.adapter import InvokeResult
 
 def test_path_modification_confirmation():
     """测试PATH修改前打印确认消息"""
-    import inspect
-    from kernel.autopilot import _try_direct_install
+    # 直接读源文件，不用 inspect.getsource（后者在多测试环境下可能因
+    # sys.modules 污染返回错误函数的源码）
+    import os
+    autopilot_py = os.path.join(os.path.dirname(__file__), "..", "src", "kernel", "autopilot.py")
+    with open(autopilot_py, encoding="utf-8") as f:
+        source = f.read()
 
-    source = inspect.getsource(_try_direct_install)
     assert "即将修改用户PATH" in source or "添加到PATH" in source, "代码中应该在PATH修改前打印确认消息"
 
 
