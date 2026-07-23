@@ -50,6 +50,43 @@ from api.security import (
 from utils.exceptions import setup_exception_handlers
 from api.gateway import mount_gateway, close_gateway_session, probe_upstreams
 
+# BYOK（单创OS）：租户自助填 Key 后，把其默认供应商 key 注入推理平面。
+# 延迟导入，避免无 BYOK 依赖时拖垮 API 启动；异常由调用处捕获。
+try:
+    from utils.llm_override import llm_override as _llm_override_ctx
+    from kernel.danchuang.tenant.tenant_manager import TenantManager as _TenantManager
+    from kernel.danchuang.tenant.byok import ByokStore as _ByokStore
+
+    _BYOK_AVAILABLE = True
+except Exception as _e:  # pragma: no cover - BYOK 缺失不应阻断 API
+    logger.warning("BYOK 模块不可用，租户 key 注入禁用: %s", _e)
+    _BYOK_AVAILABLE = False
+    _llm_override_ctx = None
+    _TenantManager = None
+    _ByokStore = None
+
+
+def _resolve_byok_override(x_api_key: Optional[str]):
+    """解析 X-API-Key → 租户 → BYOK 默认供应商负载。
+
+    返回 llm_override 上下文管理器（已 enter）或 None。
+    无 key / 无租户 / 租户未配默认供应商 → None（走原 env 配置，零回归）。
+    """
+    if not _BYOK_AVAILABLE or not x_api_key:
+        return None
+    try:
+        tenant = _TenantManager().validate_api_key(x_api_key)
+        if not tenant:
+            return None
+        payload = _ByokStore().resolve_tenant_payload(tenant.tenant_id)
+        if not payload:
+            return None
+        return _llm_override_ctx(payload)
+    except Exception as e:  # 解析失败绝不影响主流程
+        logger.warning("BYOK 覆盖解析失败（忽略，走默认配置）: %s", e)
+        return None
+
+
 logging.basicConfig(
     level=logging.INFO if config.DEBUG else logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -745,12 +782,17 @@ async def fabric_status():
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, x_api_key: Optional[str] = Header(None)):
     # 单基座第一性：默认经 FabricHub 单一运行时；brain.py 已废弃为 opt-in 兜底。
     # 后端链由 select_chat_backends() 依据 env 决策（默认 [fabric, kernel]），
     # 每个后端失败诚实回退到下一后端（理念6/9），绝不伪造响应。
+    # BYOK：若 X-API-Key 对应租户配了默认模型供应商，本次请求所有 LLM 调用
+    # 自动走租户自己填的 key（见 utils.llm_override）。无 key/无配置则走原 env。
     bridge = getattr(app.state, "bridge", None)
+    _ov = _resolve_byok_override(x_api_key)
     try:
+        if _ov is not None:
+            _ov.__enter__()
         if bridge is not None:
             bridge.record_chat_request()
 
@@ -850,6 +892,9 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=_safe_detail(e))
+    finally:
+        if _ov is not None:
+            _ov.__exit__(None, None, None)
 
 # ---- v1.0 内核路由（双轨并存，走 mistralrs 本地推理）----
 
@@ -945,7 +990,7 @@ async def kernel_chat(request: KernelChatRequest):
 
 
 @app.post("/api/v1/run_task")
-async def kernel_run_task(request: RunTaskRequest):
+async def kernel_run_task(request: RunTaskRequest, x_api_key: Optional[str] = Header(None)):
     """v1.0 think→do 闭环：规划 → steps[] → OrchestrationChiplet 逐跳执行。
 
     与 /api/v1/chat 的区别：chat 只调一次 LLM；run_task 把任务拆成多步，
@@ -954,11 +999,18 @@ async def kernel_run_task(request: RunTaskRequest):
     bridge = getattr(app.state, "bridge", None)
     if bridge is None:
         raise HTTPException(status_code=503, detail="kernel not mounted")
-    result = await asyncio.to_thread(
-        bridge.run_task, task=request.task, planner=request.planner,
-        session_id=request.session_id,
-    )
-    return result
+    _ov = _resolve_byok_override(x_api_key)
+    try:
+        if _ov is not None:
+            _ov.__enter__()
+        result = await asyncio.to_thread(
+            bridge.run_task, task=request.task, planner=request.planner,
+            session_id=request.session_id,
+        )
+        return result
+    finally:
+        if _ov is not None:
+            _ov.__exit__(None, None, None)
 
 
 @app.get("/api/v1/health")
@@ -2231,8 +2283,13 @@ class AutopilotRequest(BaseModel):
 
 
 # 自主环后台执行：提交即返回 run_id，前端（web/portal.html 任务中心）轮询 /api/autopilot/status/{run_id} 看实时进度
-def _ap_run_safe(task: str, planner: str, run_id: str) -> None:
-    """在后台线程跑自主环；异常时落一个错误 checkpoint，使状态端点能反映失败。"""
+def _ap_run_safe(task: str, planner: str, run_id: str, byok_override=None) -> None:
+    """在后台线程跑自主环；异常时落一个错误 checkpoint，使状态端点能反映失败。
+
+    byok_override: 若本次请求解析到租户 BYOK 默认供应商，传入已 enter 的
+    llm_override 上下文管理器；运行结束后在此 exit，使自主环内所有 LLM 调用
+    走租户 key。
+    """
     from kernel.autopilot import run as _ap_run
     from kernel.run_state_store import save_checkpoint, mark_done
     try:
@@ -2247,21 +2304,29 @@ def _ap_run_safe(task: str, planner: str, run_id: str) -> None:
             mark_done(run_id)
         except Exception:  # noqa: BLE001
             pass
+    finally:
+        if byok_override is not None:
+            byok_override.__exit__(None, None, None)
 
 
 @app.post("/api/autopilot/run")
-async def autopilot_run(req: AutopilotRequest):
+async def autopilot_run(req: AutopilotRequest, x_api_key: Optional[str] = Header(None)):
     """一句话触发 AOS 自主闭环（默认智谱直连，无需 ag2/ollama）。
 
     立即返回 run_id，自主环在后台运行；前端轮询 /api/autopilot/status/{run_id}
     即可看到规划→执行→反思的实时进度。服务器常驻即可，不用单独启任何组件。
+    BYOK：若 X-API-Key 对应租户配了默认模型供应商，自主环内 LLM 调用走租户 key。
     """
     try:
         import uuid as _uuid
         run_id = req.run_id or f"ap-{_uuid.uuid4().hex[:12]}"
+        # 解析并 enter 覆盖（在请求协程上下文设置，随 to_thread 传入后台线程）。
+        _ov = _resolve_byok_override(x_api_key)
+        if _ov is not None:
+            _ov.__enter__()
         loop = asyncio.get_running_loop()
         loop.create_task(
-            asyncio.to_thread(_ap_run_safe, req.task, req.planner, run_id)
+            asyncio.to_thread(_ap_run_safe, req.task, req.planner, run_id, _ov)
         )
         return {"ok": True, "run_id": run_id, "status": "running"}
     except Exception as e:

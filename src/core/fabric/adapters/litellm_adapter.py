@@ -57,6 +57,16 @@ def _import_litellm():
     return mod
 
 
+def _get_llm_override() -> "dict | None":
+    """读取请求级 BYOK LLM 覆盖负载（无则 None）。见 utils.llm_override。"""
+    try:
+        from utils.llm_override import get_llm_override
+
+        return get_llm_override()
+    except Exception:  # 模块缺失/异常绝不阻断主流程
+        return None
+
+
 def _resolve_key() -> str | None:
     """Resolve the real API key from process env（多供应商动态配置）。"""
     # 1) explicit per-call payload（由调用方传入）
@@ -77,7 +87,11 @@ def _resolve_key() -> str | None:
 def _build_kwargs(req: InvokeRequest) -> dict[str, Any]:
     """Translate an AOS request into a real litellm.completion() call.
 
-    UNIFIED routing (the inference plane):
+    BYOK 注入（请求级 LLM 覆盖，见 utils.llm_override）：若当前请求上下文带有
+    租户 BYOK 默认供应商负载、且本次 payload 未显式带 api_key，则把租户的
+    model/api_base/api_key/opts 合并进调用——使 chat / run_task / autopilot 等
+    所有 LLM_GATEWAY 调用自动走租户自己填的 key。复用下方既有路由逻辑。
+
       * model "zhipu/<name>" -> strip prefix, call Zhipu via its OpenAI-
         compatible endpoint (api_base + custom_llm_provider="openai"). This is
         what actually works here (litellm's native zhipu module is unmapped in
@@ -92,7 +106,19 @@ def _build_kwargs(req: InvokeRequest) -> dict[str, Any]:
     an image/video model name poison the text completion, and we must surface
     `content` as the prompt.
     """
-    payload = req.payload or {}
+    payload = dict(req.payload or {})
+
+    # —— BYOK 请求级覆盖：仅在 payload 未显式带 api_key 时合并租户 key ——
+    _ov = _get_llm_override()
+    if _ov and not payload.get("api_key"):
+        payload["api_key"] = _ov.get("api_key")
+        if _ov.get("api_base"):
+            payload["api_base"] = _ov["api_base"]
+        if _ov.get("model"):
+            payload["model"] = _ov["model"]
+        if _ov.get("opts"):
+            payload.setdefault("opts", {}).update(_ov["opts"])
+
     model = payload.get("model", LITELLM_CONFIG["default_model"])
     # 防御：上游串味的模型名不能拿来做文本补全，否则 litellm 报
     # "LLM Provider NOT provided"。退回文本默认模型。

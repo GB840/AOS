@@ -152,3 +152,58 @@ def test_chat_with_explicit_provider(store):
     assert r["model"] == "glm-4-flash"
     # 指定未保存的供应商
     assert store.chat("t1", "hi", provider="deepseek")["ok"] is False
+
+
+def test_llm_override_merges_into_adapter():
+    """请求级 BYOK 覆盖应并入 LiteLLMAdapter 的调用负载。
+
+    不联网：monkeypatch litellm.completion，断言 override 的 key/base/model/
+    custom_llm_provider 进入 kwargs；且 payload 已带 key 时不被覆盖（零回归）。
+    """
+    import sys
+    from utils.llm_override import llm_override, clear_llm_override
+    from core.fabric.adapters import litellm_adapter as _la
+
+    captured = {}
+
+    class _FakeLiteLLM:
+        def completion(self, **kwargs):
+            captured.update(kwargs)
+            class _R:
+                choices = [type("C", (), {"message": type("M", (), {"content": "ok"})()})()]
+            return _R()
+
+    monkeypatch_litellm = None
+    orig = _la._import_litellm
+    _la._import_litellm = lambda: _FakeLiteLLM()
+    try:
+        from core.fabric.adapters.litellm_adapter import LiteLLMAdapter, InvokeRequest
+        from core.fabric.capability import Capability
+
+        # 场景1：payload 无 key → 合并 override
+        payload = {"model": "zhipu/glm-4-flash", "messages": [{"role": "user", "content": "hi"}]}
+        with llm_override({
+            "model": "glm-4-flash",
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "sk-tenant-byok",
+            "opts": {"custom_llm_provider": "openai"},
+        }):
+            res = LiteLLMAdapter().invoke(InvokeRequest(Capability.LLM_GATEWAY, payload=payload))
+        assert res.ok is True
+        assert captured["api_key"] == "sk-tenant-byok"
+        assert captured["api_base"] == "https://open.bigmodel.cn/api/paas/v4"
+        assert captured["custom_llm_provider"] == "openai"
+        assert captured["model"] == "glm-4-flash"
+
+        # 场景2：payload 已带 key → 不被 override 覆盖（BYOK 直调优先级）
+        captured.clear()
+        payload2 = {"model": "glm-4-flash", "api_key": "sk-direct",
+                    "api_base": "https://x", "messages": [{"role": "user", "content": "hi"}]}
+        with llm_override({"model": "glm-4-flash", "api_key": "sk-tenant-byok",
+                           "api_base": "https://open.bigmodel.cn/api/paas/v4",
+                           "opts": {"custom_llm_provider": "openai"}}):
+            LiteLLMAdapter().invoke(InvokeRequest(Capability.LLM_GATEWAY, payload=payload2))
+        assert captured["api_key"] == "sk-direct"
+    finally:
+        _la._import_litellm = orig
+        clear_llm_override()
