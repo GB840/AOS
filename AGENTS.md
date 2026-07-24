@@ -400,6 +400,24 @@ codebase-memory-mcp / orchestrator。
 - 已知 legacy 债勿误修：`test_database::test_persistence_bridge_on_unified_db`、`test_memory`
   （no such table）——不 import fabric_hub，与新栈无关。
 
+### 5.1 借鉴 moai-adk：SPEC-First 与 TRUST 5 质量门（2026-07-24 引入）
+
+> 来源：`modu-ai/moai-adk`（Go / Apache-2.0，真实仓库已核实）。**只借鉴方法论，不引入 Go 代码/依赖**。
+> 外部项目处置铁律与全文见 `docs/research/open_source_tools_2026.md`。
+
+- **SPEC-First（编码前先定义完成标准）**：任何非 trivial 改动，先写清「验收标准 + 证据形式」再动手——
+  与 §4 诚实纪律「提交必当场核验 hash」、§6「可验证目标」一脉相承。复杂任务先用 1-2 句 SPEC 说清
+  「改完后怎么算成功、拿什么证据」，再进入实现，避免「跑几步交差」。
+- **TRUST 5 质量维度（每个 PR 自检）**：
+  - **T**ested：有真实复现测试，不靠手测；覆盖率基线（见上）不倒退。
+  - **R**eadable：命名清晰、ruff 0 error、注释说「为什么」而非「是什么」。
+  - **U**nified：格式 / import 顺序 / 目录结构一致，不顺手"美化"无关代码（§4.5 改动最小化）。
+  - **S**ecured：无硬编码密钥、输入校验、OWASP 常识过关（呼应 §0.7.1 诚实可验证）。
+  - **T**rackable：约定式提交、关联需求、结构化日志；每行 diff 能追溯到需求。
+- **TDD/DDD 选择**：新模块或覆盖率 ≥10% 走 RED→GREEN→REFACTOR；存量低覆盖代码走 ANALYZE→PRESERVE→IMPROVE，
+  不盲目重写（呼应 §4.6 全盘思维、先理解根因）。
+- **规划与审计分离**：重大重构先独立审视方案再执行，不自审（参考 moai-adk 的 plan-auditor 思路）。
+
 ---
 
 ## 6. 工作法（Agentic Engineering，Karpathy「后 Vibe Coding」范式）
