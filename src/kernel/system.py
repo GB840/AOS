@@ -80,9 +80,12 @@ class AOSSystem:
         }
 
 
-def build_default_system(base_url: str = "http://localhost:8000") -> AOSSystem:
+def build_default_system(base_url: str = "http://localhost:8000",
+                          isolate_heavy: bool = True,
+                          inject_brain: bool = True) -> AOSSystem:
     """组装默认 AOS 系统：内核 + 四层 + 真实回调接入。"""
-    kernel = build_default_kernel()
+    kernel = build_default_kernel(isolate_heavy=isolate_heavy,
+                                   inject_brain=inject_brain)
     degradation: Dict[str, str] = {}
 
     # 模型网关层

@@ -54,6 +54,7 @@ from core.fabric.adapters import (
 )
 from core.fabric.capability import Capability
 from .zhipu_chat import zhipu_chat
+from .ollama_chat import ollama_chat, ollama_available
 from kernel.isolation.subprocess_iso import IsolatedEngineHost
 from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
@@ -1423,14 +1424,36 @@ class FabricHub:
                     messages.append({"role": "assistant", "content": h["response"][:2000]})
             messages.append({"role": "user", "content": message})
 
-            # 通电优先：智谱直连（已验证可用，秒级返回），保证主聊天可用；
-            # 不依赖可能 hang/未部署的外部推理路由（openclaw 网关/litellm/agnes）。
+            # 推理路由策略（开源本地优先 → 云端兜底）：
+            # - 默认走智谱直连（秒级返回，保证响应速度，CPU 环境无 GPU 时首选）
+            # - AOS_LOCAL_FIRST=1 时优先尝试 Ollama 本地（数据不出本机），失败降级云端
+            #   适合有 GPU 的环境跑 Qwen/DeepSeek 等开源模型
+            local_first = os.environ.get("AOS_LOCAL_FIRST") == "1"
+
+            if local_first and ollama_available():
+                orc = ollama_chat(messages, max_tokens)
+                if orc:
+                    history.append({"task": message, "response": orc})
+                    _save_session(session_id, history)
+                    return {"response": orc, "session_id": session_id,
+                            "engine": "ollama-local", "ok": True}
+
+            # 云端默认：智谱直连（已验证可用，秒级返回）
             zr = zhipu_chat(messages, max_tokens)
             if zr:
                 history.append({"task": message, "response": zr})
                 _save_session(session_id, history)
                 return {"response": zr, "session_id": session_id,
                         "engine": "zhipu-direct", "ok": True}
+
+            # 非默认场景的兜底：若未设 local_first 但智谱失败，尝试 Ollama
+            if not local_first and ollama_available():
+                orc = ollama_chat(messages, max_tokens)
+                if orc:
+                    history.append({"task": message, "response": orc})
+                    _save_session(session_id, history)
+                    return {"response": orc, "session_id": session_id,
+                            "engine": "ollama-local-fallback", "ok": True}
 
             # 路由到推理引擎（复用现有 inference.llm 芯粒，级联兜底）
             res = self.route("inference.llm", {

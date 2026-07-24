@@ -155,8 +155,22 @@ class ModelGatewayLayer:
     ) -> None:
         self._lock = threading.RLock()
         self._gateway = gateway
-        self._models = models or [m.model_id for m in gateway.list_models()]
+        self._models_cache: Optional[List[str]] = models
+        self._models_loaded = models is not None
         self.cost_tracker = CostTracker(price_registry=price_registry)
+
+    @property
+    def _models(self) -> List[str]:
+        if self._models_loaded:
+            return self._models_cache if self._models_cache is not None else []
+        with self._lock:
+            if not self._models_loaded:
+                try:
+                    self._models_cache = [m.model_id for m in self._gateway.list_models()]
+                except Exception:
+                    self._models_cache = []
+                self._models_loaded = True
+            return self._models_cache if self._models_cache is not None else []
 
     # ── 统一调用 ──
     def chat_unified(self, prompt: str, model: str | None = None,
@@ -241,8 +255,11 @@ class ModelGatewayLayer:
 
     def add_model(self, model_id: str) -> None:
         with self._lock:
-            if model_id not in self._models:
-                self._models.append(model_id)
+            _ = self._models  # 确保已加载
+            if self._models_cache is None:
+                self._models_cache = []
+            if model_id not in self._models_cache:
+                self._models_cache.append(model_id)
 
     def set_price(self, model_id: str, usd_per_token: float) -> None:
         with self._lock:

@@ -63,6 +63,7 @@ class _FakeMem:
 def test_mem0_search_falls_back_to_text(monkeypatch):
     fake = _FakeMem()
     import core.fabric.adapters.mem0_adapter as mm
+    monkeypatch.setattr(mm, "_import_mem0", lambda: _FakeMem)
     monkeypatch.setattr(mm, "_build_memory", lambda M, c: fake)
     # 模拟 in_from:previous 透传的 media.image out（images 是字符串）
     payload = {"images": "[{'url': 'https://img/x.png'}]"}
@@ -75,6 +76,7 @@ def test_mem0_search_falls_back_to_text(monkeypatch):
 def test_mem0_add_uses_extracted_text(monkeypatch):
     fake = _FakeMem()
     import core.fabric.adapters.mem0_adapter as mm
+    monkeypatch.setattr(mm, "_import_mem0", lambda: _FakeMem)
     monkeypatch.setattr(mm, "_build_memory", lambda M, c: fake)
     payload = {"action": "add", "images": "[{'url': 'https://img/x.png'}]"}
     res = Mem0Adapter().invoke(InvokeRequest(capability=Capability.MEMORY_SEMANTIC, payload=payload))

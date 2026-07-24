@@ -93,11 +93,18 @@ def build_fabric_hub(isolate_heavy: bool = True) -> "FabricHub":
 
 
 def build_default_kernel(default_grant: bool = False,
-                          isolate_heavy: bool = True) -> AOSKernel:
+                          isolate_heavy: bool = True,
+                          inject_brain: bool = True) -> AOSKernel:
     """组装默认内核：登记模型网关 + 四个 OSS 运行时 + MCP 技能总线。
 
     返回的内核已可用：register_agent / send_message / check_permission /
     list_agents / stop_agent 全部走内核合约，具体引擎都是插件。
+
+    inject_brain=False 时跳过 brain 注入（_inject_kernel_into_brain）——
+    该步骤会触发 UnifiedBrain 重型初始化（含 hermes 插件 discover_plugins，
+    其中 dashboard_auth/basic 在 module-load 时调 hashlib.scrypt 做 KDF，
+    单次 ~30s+）。测试环境与轻量启动应显式传 inject_brain=False 跳过，
+    仅生产 app 启动时才注入 brain。
     """
     kernel = AOSKernel()
 
@@ -203,7 +210,8 @@ def build_default_kernel(default_grant: bool = False,
     # 5) 对账 v1.0：把内核 ModelGateway 注入 brain.py，
     #    使其 LLM 调用走统一三级回退链而非自建 LLM 逻辑。
     #    非物理删除 brain.py，而是向内核让渡模型调用权。
-    _inject_kernel_into_brain(kernel)
+    if inject_brain:
+        _inject_kernel_into_brain(kernel)
 
     return kernel
 
@@ -222,7 +230,10 @@ def _inject_kernel_into_brain(kernel: "AOSKernel") -> None:
     try:
         from core import get_brain
         brain = get_brain()
-    except (Exception, SystemExit) as e:  # noqa: BLE001
+    except BaseException as e:  # noqa: BLE001
+        # 必须捕 BaseException：pyo3_runtime.PanicException（chromadb rust 绑定
+        # 原生崩溃）继承自 BaseException 而非 Exception，用 except Exception 拦不住，
+        # 会让轻量内核被重型 brain 栈的原生崩溃拖垮（违背"内核零依赖"契约）。
         print(f"[wiring] brain 注入跳过（不影响内核构建）: {e!r}")
         return
     gw = getattr(kernel, "_model_gateway", None)

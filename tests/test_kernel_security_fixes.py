@@ -20,19 +20,19 @@ from kernel.wiring import build_default_kernel
 
 class TestPermissionDefaultDeny:
     def test_build_default_kernel_is_deny_by_default(self):
-        k = build_default_kernel()
+        k = build_default_kernel(isolate_heavy=False, inject_brain=False)
         assert k.check_permission("anyone", "receive") is False
         assert k.check_permission("anyone", "anything") is False
 
     def test_explicit_grant_overrides_default_deny(self):
-        k = build_default_kernel()
+        k = build_default_kernel(isolate_heavy=False, inject_brain=False)
         k.grant_permission("agent-x", "receive", True)
         assert k.check_permission("agent-x", "receive") is True
         # unrelated action still denied
         assert k.check_permission("agent-x", "send") is False
 
     def test_grant_permission_is_additive(self):
-        k = build_default_kernel()
+        k = build_default_kernel(isolate_heavy=False, inject_brain=False)
         k.grant_permission("a1", "receive", True)
         k.grant_permission("a2", "receive", True)
         assert k.check_permission("a1", "receive") is True
@@ -41,7 +41,7 @@ class TestPermissionDefaultDeny:
 
 class TestSkillBusSeeding:
     def test_kernel_exposes_real_protocol_tools(self):
-        k = build_default_kernel()
+        k = build_default_kernel(isolate_heavy=False, inject_brain=False)
         ids = sorted(s.skill_id for s in k._skill_bus.discover_skills())
         # Protocol registers these 6 default tools; the security gateway must
         # now surface them instead of 0.
@@ -51,12 +51,12 @@ class TestSkillBusSeeding:
         assert len(ids) >= 6
 
     def test_whitelisted_tool_is_callable(self):
-        k = build_default_kernel()
+        k = build_default_kernel(isolate_heavy=False, inject_brain=False)
         r = k._skill_bus.call_skill("get_status", {})
         assert r.ok is True
 
     def test_non_whitelisted_tool_is_blocked(self):
-        k = build_default_kernel()
+        k = build_default_kernel(isolate_heavy=False, inject_brain=False)
         r = k._skill_bus.call_skill("definitely_not_registered", {})
         assert r.ok is False
         assert "白名单" in r.error
@@ -64,7 +64,7 @@ class TestSkillBusSeeding:
 
 class TestGrantEnablesSendMessage:
     def test_send_message_requires_receive_grant(self):
-        k = build_default_kernel()
+        k = build_default_kernel(isolate_heavy=False, inject_brain=False)
         k.register_agent(AgentSpec(agent_id="t1", name="T", engine="litellm"))
 
         # No grant -> denied

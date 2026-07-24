@@ -331,15 +331,13 @@ class TestBBQShopFullLoop:
         system = create_bbq_system("测试烧烤店")
         
         # 1. 添加订单数据
-        system.add_order({
-            "items": [
-                {"dish_name": "羊肉串", "quantity": 10, "price": 5.0},
+        system.handle_order(
+            channel="douyin",
+            items=[
+                {"dish_name": "招牌羊肉串", "quantity": 10},
             ],
-            "total_amount": 50.0,
-            "actual_amount": 50.0,
-            "channel": "douyin",
-            "member_phone": "13800138000",
-        })
+            phone="13800138000",
+        )
         
         # 2. 生成运营计划
         plan = system.operator.generate_daily_plan()

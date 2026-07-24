@@ -50,17 +50,14 @@ def test_build_fabric_hub_isolate_heavy_false_no_isolation(monkeypatch):
 def test_build_default_kernel_wires_isolation(monkeypatch):
     """build_default_kernel 真的把默认隔离接进了枢纽（且隔离 Agnes 类引擎）。
 
-    用轻量 bench 替换默认 Agnes 配置，避免 18s 冷启动；并 stub get_brain，
-    避免沙箱里 UnifiedBrain 重型初始化阻塞。其余内核构建照常（均有 try/except 兜底）。
+    用轻量 bench 替换默认 Agnes 配置，避免 18s 冷启动；inject_brain=False
+    跳过 UnifiedBrain 重型初始化（hermes 插件 discover_plugins 里的
+    hashlib.scrypt KDF 单次 ~30s+，会触发 timeout）。其余内核构建照常
+    （均有 try/except 兜底）。
     """
-    import core  # build_default_kernel 内部 `from core import get_brain`
-    monkeypatch.setattr(
-        core, "get_brain",
-        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no brain in test")),
-    )
     monkeypatch.setattr(wiring, "_ISOLATED_BY_DEFAULT", {"bench": BENCH_SPEC})
 
-    kernel = wiring.build_default_kernel(isolate_heavy=True)
+    kernel = wiring.build_default_kernel(isolate_heavy=True, inject_brain=False)
     hub = kernel.fabric_hub
     rep = hub.health_report()
     assert rep["adapters"]["bench"]["isolated"] is True

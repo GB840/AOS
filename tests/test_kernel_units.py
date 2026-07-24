@@ -698,10 +698,13 @@ class TestBuildDefaultKernel:
         from kernel.kernel import AOSKernel
         from kernel.wiring import build_default_kernel
 
-        # Patch all the heavy imports that would fail in test env
+        # Patch all the heavy imports that would fail in test env.
+        # isolate_heavy=False 避免在沙箱里真的拉起子进程隔离层（socket 连接会挂）。
+        # inject_brain=False 跳过 brain 注入（hermes 插件 discover_plugins 里
+        # dashboard_auth/basic 调 hashlib.scrypt 做 KDF，单次 ~30s+，会触发 timeout）。
         with patch("kernel.wiring.LiteLLMModelGateway", side_effect=Exception("mocked")), \
              patch("kernel.wiring.MCPSkillBus", side_effect=Exception("mocked")):
-            k = build_default_kernel()
+            k = build_default_kernel(isolate_heavy=False, inject_brain=False)
 
         assert isinstance(k, AOSKernel)
         # 默认拒绝（零信任）：无显式授权时 check_permission 返回 False
@@ -713,7 +716,8 @@ class TestBuildDefaultKernel:
 
         with patch("kernel.wiring.LiteLLMModelGateway", side_effect=Exception("mocked")), \
              patch("kernel.wiring.MCPSkillBus", side_effect=Exception("mocked")):
-            k = build_default_kernel(default_grant=False)
+            k = build_default_kernel(default_grant=False, isolate_heavy=False,
+                                      inject_brain=False)
 
         assert k.check_permission("anyone", "anything") is False
 
@@ -724,7 +728,7 @@ class TestBuildDefaultKernel:
         mock_bus_instance = MagicMock()
         with patch("kernel.wiring.LiteLLMModelGateway", side_effect=Exception("mocked")), \
              patch("kernel.wiring.MCPSkillBus", return_value=mock_bus_instance):
-            k = build_default_kernel()
+            k = build_default_kernel(isolate_heavy=False, inject_brain=False)
 
         from kernel.plugins.mcp_security_gateway import MCPSecurityGateway
         assert isinstance(k._skill_bus, MCPSecurityGateway)
@@ -739,7 +743,7 @@ class TestBuildDefaultKernel:
              patch("kernel.plugins.mistralrs_gateway.MistralRSModelGateway",
                    side_effect=Exception("mocked")), \
              patch("kernel.wiring.MCPSkillBus", side_effect=Exception("mocked")):
-            k = build_default_kernel()
+            k = build_default_kernel(isolate_heavy=False, inject_brain=False)
 
         assert k._model_gateway is not None
 
@@ -754,7 +758,7 @@ class TestBuildDefaultKernel:
         with patch("kernel.wiring.LiteLLMModelGateway", side_effect=Exception("mocked")), \
              patch("kernel.wiring.MCPSkillBus", side_effect=Exception("mocked")), \
              patch("core.fabric.adapters.litellm_adapter.LiteLLMAdapter", mock_adapter_cls):
-            k = build_default_kernel()
+            k = build_default_kernel(isolate_heavy=False, inject_brain=False)
 
         assert "litellm" in k._runtimes
 

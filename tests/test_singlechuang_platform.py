@@ -28,14 +28,23 @@ extension = _load("sc_extension", "kernel/plugins/extension.py")
 ollama_gw = _load("sc_ollama_gw", "kernel/plugins/ollama_gateway.py")
 
 # 让 singlechuang 的相对导入解析到已加载模块（验证编排层真的消费三件套）
-# 注意：必须给 stub kernel 设 __path__，否则会污染真正的 kernel 包，
-# 导致其它测试 from kernel.refinery import ... 时报 'kernel' is not a package。
-_k = types.ModuleType("kernel")
-_k.__path__ = [os.path.join(SRC, "kernel")]
-sys.modules.setdefault("kernel", _k)
-_kp = types.ModuleType("kernel.plugins")
-_kp.__path__ = [os.path.join(SRC, "kernel", "plugins")]
-sys.modules["kernel.plugins"] = _kp
+# 优先导入真实的 kernel / kernel.plugins 包（含 FabricAgentRuntime 等属性），
+# 只有当真实包导入失败（缺重型依赖）时才回退到最小 stub。
+try:
+    import kernel  # noqa: F401 — 触发真实 kernel 包加载
+except Exception:
+    _k = types.ModuleType("kernel")
+    _k.__path__ = [os.path.join(SRC, "kernel")]
+    sys.modules.setdefault("kernel", _k)
+
+try:
+    import kernel.plugins  # noqa: F401 — 触发真实 __init__.py 加载
+except Exception:
+    _kp = types.ModuleType("kernel.plugins")
+    _kp.__path__ = [os.path.join(SRC, "kernel", "plugins")]
+    sys.modules.setdefault("kernel.plugins", _kp)
+
+# 注册测试用子模块（无论真实包还是 stub 都需要）
 sys.modules["kernel.plugins.opc_roles"] = opc_roles
 sys.modules["kernel.plugins.report_agent"] = report_agent
 sys.modules["kernel.plugins.extension"] = extension

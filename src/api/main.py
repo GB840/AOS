@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import logging
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 import base64
@@ -694,6 +694,116 @@ async def health_check():
     事件循环仍能瞬间应答, 不会被误杀。深度组件状态见 /health/deep。
     """
     return {"status": "alive", "service": "aos", "ts": time.time()}
+
+
+@app.get("/api/status")
+async def system_status():
+    """诚实盘点：系统到底什么能用、什么不能用。
+
+    返回结构化的可用功能清单，让用户/前端一眼看到真实状态，
+    不再被空壳模块误导。所有检测轻量、短超时、不阻塞。
+    """
+    import urllib.request
+    import json as _json
+
+    status: Dict[str, Any] = {
+        "version": config.APP_VERSION,
+        "features": {},
+        "models": {"available": [], "default": None},
+    }
+
+    # 1. 聊天 - 智谱
+    zhipu_ok = bool(os.environ.get("ZHIPU_API_KEY"))
+    status["features"]["chat_zhipu"] = {
+        "available": zhipu_ok,
+        "label": "智谱 GLM-4-Flash 聊天",
+        "note": "云端，秒级响应" if zhipu_ok else "未配置 ZHIPU_API_KEY",
+    }
+
+    # 2. 聊天 - Ollama 本地
+    ollama_ok = False
+    ollama_models = []
+    try:
+        req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=2) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+            ollama_models = [m["name"] for m in data.get("models", [])]
+            ollama_ok = len(ollama_models) > 0
+    except Exception:
+        pass
+    status["features"]["chat_ollama"] = {
+        "available": ollama_ok,
+        "label": "Ollama 本地模型",
+        "models": ollama_models,
+        "note": "开源本地，数据不出本机" if ollama_ok else "Ollama 未运行或无模型",
+    }
+    if ollama_ok:
+        status["models"]["available"].extend([f"ollama/{m}" for m in ollama_models])
+
+    # 3. 代码精炼 (Refinery) - 纯 Python 无外部依赖
+    try:
+        from kernel.refinery.refinery_engine import RefineryEngine  # noqa: F401
+        refinery_ok = True
+    except Exception:
+        refinery_ok = False
+    status["features"]["code_refinery"] = {
+        "available": refinery_ok,
+        "label": "代码精炼引擎",
+        "note": "纯本地，分析/优化/测试/进化" if refinery_ok else "模块加载失败",
+    }
+
+    # 4. 文件操作
+    status["features"]["file_io"] = {
+        "available": True,
+        "label": "文件读写",
+        "note": "本地工作区",
+    }
+
+    # 5. Web 搜索 (需要 API Key)
+    search_ok = bool(os.environ.get("TAVILY_API_KEY") or os.environ.get("SERPAPI_KEY"))
+    status["features"]["web_search"] = {
+        "available": search_ok,
+        "label": "Web 搜索",
+        "note": "已配置搜索 API" if search_ok else "未配置 TAVILY_API_KEY",
+    }
+
+    # 6. 代码执行沙箱
+    status["features"]["code_exec"] = {
+        "available": True,
+        "label": "代码执行沙箱",
+        "note": "本地 Python 沙箱",
+    }
+
+    # 7. 多模态 - 视觉 (minicpm-v 通过 Ollama)
+    vision_ok = "minicpm-v:latest" in ollama_models
+    status["features"]["vision"] = {
+        "available": vision_ok,
+        "label": "图像理解",
+        "note": "minicpm-v 本地多模态" if vision_ok else "需要 minicpm-v 模型",
+    }
+
+    # 8. 语音 - 浏览器端
+    status["features"]["voice"] = {
+        "available": True,
+        "label": "语音输入/输出",
+        "note": "浏览器 Web Speech API",
+    }
+
+    # 默认模型
+    if ollama_ok and "qwen3:8b" in ollama_models:
+        status["models"]["default"] = "ollama/qwen3:8b"
+    elif zhipu_ok:
+        status["models"]["default"] = "zhipu/glm-4-flash"
+
+    # 统计
+    available_count = sum(1 for f in status["features"].values() if f.get("available"))
+    status["summary"] = {
+        "total_features": len(status["features"]),
+        "available_features": available_count,
+        "ready": available_count >= 3,  # 至少 3 个能用就算就绪
+    }
+
+    return status
 
 
 @app.get("/health/deep")
