@@ -252,3 +252,17 @@ tools/verify_*.py
 
 # ViMax 是自带 .git 的独立子仓库（577M），作为子模块/独立仓库管理，不混入 AOS。
 ViMax/
+
+# =============================================================================
+# Root-level scratch / orphan skill（本地保留，绝不入库）
+# =============================================================================
+# 一次性草稿脚本（非交付物，误 add 会污染仓库）。
+tmp_dream_query*.py
+verify_*.py
+test_bbq_full.py
+test_bidding_e2e.py
+test_system.py
+# 放错位置的孤儿 skill 参考副本（代码不 import 它，真实依赖是 pip 包 crawl4ai）。
+crawl4ai/
+# 字面量 "~" 垃圾目录（内含 .mem0 运行时产物）。
+/~
