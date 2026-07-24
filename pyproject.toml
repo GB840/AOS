@@ -34,11 +34,20 @@ dependencies = [
     "numpy>=1.24.0",
     "PyYAML>=6.0",
     "requests>=2.30.0",
+    # ── LLM 平面真实依赖（src/router/llm_router.py / litellm_adapter.py 直接 import）──
+    "openai>=1.30.0",
+    "litellm>=1.40.0",
+    "cryptography>=42.0.0",
+    "websocket-client>=1.7.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "pytest-timeout>=2.0"]
 test = ["pytest>=7.0", "pytest-timeout>=2.0"]
+# 前端控制台（src/web/app.py 直接 import streamlit）。
+web = ["streamlit>=1.30.0"]
+# 仅 LLM 相关依赖（不含 web）。
+llm = ["openai>=1.30.0", "litellm>=1.40.0", "websocket-client>=1.7.0"]
 
 [project.scripts]
 aos = "scripts.aos:main"
