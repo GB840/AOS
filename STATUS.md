@@ -225,4 +225,30 @@ C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe -m py_
 3. **2026-07-19 全量审计跟进**：P0/P1/P2/P3 + TD-3/TD-7/TD-8/TD-9/TD-10 已在 `feature/infra-setup` 分支完成（审计报告 `AOS_CODE_AUDIT_REPORT.docx`）。TD-1（brain.py 2091 行单体）/ TD-2（web/app.py 4299 行）属大工程，未在本轮处理；TD-5（导入风格不统一，≥12 文件用绝对导入）改可能触发 import 紊乱，暂跳过；TD-6（system.py 占位）核实后仅 `_heal_isolate` 返 True 算 stub，不阻塞。
 4. **全量 pytest 从未单轮跑完**（新增）：`tests/` 955 个 test_ 函数从未在本会话做过单轮全绿验证（沙箱 120s 超时不足以跑全量），需在主机以 `pytest tests/ -q --timeout=60` 首次诚实确认全盘绿/红。
 
+## 12. 诚实校准：已真验 / 待端到端验证（2026-07-24 补）
+
+> 本节是**诚实纪律（§0.7.1）**的落地：把「代码改动真 / 芯粒真跑 / 端到端真验」三层
+> 显式分开，杜绝把「接线就绪」说成「跑通」。凡标注「待验证」的，沙箱与当前会话
+> 均未端到端跑过，需真 LLM + 主机方能确认。
+
+**✅ 已真验（可命令复现）：**
+- 芯粒层：`agnes` / `ag2` / `OpenClaw` 真实跑通（非 mock）；验证见各自适配器单测。
+- BYOK：`Fernet` 加密 + 租户隔离存储层真写真读；租户模型配置 API + UI 页已编译验证。
+- 聊天主干「炼化为一体」：默认走 `litellm` 统一平面（commit `060eb13`），智谱 3 圈真跑通。
+- 内容飞轮：搜索 → LLM 写脚本 → 本地 `ffmpeg`+`edge-tts` 真生成视频（27.43s mp4 离线验证）。
+- 诚实自进化三 MVP（白皮书 + `270` 诚实自进化闭环 + `271` 抗复合失败 + `272` 白盒蒸馏引擎）均真跑验证并 push。
+
+**⏳ 待端到端验证（需真 LLM + 主机，沙箱重型链跑不动，当前会话未验）：**
+- **自进化闭环「跑一轮 → 反思 → 下一轮变好」从未端到端验证**（这是用户核心痛点）。
+  验证脚本见 `scripts/self_evo_loop_verify.py`（mock 模式沙箱可跑机制、real 模式给主机命令，
+  不谎报已跑通）。
+- 全量 `pytest` 从未单轮全绿（需主机 `pytest tests/ -q --timeout=60` 首次诚实确认）。
+
+**📁 配置拓扑澄清（回应「双配置并存」疑点）：**
+- `config/` 与 `configs/` 是历史遗留的**孤立配置目录**，**AOS Python 包不 import 它们**
+  （真实配置模块是 `src/utils/config.py`，从 `.env`/env 加载）。
+- 二者命名相近但职责不同：`configs/` = 基础设施/部署配置（docker-compose / postgres /
+  temporal 消费）；`config/hermes/` = Hermes 子系统配置 + 运行时产物。
+- **结论：不盲合**（盲合会破坏外部工具引用）；已分别加 `README.md` 厘清。详见各目录 README。
+
 > AI生成

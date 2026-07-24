@@ -17,6 +17,13 @@ DEPRECATION (chat runtime role):
   （AOS_BRAIN_FALLBACK=1 或 AOS_CHAT_BACKEND=brain）。deerflow 任务、subagent、
   语音/多模态等非 chat 端点仍沿用 brain.py，暂不在本次退场范围内。
   新 chat 代码应经 FabricHub 路由。
+
+  ⚠ 角色澄清（防误读 / 防误删）：
+  brain.py 是「**仍在服役的 legacy 真运行时**」，**不是**「安全降级 stub」。
+  它依旧真实处理非 chat 端点（deerflow 任务编排、子智能体、语音/多模态），
+  删它不是「去冗余」而是「动生产路径」，须按 AGENTS.md 双轨收口路线逐步切换，
+  不可一把删。真正的前端安全降级壳是 `src/web/app.py` 的 `_SafeBrain`
+  （后端 brain 加载失败时 Streamlit 控制台降级而非白页）——二者不要混淆。
 """
 
 import sys
