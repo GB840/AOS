@@ -41,7 +41,7 @@ AIGC:
 ---
 
 <!-- BASELINE_START -->
-## 0.5 基线快照（2026-07-25 06:10 UTC，手动生成(轻量)）
+## 0.5 基线快照（2026-07-25 06:20 UTC，手动生成(轻量)）
 
 > 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
 > 本表由 `tools/baseline_snapshot.py` 真实测算后写入；轻量模式测适配器/测试数，
@@ -55,7 +55,7 @@ AIGC:
 | 测试 | 1139 collected | `pytest --co -q` |
 | 覆盖率 | ?% | 轻量模式未测；HEAVY 模式实测见 §5 质量门下限 |
 | brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric`(875) import 失败即 `fabric=None`，双轨未合 |
-| 生成时间 | 2026-07-25 06:10 UTC | `python tools/baseline_snapshot.py` |
+| 生成时间 | 2026-07-25 06:20 UTC | `python tools/baseline_snapshot.py` |
 <!-- BASELINE_END -->
 
 ### 0.6 双轨融合进度（2026-07-20 更新）

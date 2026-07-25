@@ -12,7 +12,7 @@ AIGC:
 # AOS 项目状态总地图（STATUS）
 
 > 这是一份**导航索引**，不是技术文档。每次大状态变动更新这里。
-> 最后更新：**2026-07-25**（数字纠偏：实测 **27 适配器类（基础 _ADAPTERS 26 + orchestrator） / 35 适配器文件 / 1139 测试函数 / 178 测试文件 · FabricHub 实际注册 38 个引擎（基础 27 + 动态 11），live 31 / dead 7 · 11 内核子包 + 36 内核顶层模块 · 20 API 路由文件**）。
+> 最后更新：**2026-07-25**（数字纠偏：实测 **27 适配器类（基础 _ADAPTERS 26 + orchestrator） / 36 适配器文件（core/fabric/adapters 新栈 36 文件 / 34 类） / 1139 测试函数 / 178 测试文件 · FabricHub 实际注册 38 个引擎（基础 27 + 动态 11），live 31 / dead 7 · 11 内核子包 + 36 内核顶层模块 · 20 API 路由文件**）。
 
 ---
 
@@ -21,7 +21,7 @@ AIGC:
 AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器）** 为干净运行时，统一持有路由/记忆/上下文主权并调度各芯粒适配器；legacy 的 `brain.py` 仍作 `/api/chat` 灰度兜底（双轨尚未合流）。在此之上新增了**内容飞轮平台**（Studio/Hub/Pulse/Evolve + 5 适配器 + SkillHub/AutoSkill 集成），端到端已真跑通（搜索→LLM 写脚本→本地 ffmpeg+edge-tts 生成视频）。
 
 **规模（实测，非记忆，2026-07-25 baseline_snapshot + probe_all 真机核对）：**
-- **27 适配器类**（FabricHub `_ADAPTERS` 26 + orchestrator 1）/ 35 适配器文件 / 1139 测试函数 / 178 测试文件
+- **27 适配器类**（FabricHub `_ADAPTERS` 26 + orchestrator 1）/ 36 适配器文件（core/fabric/adapters 新栈 36 文件 / 34 类） / 1139 测试函数 / 178 测试文件
 - FabricHub **实际注册 38 个**引擎（基础 27 + 动态 11），**live 31 / dead 7**
 - 11 内核子包 + 36 内核顶层模块 / 20 API 路由文件 / 50+ 技能（manifest.json）
 - **7 大 dead 引擎**（2026-07-25 probe_dead.py 实跑 8s 探活）：openclaw / stt / lfm2 / minicpm_o / vlm / mediakit / comfyui
@@ -281,9 +281,13 @@ C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe -m py_
 - 诚实自进化三 MVP（白皮书 + `270` 诚实自进化闭环 + `271` 抗复合失败 + `272` 白盒蒸馏引擎）均真跑验证并 push。
 
 **⏳ 待端到端验证（需真 LLM + 主机，沙箱重型链跑不动，当前会话未验）：**
-- **自进化闭环「跑一轮 → 反思 → 下一轮变好」从未端到端验证**（这是用户核心痛点）。
-  验证脚本见 `scripts/self_evo_loop_verify.py`（mock 模式沙箱可跑机制、real 模式给主机命令，
-  不谎报已跑通）。
+- **自进化闭环「跑一轮 → 反思 → 下一轮变好」**：
+  - ✅ **机制已验（mock 模式，2026-07-25）**：`scripts/self_evo_loop_verify.py` 实跑 PASS——
+    6 阶段按序推进 `[analyze, promote, acquire, deliver, evolve, maintain]` + 教训自动注入下一轮 analyze
+    （首轮 acquire 失败后，下一轮 analyze 已携带历史教训片段）。证明控制流与教训反馈闭环真实可用。
+  - ⏳ **真 LLM 端到端仍未验（这是用户核心痛点）**：`--real` 模式需主机 + 真 LLM key，
+    沙箱无 key 故阻塞。主机命令：`python scripts/self_evo_loop_verify.py --real`。
+  - 不谎报：上面只是机制/控制流验证，非真 LLM 跑通。
 - 全量 `pytest` 从未单轮全绿（需主机 `pytest tests/ -q --timeout=60` 首次诚实确认）。
 
 **📁 配置拓扑澄清（回应「双配置并存」疑点）：**
