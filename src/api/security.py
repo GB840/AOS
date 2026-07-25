@@ -164,6 +164,7 @@ def _import_jwt():
 
 def create_access_token(subject: str, expires_min: Optional[int] = None) -> str:
     """签发 JWT (RS256, 私钥签名). 团队级多用户/SSO 接入时仅换密钥管理即可。"""
+    from datetime import datetime, timedelta
     jwt = _import_jwt()
     private_pem, _public_pem = _get_jwt_keys()
     now = datetime.now()

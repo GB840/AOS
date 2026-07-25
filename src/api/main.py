@@ -3303,6 +3303,23 @@ async def bidding_analyze(
             pass
 
 
+# Billing API（/api/billing/*，支付宝/微信支付对接）
+try:
+    from api.billing_api import mount_billing_api
+    mount_billing_api(app)
+    logger.info("Billing API 已挂载: /api/billing")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Billing API 挂载失败: %s", e)
+
+# Startup API（/api/startup/*，创业仪表盘）
+try:
+    from api.startup_api import mount_startup_api
+    mount_startup_api(app)
+    logger.info("Startup API 已挂载: /api/startup")
+except Exception as e:  # noqa: BLE001
+    logger.warning("Startup API 挂载失败: %s", e)
+
+
 # ---- Main ----
 
 
