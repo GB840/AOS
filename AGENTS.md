@@ -418,6 +418,22 @@ codebase-memory-mcp / orchestrator。
   不盲目重写（呼应 §4.6 全盘思维、先理解根因）。
 - **规划与审计分离**：重大重构先独立审视方案再执行，不自审（参考 moai-adk 的 plan-auditor 思路）。
 
+### 5.2 借鉴 OpenWorker：本地优先 / BYOK / 审批门控 / 连接器 / 统一层（2026-07-24 引入）
+
+> 来源：`andrewyng/openworker`（MIT，桌面 AI 同事，本地已下载 `D:\OpenWorker1\openworker-main`，
+> README 核实）。**技术栈（Rust Tauri 桌面壳 + Python + React）与 AOS 不兼容，只借鉴范式，不引代码**。
+> 全文与逐条映射见 `docs/research/openworker_borrowing.md`。处置定级：MEMORY § XII「能商用但技术栈不兼容 → 借鉴优化」。
+
+OpenWorker 是"消费级桌面 agent 应用"，AOS 是"agent OS 后端内核"——层级不同，但它**验证了 AOS 架构选择的正确性**：
+本地优先 / BYOK / 审批门控 / MCP 连接器 / 统一模型层，AOS 均已具备且多租户 BYOK、capability 级路由更统一。可借 3 个缺口补齐：
+
+- **[A] 无人值守 → park 到审核收件箱**：自主环（autopilot/opc_loop）遇"有后果动作 + 当前无人审核"时，
+  持久化待审项到审核收件箱，等人在环再决策；绝不"假装执行"或"静默跳过"（补 §0.7 诚实纪律边界）。
+- **[B] 岗位级定时任务原语**：在 OPC 飞轮上补"按 cron 调度某岗位做周期产出并留痕"（复用 opc_loop + TaskTraceStore），
+  对应 OpenWorker 的 automations / standing watch。
+- **[C] aisuite 作 inference.llm 网关对照项**：OpenWorker 用 aisuite 统一 chat-completions + agents(tools/MCP)；
+  AOS 用 LiteLLM 网关已够用，aisuite（MIT）列为可选统一层评估项，**不紧急、不锁死**。
+
 ---
 
 ## 6. 工作法（Agentic Engineering，Karpathy「后 Vibe Coding」范式）

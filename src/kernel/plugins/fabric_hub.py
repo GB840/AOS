@@ -51,6 +51,8 @@ from core.fabric.adapters import (
     RemotionAdapter,
     SecurityAuditAdapter,
     IdaProMcpAdapter,
+    Img2ThreejsAdapter,
+    MediakitAdapter,
 )
 from core.fabric.capability import Capability
 from .zhipu_chat import zhipu_chat
@@ -156,6 +158,8 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         VideoMakerAdapter,     # 本地视频生成（MEDIA_VIDEO）：edge-tts + PIL + ffmpeg，零成本
         RemotionAdapter,       # 高质量数据可视化视频渲染（video.remotion）：Remotion CLI 胶水
         SecurityAuditAdapter,  # 防御型本地漏洞自查（security.audit）：只读、仅本机、用公开 CVE 元数据
+        Img2ThreejsAdapter,    # 图片→程序化 Three.js 重建（media.3d.reconstruct）：vendored 纯 stdlib 脚本 + divine_eye 零 token 评分
+        MediakitAdapter,       # 云端音视频后期处理（media.process）：火山引擎 mediakit-cli 胶水，opt-in（默认关闭）
     )
     if a is not None
 )

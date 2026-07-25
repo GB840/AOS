@@ -45,6 +45,18 @@ class Capability(str, Enum):
     MEDIA_IMAGE = "media.image"                # text-to-image / image-to-image
     MEDIA_VIDEO = "media.video"                # text-to-video / image-to-video (async)
     MEDIA_3D = "media.3d"                      # interactive 3D scene/app (Three.js, browser-runtime)
+    # 图片→程序化 Three.js 模型重建（img2threejs，Apache-2.0，纯 stdlib 脚本 + agent 视觉判断）。
+    # 与 MEDIA_3D（prompt→自包含交互场景）正交：MEDIA_3D 是「凭空造场景」，本能力是
+    # 「照着参考图把物体用代码重建出来」，靠 divine_eye 零 token 多信号评分做质量门控。
+    # adapter 只承诺脚本层确定性能力（探测/评分/管线指引）——完整重建的视觉判断+代码
+    # 生成是多轮 agent 循环，由产品研发岗 loop / host agent 驱动，绝不谎报一次出 3D。
+    MEDIA_3D_RECONSTRUCT = "media.3d.reconstruct"
+    # 云端音视频后期处理 / 原子能力编排（火山引擎 mediakit-cli，opt-in 借鉴）。
+    # 与 MEDIA_VIDEO（文生视频/图生视频，生成式）正交：MEDIA_PROCESS 是「后期处理
+    # 流水线」——剪辑/特效/音频处理/视频AI增强，把已有素材加工成成品。对应火山引擎
+    # 100+ 音视频原子能力（剪辑17/音频2/图像AI 5/视频AI 14/通用2）。opt-in：默认关闭，
+    # 需 AOS_MEDIAKIT_ENABLED=1 + Node/npx；云端模式另需火山 API Key。
+    MEDIA_PROCESS = "media.process"
 
     # Memory
     MEMORY_PERSISTENT = "memory.persistent"
@@ -196,6 +208,15 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     # openmaic：清华 THU-MAIC 多智能体互动课堂生成（MIT 开源）。HTTP 桥接、
     # 自管 LLM，不耦合 Node 运行时，作为可插拔教育能力芯粒（opt-in）。
     "openmaic": [Capability.EDU_COURSE_GEN],
+    # img2threejs（Apache-2.0，vendored 于 third_party/img2threejs）：照参考图用代码
+    # 重建程序化 Three.js 模型。纯 Python stdlib 脚本（intake/spec/build/review 四阶段）
+    # + divine_eye 零 token 评分器。adapter 暴露脚本层确定性能力，视觉判断留给上层 agent。
+    "img2threejs": [Capability.MEDIA_3D_RECONSTRUCT],
+    # mediakit：火山引擎音视频后期处理 CLI（@volcengine/mediakit-cli，npm i -g）。
+    # opt-in 借鉴（MEMORY § XII）：默认关闭，需 Node/npx + AOS_MEDIAKIT_ENABLED=1；
+    # 云端模式另需火山 API Key（mediakit-cli init 配置或 env）。100+ 音视频原子能力
+    # （剪辑/音频/图像AI/视频AI/通用），--local/--cloud 双模态逐命令切换。
+    "mediakit": [Capability.MEDIA_PROCESS],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -238,6 +259,10 @@ ENGINE_TIER: dict[str, str] = {
     "media-gen": TIER_MEDIUM,
     # openmaic：HTTP 桥接 OpenMAIC 服务（依赖该服务运行 + 其自管 LLM）→ 中档
     "openmaic": TIER_MEDIUM,
+    # img2threejs：本地纯 stdlib 脚本（零成本/零依赖/最强隐私）→ 高档
+    "img2threejs": TIER_HIGH,
+    # mediakit：云端火山引擎音视频后期（需 Node + 可选 API Key，质量优有成本）→ 中档
+    "mediakit": TIER_MEDIUM,
 }
 
 

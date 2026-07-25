@@ -171,6 +171,16 @@ try:
 except Exception:  # noqa: BLE001
     RefineryAdapter = None
 
+try:
+    from .img2threejs_adapter import Img2ThreejsAdapter
+except Exception:  # noqa: BLE001 - vendored 脚本缺失则跳过，不拖垮内核
+    Img2ThreejsAdapter = None
+
+try:
+    from .mediakit_adapter import MediakitAdapter
+except Exception:  # noqa: BLE001 - 缺依赖（理论零依赖；CLI 未装则 health=False）则跳过，不拖垮内核
+    MediakitAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -205,6 +215,8 @@ __all__ = [
         "VideoMakerAdapter",
         "RemotionAdapter",
         "SecurityAuditAdapter",
+        "Img2ThreejsAdapter",
+        "MediakitAdapter",
     )
     if globals().get(n) is not None
 ]

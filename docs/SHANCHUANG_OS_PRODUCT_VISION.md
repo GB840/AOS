@@ -192,6 +192,12 @@
 - 按选型铁律，单创OS 当前该做的不是追 WorkRally，而是**先把已有的 autopilot/opc/FabricHub/agency_roles 编排成 5 岗位闭环**（Phase 1），把"没有的"（报表芯粒、未来多租户/计费）用开源补上。
 - 是否现在就搭 `content.workrally` 可选适配器，取决于用户是否有 WorkRally 授权账号——有则接（opt-in），无则暂留接口位。
 
+### 10.5 外部参照：OpenWorker（本地优先 agent 桌面应用，MIT，2026-07-24 核实）
+- 已核实（README，本地已下载 `D:\OpenWorker1\openworker-main`）：**本地优先 + BYOK + 审批门控 + 25+ MCP 连接器 + 基于 aisuite 统一模型层**；MIT 许可，但技术栈（Rust Tauri 桌面壳）与 AOS 不兼容 → 只借鉴不引代码。
+- **架构验证价值**：OpenWorker 是"消费级桌面 agent 应用"，从**用户侧产品**角度正面验证单创OS 架构选择正确——本地优先 / BYOK / 审批门控 / MCP 连接器 / 统一模型层，AOS 均已具备且**多租户 BYOK、capability 级路由更统一**。
+- **借法（3 个缺口补齐，详见 `docs/research/openworker_borrowing.md` 与 AGENTS.md §5.2）**：
+  ① 自主环「无人值守 → park 到审核收件箱」范式（补诚实纪律边界）；② OPC 岗位级定时任务原语（复用 opc_loop + TaskTraceStore）；③ aisuite 作 `inference.llm` 网关可选对照项（当前 LiteLLM 够用，不切换）。
+
 ---
 
 ## 十一、已落地：开源默认路由 + 全栈可插拔扩展（2026-07-23）
