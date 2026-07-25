@@ -314,3 +314,28 @@
 - Terax **适配器未做真调用**：当前是"检测二进制存在 + 返回描述符"的 opt-in 接口位，不是"从单创OS 一键拉起 Terax 并双向通信"的完整桥接（那是桌面应用集成，需主机实测 + 用户真装 Terax 才有意义）。
 - 端到端（单创OS 调度引擎在真任务下把"写驱动代码"派给产品研发岗、岗位提示用户用 Terax 终端环境）仍待主机实测。
 - Star 数、Ollama/MLX 支持、React 19 三项未从权威源确认，文档如实标注，不混入编造数据。
+
+## 14. waoowaoo 评估（AI 短剧生产，CC BY-NC-SA 禁商用，只借鉴，2026-07-25）
+
+### 14.1 真实性核实（WebFetch 抓 GitHub raw LICENSE + 仓库，非凭记忆）
+
+- `saturndec/waoowaoo`：约 11K–13K Star，单人测试版，AI 短剧/漫剧一站式生成（小说→剧本分析→一致性角色/场景图→分镜→配音→成片，每环节可人工干预）。
+- **许可证 = CC BY-NC-SA 4.0**（raw LICENSE 确认，原文 "not a software license... protect the commercial rights"）→ 明确禁商用，与单创OS 商业 SaaS 直接冲突。
+- 技术栈 Next.js15+React19+MySQL/Prisma+Redis/BullMQ+MinIO+NextAuth，Docker 一键起——非 CLI 形态、与 AOS Python 内核不兼容。
+
+### 14.2 选型决策（按用户铁律：现有复用 / 比外部差优化 / 没有用开源 / 全留接口）
+
+- 定级：**MEMORY § XII 第①类「不能商用 → 只借鉴，不引代码 / 不 subprocess 接入 / 不 vendored」**。许可证 + 技术栈双重不达标，与 img2threejs（能用就用）、Mediakit（opt-in 商用 subprocess）、OpenWorker（借鉴优化）均不同。
+- 全文逐条映射见 `docs/research/waoowaoo_borrowing.md`。
+
+### 14.3 可借点（4 项，仅范式/叙事，不改架构）
+
+- **[A] 分阶段可干预管线** → 内容营销岗工作流从单步 `promote` 扩为「选题→素材→分镜→配音→成片→分发」多阶段，每阶段过 §0.7 白盒审核。
+- **[B] 角色/场景一致性锚点** → `media.image`/`media.video` 加 `identity_anchors` 一等约束，补 AOS 跨镜头一致缺口（OpenWorker/img2threejs 均未覆盖）。
+- **[C] 短剧/漫剧子能力 opt-in** → 内容营销岗加 `short_drama` 标签，只做编排+审核、底层走已接入商用引擎（Mediakit/Remotion）不自建。
+- **[D] 数据自控 + 分阶段审核哲学** → 强化单创OS 差异化卖点，呼应 OpenWorker 审批门控缺口 + §0.7.1 诚实纪律，属叙事级借鉴。
+
+### 14.4 诚实边界（不瞒）
+
+- waoowaoo **未做任何代码接入**：未引代码、未 vendored、未写适配器。仅文档借鉴，不在 AOS 运行时产生任何依赖。
+- 4 个可借点均为"范式/缺口标注"，落地与否待用户拍板；当前代码未实现 [A][B][C][D] 任一。

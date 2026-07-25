@@ -434,6 +434,20 @@ OpenWorker 是"消费级桌面 agent 应用"，AOS 是"agent OS 后端内核"—
 - **[C] aisuite 作 inference.llm 网关对照项**：OpenWorker 用 aisuite 统一 chat-completions + agents(tools/MCP)；
   AOS 用 LiteLLM 网关已够用，aisuite（MIT）列为可选统一层评估项，**不紧急、不锁死**。
 
+### 5.3 借鉴 waoowaoo：分阶段可干预管线 / 一致性锚点 / 短剧子能力 opt-in（2026-07-25 引入）
+
+> 来源：`saturndec/waoowaoo`（约 11K–13K Star，AI 短剧/漫剧一站式生成平台，2026-07-25 WebFetch 核实）。
+> **许可证 = CC BY-NC-SA 4.0**（raw LICENSE 确认，原文 "not a software license... protect the commercial rights"），
+> 明确禁商用，与单创OS 商业 SaaS 冲突；技术栈 Next.js15+React19+MySQL/Prisma+Redis/BullMQ+MinIO 亦不兼容、非 CLI 形态。
+> 全文与逐条映射见 `docs/research/waoowaoo_borrowing.md`。处置定级：MEMORY § XII「不能商用 → 只借鉴，不引代码/不 subprocess 接入/不 vendored」。
+
+waoowaoo 是"消费级 AI 短剧生产"产品，与 AOS 不在同一层，但它**验证了 AOS 内容营销岗「编排+审核」路线的正确方向**，可借 4 点与 OpenWorker 形成互补：
+
+- **[A] 分阶段可干预管线**：把内容营销岗工作流从单步 `promote` 扩为「选题 → 素材 → 分镜 → 配音 → 成片 → 分发」多阶段，每阶段过 §0.7 白盒审核闸门（补缺口：当前 AOS 内容生产是单步黑箱，无人工干预点）。
+- **[B] 角色/场景一致性锚点**：`media.image` / `media.video` 加 `identity_anchors` 一等约束（角色脸/场景色板一旦锁定，后续镜头强制对齐），补 AOS 跨镜头一致缺口（OpenWorker/img2threejs 均未覆盖此点）。
+- **[C] 短剧/漫剧子能力 opt-in**：内容营销岗加 `short_drama` 标签，只做编排+审核、底层走已接入商用引擎（Mediakit/Remotion 等）不自建——与 Mediakit 借鉴（视频后期）、img2threejs（3D）形成内容生产三件套。
+- **[D] 数据自控 + 分阶段审核哲学**：waoowaoo 的"每环节可人工干预、数据本地可控"强化单创OS 差异化卖点（呼应 OpenWorker 审批门控缺口 + §0.7.1 诚实纪律），属叙事级借鉴，不改架构。
+
 ---
 
 ## 6. 工作法（Agentic Engineering，Karpathy「后 Vibe Coding」范式）
