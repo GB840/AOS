@@ -41,7 +41,7 @@ AIGC:
 ---
 
 <!-- BASELINE_START -->
-## 0.5 基线快照（2026-07-19 同步，人工同步至 STATUS.md 真值；HEAVY 模式重跑待恢复）
+## 0.5 基线快照（2026-07-25 06:10 UTC，手动生成(轻量)）
 
 > 任何 AI / 用户进场第一秒应读到"现在到底行不行"，而非手写叙事。
 > 本表由 `tools/baseline_snapshot.py` 真实测算后写入；轻量模式测适配器/测试数，
@@ -49,15 +49,13 @@ AIGC:
 
 | 项 | 数值 | 备注 |
 |----|------|------|
-| 适配器总数 | 29 类 / 30 文件 | `core.fabric.adapters.__all__`（缺依赖自动跳过；含数字类名 AG2Adapter/Mem0Adapter）——2026-07-19 explore 真机 grep 同步 |
+| 适配器总数 | 27 | kernel FabricHub `_ADAPTERS`(26) + orchestrator(自动注册) |
 | live | ? | 重跑需 `AOS_BASELINE_HEAVY=1` |
 | dead | ? | 典型无 key 环境见 §7（openclaw/ag2/litellm/mem0/lfm2） |
-| 测试 | 955 函数 / 139 文件 | `pytest --co -q`（含 flywheel/sandbox/security/compliance 等新增测试）——2026-07-19 全量从未单轮跑完过（沙箱 120s 超时不足以跑全），需主机 `pytest tests/ -q --timeout=60` 实证 |
+| 测试 | 1139 collected | `pytest --co -q` |
 | 覆盖率 | ?% | 轻量模式未测；HEAVY 模式实测见 §5 质量门下限 |
-| brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric` 空适配器跳过 + 注册壳保护（2026-07-18 修） |
-| 技能 | 33 | `skills/manifest.json`（单一真相） |
-| 死代码清理 | ~300 文件/2100行 | 删 persistence/cache/db_pool/core.platform/_migrate_backup（2026-07-18） |
-| 生成时间 | 2026-07-19 | 人工同步至 STATUS.md 真值；待 baseline_snapshot.py HEAVY 重跑 |
+| brain.fabric | 优雅降级 None | `core/brain.py:_init_fabric`(875) import 失败即 `fabric=None`，双轨未合 |
+| 生成时间 | 2026-07-25 06:10 UTC | `python tools/baseline_snapshot.py` |
 <!-- BASELINE_END -->
 
 ### 0.6 双轨融合进度（2026-07-20 更新）
@@ -312,11 +310,22 @@ AOS 不是通用标准化智能，而是贴合使用者本地环境的专属智�
   `steps[]` 逐跳经 hub 路由，上一步输出喂下一步；支持 `parallel_groups` 组内并发。
 - **think→do 闭环已收口**：`run_task(planner='ag2')` — ag2 规划文本 → 解析成带 `[AOS能力]` 标签的 steps → 逐跳执行。
 
-**实际注册引擎名（20个，按 health_report() 真跑数据）**：
+**实际注册引擎名（**38 个**，2026-07-25 真机 health_report() 数据：基础 27 + 动态 11）**：
+
+基础 `_ADAPTERS`(26) + orchestrator(自动) = **27 个**：
 openclaw / ag2 / litellm / mem0 / browser-use / langfuse / web-search / web-fetch /
-agnes / vlm / code-exec / file-io / threejs / stt / tts / lnn / lfm2 / scripts /
-codebase-memory-mcp / orchestrator。
-（CodeWhale / IMA / mistralrs / Page-Agent 是外部愿景，非当前注册名，不要在代码里当真实引擎引用。）
+web-crawl (crawl4ai) / agnes / vlm / code-exec / file-io / threejs / stt / tts / lnn /
+lfm2 / scripts / mediakit / img2threejs / media-gen / miniCPM-o / video-maker /
+remotion / security-audit / orchestrator。
+
+动态注册（11 个，env / register_* 触发）：
+codebase-memory-mcp / desktop-touch / omni-video / video-use / weknora / ida-pro /
+code-team / comfyui / content-director / content-marketer / cast / echo / refine
+（与 orchestrator 重合一处，**总计 38 个**）。
+
+> 注：早期文档写"20 / 29" 均为基线未扩 + 未跑 health_report 时的快照；以 2026-07-25 实测
+> baseline_snapshot.py + `hub.health_report()` 为唯一真相源。CodeWhale / IMA / mistralrs /
+> Page-Agent 是外部愿景，非当前注册名，不要在代码里当真实引擎引用。
 
 ---
 
@@ -477,12 +486,18 @@ waoowaoo 是"消费级 AI 短剧生产"产品，与 AOS 不在同一层，但它
   sentence-transformers）。本机 sentence_transformers / ollama / chromadb 已装齐。
 - **推理本地**：mistralrs / ollama 已在 wiring 设计好，启用即用。
 - **绘图**：openclaw 是**本地自托管网关**（127.0.0.1:18789，MIT 免费）。`openclaw gateway run` 或 adapter 的
-  `ensure_gateway()` 自起。当前 dead 引擎 5 个及根因：
+  `ensure_gateway()` 自起。当前 dead 引擎 **7 个**（2026-07-25 probe_dead.py 真跑 8s 探活）：
   - **openclaw** — port_down 127.0.0.1:18789（网关没跑）
-  - **ag2** — 依赖未就绪（autogen import 超时或 ZHIPU_API_KEY 缺失）
-  - **litellm** — guarded_import: litellm unavailable (timeout=8.0s)
-  - **mem0** — import_missing: mem0 unavailable (import hung or missing)
-  - **lfm2** — weights_ready=False（需 HuggingFace 下载权重）
+  - **stt** — health() 8s TIMEOUT（whisper.cpp 二进制/模型未装）
+  - **lfm2** — health() 8s TIMEOUT（HF 权重探测慢，`AOS_LFM_ASSUME_READY=1` 可绕）
+  - **minicpm_o** — health() 8s TIMEOUT（本地 omni 服务 10 次重试都连不上）
+  - **vlm** — health()=False（无 tier resolve，需配 ZHIPU_API_KEY 或本地推理后端）
+  - **mediakit** — health()=False（`AOS_MEDIAKIT_ENABLED=1` 未开，opt-in 关闭）
+  - **comfyui** — health()=False（`http://127.0.0.1:8188/system_info` 探活失败，本地 ComfyUI 未起）
+
+  > 注：早期文档说"5 大 dead 引擎"漏算了 stt / vlm（已修）。ag2 / litellm / mem0 实际
+  > probe 时**已 live**（依赖 autogen / litellm / mem0 已安装，且 health() 不再卡死），
+  > 不再列入 dead 表。
 - **搜索**：AnySearch（免 key）+ 百度/Bing HTML（国内最稳）已多源兜底，不花钱。
 
 ## 8. 生态集成（万物为我所用 —— 5 款真实产品经 MCP 接入）

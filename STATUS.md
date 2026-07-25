@@ -12,15 +12,20 @@ AIGC:
 # AOS 项目状态总地图（STATUS）
 
 > 这是一份**导航索引**，不是技术文档。每次大状态变动更新这里。
-> 最后更新：**2026-07-19**（数字纠偏：实测 **29 适配器类 / 30 文件 · 955 测试函数 / 139 测试文件 · 16 API 路由文件 · 11 内核子包 + 35 内核顶层模块**）。
+> 最后更新：**2026-07-25**（数字纠偏：实测 **27 适配器类（基础 _ADAPTERS 26 + orchestrator） / 35 适配器文件 / 1139 测试函数 / 178 测试文件 · FabricHub 实际注册 38 个引擎（基础 27 + 动态 11），live 31 / dead 7 · 11 内核子包 + 36 内核顶层模块 · 20 API 路由文件**）。
 
 ---
 
-## 0. 一句话现状（2026-07-19）
+## 0. 一句话现状（2026-07-25）
 
 AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器）** 为干净运行时，统一持有路由/记忆/上下文主权并调度各芯粒适配器；legacy 的 `brain.py` 仍作 `/api/chat` 灰度兜底（双轨尚未合流）。在此之上新增了**内容飞轮平台**（Studio/Hub/Pulse/Evolve + 5 适配器 + SkillHub/AutoSkill 集成），端到端已真跑通（搜索→LLM 写脚本→本地 ffmpeg+edge-tts 生成视频）。
 
-**规模（实测，非记忆，2026-07-19 真机核对）：29 适配器类 / 30 文件 · 955 测试函数 / 139 测试文件 · 33 技能（manifest）· 11 内核子包 + 35 内核顶层模块 · 16 个 API 路由文件。**
+**规模（实测，非记忆，2026-07-25 baseline_snapshot + probe_all 真机核对）：**
+- **27 适配器类**（FabricHub `_ADAPTERS` 26 + orchestrator 1）/ 35 适配器文件 / 1139 测试函数 / 178 测试文件
+- FabricHub **实际注册 38 个**引擎（基础 27 + 动态 11），**live 31 / dead 7**
+- 11 内核子包 + 36 内核顶层模块 / 20 API 路由文件 / 50+ 技能（manifest.json）
+- **7 大 dead 引擎**（2026-07-25 probe_dead.py 实跑 8s 探活）：openclaw / stt / lfm2 / minicpm_o / vlm / mediakit / comfyui
+- **反思闭环 mock 端到端首验 PASS**（2026-07-25）：6 阶段按序推进 + 教训自动注入下一轮 analyze
 
 ---
 
@@ -64,32 +69,66 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 
 ---
 
-## 3. 29 个 FabricHub 适配器（`src/core/fabric/adapters/`）
+## 3. FabricHub 适配器（27 类 / 35 文件 + 11 动态注册 → 总注册 38 个）
+
+`src/core/fabric/adapters/` 共 35 个 .py 文件，`_ADAPTERS` 注册 26 个（+1 orchestrator 运行时自动 = 27 基础），
+另有 11 个引擎通过 `register_*()` 动态注册（env / opt-in 触发），**health_report 实测总 38 个注册**（live 31 / dead 7）。
+
+### 3.1 基础 `_ADAPTERS`(26) — 27 基础引擎
 
 按"真实开源绑定 vs AOS 自研"分类（核实结论，不编造）：
 
 **真实开源薄适配层（接已验证的开源项目）：**
 | 适配器 | 绑定开源 | 角色 |
 |---|---|---|
-| `OpenClawAdapter` | OpenClaw 网关（嘴耳/接入） | 多通道接入 |
+| `OpenClawAdapter` | OpenClaw 网关（嘴耳/接入） | 多通道接入 — **dead**（端口没起） |
 | `LiteLLMAdapter` | LiteLLM | 统一 100+ LLM 推理网关 |
 | `Mem0Adapter` | Mem0 | Graph-RAG 长期记忆 |
 | `LangfuseAdapter` | Langfuse | tracing/eval/观测 |
 | `BrowserUseAdapter` | browser-use | 浏览器动手/ACI |
 | `AG2Adapter` | AG2（AutoGen 社区分叉, MIT） | 群聊编排 |
 | `MCPClientAdapter` / `MCPStdioAdapter` | MCP 协议 | 接任意外部 MCP Server |
-| `MiniCPMOAdapter` | MiniCPM-o（OpenBMB, 全双工语音） | 语音/全模态 |
+| `MiniCPMOAdapter` | MiniCPM-o（OpenBMB, 全双工语音） | 语音/全模态 — **dead**（本地服务探活失败） |
+| `Crawl4AIAdapter` | crawl4ai | 高质量 web 爬取 |
 
 **AOS 自研/自包含功能适配器：**
-| 适配器 | 做什么 |
-|---|---|
-| `AgnesAdapter` | 多模态平面 |
-| `ContentMarketerAdapter` / `CastAdapter` / `EchoAdapter` / `RefineAdapter` / `VideoMakerAdapter` | 内容飞轮：搜索→写脚本→生成视频→分发→回声→优化（ffmpeg+edge-tts 本地生成） |
-| `CodeExecutionAdapter` / `FileAdapter` / `ScriptsAdapter` | 本地代码/文件/脚本执行 |
-| `SearchAdapter` / `WebFetchAdapter` | 多源联网搜索/抓取 |
-| `LFMAdapter` / `LNNAdapter` / `VLMAdapter` / `STTAdapter` / `TTSAdapter` / `ThreejsAdapter` | 模型/模态能力（本地或外部模型） |
+| 适配器 | 做什么 | 状态 |
+|---|---|---|
+| `AgnesAdapter` | 多模态平面（OpenAI 兼容） | live |
+| `ContentMarketerAdapter` / `CastAdapter` / `EchoAdapter` / `RefineAdapter` / `VideoMakerAdapter` | 内容飞轮：搜索→写脚本→生成视频→分发→回声→优化（ffmpeg+edge-tts 本地生成） | live |
+| `CodeExecutionAdapter` / `FileAdapter` / `ScriptsAdapter` | 本地代码/文件/脚本执行 | live |
+| `SearchAdapter` / `WebFetchAdapter` | 多源联网搜索/抓取 | live |
+| `LFMAdapter` / `LNNAdapter` / `VLMAdapter` / `STTAdapter` / `TTSAdapter` / `ThreejsAdapter` | 模型/模态能力 | live / stt-vlm dead |
+| `MediaGenAdapter` / `RemotionAdapter` | 媒体生成（云端 / npx） | live |
+| `SecurityAuditAdapter` / `IdaProMcpAdapter` | 安全/逆向 | live |
+| `Img2ThreejsAdapter` / `MediakitAdapter` | 3D / 视频后期 | live / mediakit dead |
+| `RefineryAdapter` | 代码炼化（白盒蒸馏） | live |
 
-> 说明：`LFM`/`LNN`/`VLM` 等适配器的具体后端在文档化时未逐一核实，此处只描述功能，避免编数据。
+### 3.2 动态注册（11 个）— env / opt-in 触发
+
+| 引擎 | 触发方式 | 状态 |
+|---|---|---|
+| `OrchestrationChiplet` | 运行时自动 | live |
+| `ComfyUIAdapter` | 运行时自动（register_comfyui） | **dead**（本机 ComfyUI 未起） |
+| `CodeTeamAdapter` | 运行时自动 | live |
+| `ContentDirector` | 运行时自动 | live |
+| `codebase-memory-mcp` | `_register_env_codebase_mcp` | live |
+| `desktop-touch` | `DESKTOP_TOUCH_MCP_ENABLED=1` | live |
+| `omni-video` | `OMNI_VIDEO_MCP_ENABLED=1` | live |
+| `video-use` | `VIDEO_USE_MCP_ENABLED=1` | live |
+| `weknora` | `register_weknora_mcp` | live |
+| `ida-pro` | `register_ida_pro_mcp` | live |
+| （内容飞轮 cast/echo/refine/refinery 已计入基础 26） | — | — |
+
+### 3.3 ViMax — 未登记的孤儿 vendored 项目（⚠ §8 接入铁律违反）
+
+- `ViMax/` 完整 vendored 了 saturndec/vi... 短剧生产项目（22KB+17KB README，100+ 文件）
+- `AGENTS.md` / `SHANCHUANG_OS_PRODUCT_VISION.md` / `references/ecosystem/INTEGRATIONS.md` / `src/` 全部 **0 命中 vimax**
+- 既没登记、也没集成、也没引用 — 纯孤儿 vendored，违反 §8「能用完整开源就用完整的，全部经 references/ 真实源逐字对照」铁律
+- **状态**：已在 `INTEGRATIONS.md` §6 加孤儿登记（2026-07-25），后续待用户决策「删除 / 接入 / 改派别」
+
+> 说明：早期版本写"29 适配器类 / 30 文件"为基线未扩、未跑 health_report 时的快照；以 2026-07-25
+> `python tools/baseline_snapshot.py` + `hub.health_report()` 实测为唯一真相源。
 
 ---
 
@@ -199,10 +238,13 @@ C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe script
 C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe -m py_compile <file>
 ```
 
-- 测试基线（2026-07-19 真机实测）：`tests/` 共 **139 文件 / 955 个 test_ 函数**。
-  近端绿绿回归套：`test_causal.py` 10/10、`test_mcp_fabric_exposure.py` 6/6、
-  `test_approvals_routes.py` 1/1、`verify_step_review.py` 21/0、`verify_hitl.py` 100/100。
-  全量套需在主机以 `pytest tests/ -q --timeout=60` 跑（沙箱 120s 超时能力不足以跑全）。
+- 测试基线（2026-07-25 真机实测）：`tests/` 共 **178 文件 / 1139 个 test_ 函数**
+  （2026-07-19 旧基线 139/955 已过期）。
+  近端绿绿回归套（沙箱 30s timeout 实跑）：`test_causal.py + test_mcp_fabric_exposure.py + test_approvals_routes.py` **17/17 PASS（3.33s）**
+  （旧记录 10/6/1 = 17 个，已收敛在 17/17 PASS）。
+  全量套需在主机以 `pytest tests/ -q --timeout=60` 跑（沙箱 120s 超时能力不足以跑全量，部分子进程 prewarm 仍会卡死）。
+- **反思闭环 mock 端到端首验 PASS**（2026-07-25）：`scripts/self_evo_loop_verify.py` 实跑通过，
+  6 阶段按序推进 + 教训自动注入下一轮 analyze，**但仍只是机制层级**（真 LLM 端到端未验）。
 - FabricHub 空构造较重（~分钟级），测试用 module 级 fixture 复用。
 
 ---
