@@ -98,7 +98,9 @@ class IdaProMcpAdapter(BaseAgentAdapter):
     transport_fn：测试可注入伪造 server 响应；默认走真实 HTTP JSON-RPC。
     """
 
-    engine_id = "ida-pro-mcp"
+    @property
+    def engine_id(self) -> str:
+        return "ida-pro-mcp"
 
     def __init__(
         self,

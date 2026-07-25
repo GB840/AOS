@@ -107,7 +107,9 @@ class CastAdapter(BaseAgentAdapter):
     后续阶段：接入 browser-use / 平台 API，自动发布。
     """
 
-    engine_id = "cast"
+    @property
+    def engine_id(self) -> str:
+        return "cast"
 
     def __init__(self, route_fn=None) -> None:
         self._route_fn = route_fn

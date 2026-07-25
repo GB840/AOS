@@ -183,8 +183,7 @@ class RepoAgent:
         if len(message) < 5:
             return InvokeResult(ok=False, error="repo: commit 需提供有效 message（≥5字）")
 
-        # 暂存（仅已跟踪 + 新增，但随后会做敏感检查）
-        self._run(["add", "-A"])
+        # 先检查敏感文件，通过后再暂存（避免敏感文件被 git add -A 加入暂存区）
         rc, st, _ = self._run(["status", "--porcelain"])
         for line in st.splitlines():
             f = line[3:].strip()
@@ -195,6 +194,9 @@ class RepoAgent:
                 )
         if not st.strip():
             return InvokeResult(ok=False, error="repo: 无改动可提交（working tree clean）")
+
+        # 敏感检查通过，执行暂存
+        self._run(["add", "-A"])
 
         rc, out, err = self._run(["commit", "-m", message])
         if rc != 0:

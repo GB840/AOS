@@ -170,7 +170,9 @@ class SecurityAuditAdapter(BaseAgentAdapter):
     绝不包含/下载/运行任何 exploit 代码；拒绝任何外部目标。
     """
 
-    engine_id = "security-audit"
+    @property
+    def engine_id(self) -> str:
+        return "security-audit"
 
     def __init__(self) -> None:
         # 探测执行器（测试可注入伪造返回值，默认走真实本地只读子进程）。

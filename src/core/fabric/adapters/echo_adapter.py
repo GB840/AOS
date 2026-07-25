@@ -67,7 +67,9 @@ class EchoAdapter(BaseAgentAdapter):
     后续阶段：接入各平台 API / 浏览器抓取评论区，VLM 读图识别弹幕。
     """
 
-    engine_id = "echo"
+    @property
+    def engine_id(self) -> str:
+        return "echo"
 
     def __init__(self, route_fn=None, pulse=None) -> None:
         self._route_fn = route_fn

@@ -50,7 +50,9 @@ _UA = {
 class SearchAdapter(BaseAgentAdapter):
     """多源免费联网搜索：真实结果优先，全部失败如实报错。"""
 
-    engine_id = "web-search"
+    @property
+    def engine_id(self) -> str:
+        return "web-search"
 
     def advertise_capabilities(self):
         return [Capability.WEB_SEARCH]

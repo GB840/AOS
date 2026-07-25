@@ -51,7 +51,9 @@ class RemotionAdapter(BaseAgentAdapter):
     渲染会诚实失败（ok=False），由调用方降级处理。
     """
 
-    engine_id = "remotion"
+    @property
+    def engine_id(self) -> str:
+        return "remotion"
 
     def __init__(self, route_fn=None) -> None:
         self._route_fn = route_fn

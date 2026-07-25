@@ -62,7 +62,9 @@ class RefineAdapter(BaseAgentAdapter):
     后续阶段：接入 LLM 做深度分析，自动 A/B 测试。
     """
 
-    engine_id = "refine"
+    @property
+    def engine_id(self) -> str:
+        return "refine"
 
     def __init__(self, route_fn=None) -> None:
         self._route_fn = route_fn
