@@ -204,7 +204,7 @@ class ContentGuard:
     SENSITIVE_PATTERNS: Dict[str, Pattern] = {
         "phone_cn":    re.compile(r"1[3-9]\d{9}"),
         "id_card":     re.compile(r"\d{17}[\dXx]"),
-        "bank_card":   re.compile(r"^\d{16,19}$"),
+        "bank_card":   re.compile(r"(?<!\d)\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{1,7}(?!\d)"),
         "email":       re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
         "ip_address":   re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
         "api_key_bearer": re.compile(r"(?:sk-|TK-|AK-)[a-zA-Z0-9]{20,}"),

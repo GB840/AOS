@@ -68,8 +68,14 @@ class CausalModel:
     def __init__(self) -> None:
         self._data: Dict[Tuple[str, str], List[Intervention]] = {}
 
+    MAX_INTERVENTIONS_PER_KEY = 1000
+
     def ingest(self, iv: Intervention) -> None:
-        self._data.setdefault((iv.context, iv.action), []).append(iv)
+        key = (iv.context, iv.action)
+        lst = self._data.setdefault(key, [])
+        if len(lst) >= self.MAX_INTERVENTIONS_PER_KEY:
+            lst.pop(0)  # FIFO 驱逐最旧记录
+        lst.append(iv)
 
     def ingest_batch(self, items: List[Intervention]) -> None:
         for iv in items:

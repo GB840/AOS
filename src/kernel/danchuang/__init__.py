@@ -14,12 +14,16 @@ from .opc.roles import (
     create_agent,
     get_all_roles,
 )
+from .opc.agency_registry import AgencyRegistry, get_agency_registry
 from .engine.startup_engine import StartupEngine
 from .engine.goal_decomposer import GoalDecomposer
 from .engine.task_scheduler import TaskScheduler
+from .engine.crew_orchestrator import CrewOrchestrator, CrewTask, CrewAgent
+from .engine.playbook_library import PlaybookTemplate, PlaybookLibrary, WorkflowStateManager
 from .tenant.tenant_manager import TenantManager
 from .tenant.isolation import TenantDataIsolation
 from .tenant.models import Tenant, TenantPlan, TenantAPIKey
+from .tenant.saas_manager import UsageManager, AdminManager, UsageMetric, PlanTier
 from .templates import IndustryType, IndustryTemplate, get_template, list_templates
 from .core import DanchuangOS, get_danchuang_os, DanchuangOSStatus
 
@@ -53,4 +57,20 @@ __all__ = [
     "DanchuangOS",
     "DanchuangOSStatus",
     "get_danchuang_os",
+    # Agency注册
+    "AgencyRegistry",
+    "get_agency_registry",
+    # Crew编排
+    "CrewOrchestrator",
+    "CrewTask",
+    "CrewAgent",
+    # Playbook工作流
+    "PlaybookTemplate",
+    "PlaybookLibrary",
+    "WorkflowStateManager",
+    # SaaS管理
+    "UsageManager",
+    "AdminManager",
+    "UsageMetric",
+    "PlanTier",
 ]

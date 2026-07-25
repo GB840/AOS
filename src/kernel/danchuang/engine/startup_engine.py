@@ -188,49 +188,101 @@ class StartupEngine:
         return daily_log
 
     def _execute_work_item(self, tenant_id: str, item: DailyWorkItem) -> Dict[str, Any]:
-        """执行单个工单。
-
-        此方法模拟工单执行，实际项目中应通过 FabricHub 调用各岗位智能体能力。
-
-        Args:
-            tenant_id: 租户ID
-            item: 日工单
-
-        Returns:
-            执行结果
-        """
+        """执行单个工单——经 FabricHub 真实路由调用对应岗位能力。"""
         logger.debug(f"执行工单 {item.item_id}: {item.title}")
+        from api.startup_api import snapshot_output_dirs, scan_new_artifacts
+        before = snapshot_output_dirs()
 
         role = item.assigned_role
-        success_rate = {
-            OPCRole.PRODUCT_RD.value: 0.85,
-            OPCRole.MARKET_RESEARCH.value: 0.9,
-            OPCRole.CONTENT_MARKETING.value: 0.92,
-            OPCRole.CUSTOMER_SERVICE.value: 0.88,
-            OPCRole.FINANCE.value: 0.95,
+        # 岗位→能力映射：每个岗位调用最匹配的FabricHub能力
+        capability_map = {
+            "product_rd": "action.code_exec",
+            "market_research": "web.search",
+            "content_marketing": "media.video",
+            "customer_service": "inference.llm",
+            "finance": "finance.report",
+        }
+        capability = capability_map.get(role, "inference.llm")
+
+        # 构造任务payload
+        payload = {
+            "task": item.title,
+            "description": item.description,
+            "role": role,
+            "context": {
+                "tenant_id": tenant_id,
+                "item_id": item.item_id,
+                "deliverables": item.deliverables if hasattr(item, 'deliverables') else [],
+            },
         }
 
-        import random
+        # 尝试通过 FabricHub 真实路由
+        try:
+            from kernel.plugins.fabric_hub import get_fabric_hub
+            hub = get_fabric_hub()
+            if hub is not None:
+                result = hub.route(capability, payload)
+                if hasattr(result, 'ok') and result.ok:
+                    output = result.data
+                    if isinstance(output, dict):
+                        output = output.get("content") or output.get("text") or output.get("summary") or str(output)
+                    artifacts = scan_new_artifacts(before)
+                    engine_id = getattr(result, "engine_id", None)
+                    result = {
+                        "item_id": item.item_id,
+                        "title": item.title,
+                        "status": "completed",
+                        "role": role,
+                        "capability": capability,
+                        "engine": engine_id,
+                        "output": str(output)[:500] if output else f"已完成: {item.title}",
+                        "artifacts": artifacts,
+                    }
+                    return result
+                else:
+                    error_msg = getattr(result, "error", "未知错误")
+                    return {
+                        "item_id": item.item_id,
+                        "title": item.title,
+                        "status": "failed",
+                        "role": role,
+                        "capability": capability,
+                        "error": f"FabricHub路由失败: {error_msg}",
+                    }
+        except Exception as e:
+            logger.warning(f"FabricHub不可用，降级到本地执行: {e}")
 
-        rate = success_rate.get(role, 0.85)
-        is_success = random.random() < rate
+        # 降级：FabricHub不可用时使用本地LLM生成
+        try:
+            from kernel.plugins.zhipu_chat import zhipu_chat
+            prompt = f"你是{role}岗位的AI助手。请完成以下任务：{item.title}\n\n任务描述：{item.description}" if hasattr(item, 'description') else f"你是{role}岗位的AI助手。请完成以下任务：{item.title}"
+            messages = [{"role": "user", "content": prompt}]
+            response = zhipu_chat(messages, max_tokens=512)
+            if response:
+                artifacts = scan_new_artifacts(before)
+                result = {
+                    "item_id": item.item_id,
+                    "title": item.title,
+                    "status": "completed",
+                    "role": role,
+                    "capability": capability,
+                    "engine": "zhipu-local",
+                    "output": str(response)[:500],
+                    "artifacts": artifacts,
+                }
+                return result
+        except Exception as e:
+            logger.warning(f"本地LLM降级也失败: {e}")
 
-        if is_success:
-            return {
-                "item_id": item.item_id,
-                "title": item.title,
-                "status": "completed",
-                "role": role,
-                "output": f"已完成: {item.title}",
-            }
-        else:
-            return {
-                "item_id": item.item_id,
-                "title": item.title,
-                "status": "failed",
-                "role": role,
-                "error": f"执行失败: {item.title}，需要重试或调整",
-            }
+        # 最终降级：返回明确的失败信息
+        return {
+            "item_id": item.item_id,
+            "title": item.title,
+            "status": "failed",
+            "role": role,
+            "capability": capability,
+            "error": f"执行失败: 无可用引擎（FabricHub和本地LLM均不可用）",
+        }
 
     def get_status(self, tenant_id: str) -> Dict[str, Any]:
         """获取当前创业状态总览。

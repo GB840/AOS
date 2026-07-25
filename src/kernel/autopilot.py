@@ -1436,6 +1436,7 @@ _REFLECTION_MEMORY_PATH = os.path.join(
 _REFLECTION_MEMORY_MAX = 200
 _REFLECTION_MEMORY_SHORT_TTL_DAYS = 7
 _REFLECTION_MEMORY_LONG_TTL_DAYS = 90
+_REFLECTION_LOCK = threading.Lock()
 
 
 def _tokenize(text: str) -> set:
@@ -1452,52 +1453,53 @@ def _load_lessons(task: str, limit: int = 3) -> List[Dict[str, Any]]:
     - 长期环境偏好（长周期保留）：90天
     - 热度权重：长期未被命中的自动降级淘汰
     """
-    try:
-        if not os.path.exists(_REFLECTION_MEMORY_PATH):
+    with _REFLECTION_LOCK:
+        try:
+            if not os.path.exists(_REFLECTION_MEMORY_PATH):
+                return []
+            q = _tokenize(task)
+            scored = []
+            now = datetime.datetime.now()
+            with open(_REFLECTION_MEMORY_PATH, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    # TTL过滤：短期故障记忆7天，长期环境偏好90天
+                    ts_str = rec.get("ts", "")
+                    if not ts_str:
+                        continue
+                    try:
+                        ts = datetime.datetime.fromisoformat(ts_str)
+                    except Exception:
+                        continue
+                    days_old = (now - ts).days
+                    # 判断是短期故障记忆还是长期环境偏好
+                    # 短期：包含"失败"、"错误"、"异常"等关键词
+                    is_short_term = any(
+                        kw in rec.get("lesson", "").lower()
+                        for kw in ["失败", "错误", "异常", "error", "fail"]
+                    )
+                    ttl_days = (
+                        _REFLECTION_MEMORY_SHORT_TTL_DAYS
+                        if is_short_term
+                        else _REFLECTION_MEMORY_LONG_TTL_DAYS
+                    )
+                    if days_old > ttl_days:
+                        continue
+                    base = _tokenize(rec.get("task", "") + " " + rec.get("failed_cap", ""))
+                    overlap = len(q & base)
+                    if overlap:
+                        scored.append((overlap, rec))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return [r for _, r in scored[:limit]]
+        except Exception:
+            logger.warning("载入反思记忆失败", exc_info=True)
             return []
-        q = _tokenize(task)
-        scored = []
-        now = datetime.datetime.now()
-        with open(_REFLECTION_MEMORY_PATH, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                # TTL过滤：短期故障记忆7天，长期环境偏好90天
-                ts_str = rec.get("ts", "")
-                if not ts_str:
-                    continue
-                try:
-                    ts = datetime.datetime.fromisoformat(ts_str)
-                except Exception:
-                    continue
-                days_old = (now - ts).days
-                # 判断是短期故障记忆还是长期环境偏好
-                # 短期：包含"失败"、"错误"、"异常"等关键词
-                is_short_term = any(
-                    kw in rec.get("lesson", "").lower()
-                    for kw in ["失败", "错误", "异常", "error", "fail"]
-                )
-                ttl_days = (
-                    _REFLECTION_MEMORY_SHORT_TTL_DAYS
-                    if is_short_term
-                    else _REFLECTION_MEMORY_LONG_TTL_DAYS
-                )
-                if days_old > ttl_days:
-                    continue
-                base = _tokenize(rec.get("task", "") + " " + rec.get("failed_cap", ""))
-                overlap = len(q & base)
-                if overlap:
-                    scored.append((overlap, rec))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [r for _, r in scored[:limit]]
-    except Exception:
-        logger.warning("载入反思记忆失败", exc_info=True)
-        return []
 
 
 def _save_lesson(task: str, failed_cap: str, error: str, lesson: str) -> None:
@@ -1511,20 +1513,21 @@ def _save_lesson(task: str, failed_cap: str, error: str, lesson: str) -> None:
         "error": (error or "")[:200],
         "lesson": lesson.strip(),
     }
-    try:
-        os.makedirs(os.path.dirname(_REFLECTION_MEMORY_PATH), exist_ok=True)
-        # 轮转：超上限删最旧 20%
-        if os.path.exists(_REFLECTION_MEMORY_PATH):
-            with open(_REFLECTION_MEMORY_PATH, encoding="utf-8") as f:
-                lines = [l for l in f if l.strip()]
-            if len(lines) >= _REFLECTION_MEMORY_MAX:
-                lines = lines[_REFLECTION_MEMORY_MAX // 5:]
-                with open(_REFLECTION_MEMORY_PATH, "w", encoding="utf-8") as f:
-                    f.writelines(lines)
-        with open(_REFLECTION_MEMORY_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except Exception:
-        logger.warning("保存反思记忆失败", exc_info=True)
+    with _REFLECTION_LOCK:
+        try:
+            os.makedirs(os.path.dirname(_REFLECTION_MEMORY_PATH), exist_ok=True)
+            # 轮转：超上限删最旧 20%
+            if os.path.exists(_REFLECTION_MEMORY_PATH):
+                with open(_REFLECTION_MEMORY_PATH, encoding="utf-8") as f:
+                    lines = [l for l in f if l.strip()]
+                if len(lines) >= _REFLECTION_MEMORY_MAX:
+                    lines = lines[_REFLECTION_MEMORY_MAX // 5:]
+                    with open(_REFLECTION_MEMORY_PATH, "w", encoding="utf-8") as f:
+                        f.writelines(lines)
+            with open(_REFLECTION_MEMORY_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.warning("保存反思记忆失败", exc_info=True)
 
 
 # ---- 语义记忆（任务→真实产出的知识沉淀，长程自主） ----

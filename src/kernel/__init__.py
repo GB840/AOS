@@ -86,6 +86,31 @@ _LAZY_IMPORTS = {
     "UpgradeManager": (".versioning", "UpgradeManager"),
     "VersionRegistry": (".versioning", "VersionRegistry"),
     "VersionedPlugin": (".versioning", "VersionedPlugin"),
+    # 自主环
+    "autopilot": ("kernel.autopilot", "run"),
+    "aos": ("kernel.aos", "run_task"),
+    # 工作流
+    "workflow_engine": ("kernel.workflow_engine", "WorkflowEngine"),
+    # 记忆
+    "hippo_scroll": ("kernel.hippo_scroll", "HippoScrollEngine"),
+    "memory_compression": ("kernel.memory_compression", "MemoryCompressor"),
+    "memory_distiller": ("kernel.memory_distiller", "MemoryDistiller"),
+    "memory_lifecycle": ("kernel.memory_lifecycle", "MemoryLifecycleBridge"),
+    # 安全
+    "compliance": ("kernel.compliance", "AuditTrail"),
+    "auth_bridge": ("kernel.auth_bridge", "AuthBridge"),
+    # 进化
+    "evolution_distiller": ("kernel.evolution_distiller", "EvolutionDistiller"),
+    "learning_loop": ("kernel.learning_loop", "LearningLoop"),
+    # 桥接
+    "v5_bridge": ("kernel.v5_bridge", "ChatBridge"),
+    "skills_bridge": ("kernel.skills_bridge", "SkillsBridge"),
+    # 可观测
+    "semantic_state": ("kernel.semantic_state", "SEMANTIC_LOCK"),
+    # 无人区新模块
+    "causal_experiment": ("kernel.causal_experiment", "CausalExperimentEngine"),
+    "evidence_chain": ("kernel.evidence_chain", "EvidenceChainBuilder"),
+    "experience_sharing": ("kernel.experience_sharing", "ExperienceSharingEngine"),
 }
 
 __all__ = list(_LAZY_IMPORTS.keys())
