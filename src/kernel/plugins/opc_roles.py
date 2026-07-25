@@ -56,7 +56,7 @@ OPC_ROLES: Dict[str, OPCRole] = {
         id="content_marketing",
         name="内容营销智能体",
         description="短视频脚本、海报、图文笔记、分发（可选 WorkRally 增强）；音视频后期处理可由 mediakit-cli（火山引擎，opt-in）提供",
-        capabilities=["media.image", "media.video", "media.audio", "inference.llm", "edu.course_gen", "media.process"],
+        capabilities=["media.image", "media.video", "media.audio", "inference.llm", "edu.course_gen", "media.process", "content.short_drama"],
         workflow=["promote"],
     ),
     "customer_service": OPCRole(

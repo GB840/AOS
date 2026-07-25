@@ -77,3 +77,19 @@ waoowaoo 从**产品理念**上验证了"内容营销岗应覆盖短剧/漫剧�
 4. 内容营销岗 `opc_roles.py` 可加可选 `short_drama` capability 标签（默认关闭），驱动上游 `media.*` 引擎组合——**仅声明，不实现底层引擎**。
 
 > 诚信备注：以上均为"理念借鉴 + 架构叙事"，未引入 waoowaoo 任何代码、未违反其 CC BY-NC-SA 4.0 许可证。单创OS 在内容/短剧方向的实际能力，仍由已接入的开放/商用许可引擎（img2threejs / Mediakit / 自研 media.* 适配器）提供。
+
+---
+
+## 六、落地状态（代码已落地，2026-07-25）
+
+原"仅声明不实现"的借鉴点现已在工程层实现（仍**不引入 waoowaoo 代码**，只借鉴其理念）：
+
+| 借鉴点 | 落地代码 | 诚实边界 |
+|--------|----------|----------|
+| A 多阶段可干预管线 | `ContentMarketerAdapter.promote_pipeline()`：选题→素材→分镜→配音→成片→分发 6 阶段，每阶段经 `reviewer` 闸门（§0.7 白盒审核），False 即停。 | 仅适配层真跑（layer ①② 已测）；端到端视频生成仍需真 LLM+媒体引擎（layer ③ 未验）。 |
+| B 一致性锚点 | `produce`/`promote_pipeline` 接收 `identity_anchors` 并透传至 `media.video` 调用契约（已测试桩验证透传）。 | 是"约束字段 + 透传"，不是"一致性生成算法"——底层一致性由接入引擎负责，AOS 不自建。 |
+| C 短剧子能力 | `Capability.CONTENT_SHORT_DRAMA` 枚举 + `content_marketer` 注册 + `opc_roles` 内容营销岗能力表，opt-in（默认走普通短视频）。 | 仅是能力标签与短剧提示词变体；底层生成仍走已接入引擎，未自建影视引擎。 |
+| D 审核哲学 | 由 promote_pipeline 的 `reviewer` 闸门机制承载（默认 reviewer 自动放行并记录，不等同人工已审）。 | 默认非人工审核，调用方需自传 reviewer 做真门控。 |
+
+新增测试 `tests/test_content_marketer_pipeline.py`（5 例全过）：验证 6 阶段真跑、reviewer 任意阶段挡停、short_drama 能力注册、pipeline 分支可由 invoke 触发、identity_anchors 透传。
+

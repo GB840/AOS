@@ -127,6 +127,9 @@ class Capability(str, Enum):
     CONTENT_REFINE = "content.refine"             # 局部润色 / 重新生成
     CONTENT_AB_TEST = "content.ab_test"           # A/B 测试设计与结论
     CONTENT_MARKETING_VIDEO = "content.marketing_video"  # 一句话目标→营销视频生产（端到端）
+    # 短剧/漫剧子能力（opt-in 借鉴 waoowaoo，CC BY-NC-SA 4.0 禁商用→只借鉴不集成）：
+    # 多镜头角色/场景一致性编排（配合 identity_anchors 约束），由 content-marketer 注册。
+    CONTENT_SHORT_DRAMA = "content.short_drama"
     # 防御型本地漏洞自查（只读、仅本机；仅用公开 CVE 元数据，绝不携带/运行 exploit）。
     # 把「exploitarium 式零日情报」转化为对**自己环境**的巡检能力，而非攻击能力。
     SECURITY_AUDIT = "security.audit"
