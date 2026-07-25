@@ -52,6 +52,7 @@ from core.fabric.adapters import (
     SecurityAuditAdapter,
     IdaProMcpAdapter,
     Img2ThreejsAdapter,
+    KnowmeshAdapter,
     MediakitAdapter,
 )
 from core.fabric.capability import Capability
@@ -160,6 +161,7 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
         SecurityAuditAdapter,  # 防御型本地漏洞自查（security.audit）：只读、仅本机、用公开 CVE 元数据
         Img2ThreejsAdapter,    # 图片→程序化 Three.js 重建（media.3d.reconstruct）：vendored 纯 stdlib 脚本 + divine_eye 零 token 评分
         MediakitAdapter,       # 云端音视频后期处理（media.process）：火山引擎 mediakit-cli 胶水，opt-in（默认关闭）
+        KnowmeshAdapter,       # 本地文档知识库（memory.knowledge）：知络 KnowMesh HTTP-API 胶水，零依赖、本地优先
     )
     if a is not None
 )

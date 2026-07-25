@@ -220,6 +220,10 @@ ENGINE_CAPABILITY_MAP: dict[str, list[Capability]] = {
     # 云端模式另需火山 API Key（mediakit-cli init 配置或 env）。100+ 音视频原子能力
     # （剪辑/音频/图像AI/视频AI/通用），--local/--cloud 双模态逐命令切换。
     "mediakit": [Capability.MEDIA_PROCESS],
+    # knowmesh：知络 KnowMesh 本地文档知识库（HTTP-API-only，Node，非 MCP）。
+    # 复用 memory.knowledge 能力（RAG / 带引用问答）；查询为 scoped，需 knowledgeBaseId。
+    # 本地优先零成本 → HIGH 档（与 mem0 / comfyui 同级）。
+    "knowmesh": [Capability.MEMORY_KNOWLEDGE],
 }
 
 # 引擎档位声明（数据，非架构；自由编辑）。高=本地重算力/零成本/最强隐私，
@@ -266,6 +270,8 @@ ENGINE_TIER: dict[str, str] = {
     "img2threejs": TIER_HIGH,
     # mediakit：云端火山引擎音视频后期（需 Node + 可选 API Key，质量优有成本）→ 中档
     "mediakit": TIER_MEDIUM,
+    # knowmesh：本地文档知识库（HTTP-API，零成本/最强隐私/本地优先）→ 高档
+    "knowmesh": TIER_HIGH,
 }
 
 

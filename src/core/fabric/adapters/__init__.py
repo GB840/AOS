@@ -181,6 +181,11 @@ try:
 except Exception:  # noqa: BLE001 - 缺依赖（理论零依赖；CLI 未装则 health=False）则跳过，不拖垮内核
     MediakitAdapter = None
 
+try:
+    from .knowmesh_adapter import KnowmeshAdapter
+except Exception:  # noqa: BLE001 - 零依赖（仅 stdlib urllib）；服务未起则 health=False，不拖垮内核
+    KnowmeshAdapter = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -216,6 +221,7 @@ __all__ = [
         "RemotionAdapter",
         "SecurityAuditAdapter",
         "Img2ThreejsAdapter",
+        "KnowmeshAdapter",
         "MediakitAdapter",
     )
     if globals().get(n) is not None
