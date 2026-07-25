@@ -138,3 +138,32 @@ export AOS_ROUTE_STRATEGY=cost
 | Auriko | PyPI `auriko`（未 vendored；SDK Apache-2.0，网关算法未公开） | Apache-2.0 (SDK) | 0.3.0 |
 
 > 全部为真实存在、经 WebSearch 核实的仓库；克隆均 `--depth 1` 并排除 `.git`，纯作工程参考与对照，不构成对上游代码的再分发主张。
+
+---
+
+## 6. ViMax —— 完整 vendored 但**未集成**的孤儿（2026-07-25 登记）
+
+| 项 | 真实情况 |
+|---|---|
+| 仓内路径 | `D:\AOS\ViMax\`（**根目录直接 vendored**，非 `references/ecosystem/` 下；违反 §8 接入铁律默认约定） |
+| 仓库 | `github.com/saturndec/vimax`（AI 短剧/漫剧一站式生成框架；与 waoowaoo 同源思路） |
+| 上游 LICENSE | **未核实**（ViMax/ 根目录无 LICENSE 文件，README 引用 waoowaoo 同源但未给完整 license 段） |
+| AOS 角色 | **暂无**——`AGENTS.md` / `SHANCHUANG_OS_PRODUCT_VISION.md` / `references/ecosystem/INTEGRATIONS.md` / `src/` 全部 **0 命中** `vimax` / `ViMax` |
+| 当前状态 | ⚠ **孤儿 vendored**——完整源码入仓（含 `agents/` 14 个、`pipelines/` 3 个、`tools/` 9 个、`tests/` 22 个、`vimax_benchmark/` 30+ 短剧场景 JSON、`main_agent.py` / `main_idea2video.py` / `main_script2video.py` 三个入口），但 AOS 0 引用 |
+
+### 6.1 为什么登记在这里（§8 接入铁律补登）
+
+§8 接入铁律原文：「**能用完整开源就用完整的，全部经 `references/` 真实源逐字对照，不凭记忆编述**」。
+
+ViMax/ 在根目录（而非 `references/ecosystem/`）是历史遗留；§0.5 baseline 审计 2026-07-25 才发现其**未登记、未引用、未集成**，故在此补登。
+
+### 6.2 后续待用户决策（破坏性选项）
+
+| 选项 | 后果 |
+|---|---|
+| **A. 删掉 ViMax/** | 释放 ~1.8MB（不含 `.venv`）+ 100+ 文件目录；彻底不引其代码；最小化风险 |
+| **B. 移到 `references/ecosystem/vimax/`** | 符合 §8 默认约定（vendored 放 references/ 下）；不集成；保留工程参考 |
+| **C. 真集成** | 经 MCP 或薄适配器接进 FabricHub（参考 waoowaoo §5.3「禁商用只借鉴不集成」原则，**需先核 LICENSE 再决定**）；最重工程 |
+
+> 当前会话不动 ViMax/（破坏性 + LICENSE 未核），等用户决策后再处置。**所有后续会话/AI 看到 ViMax/
+> 都不应"凭印象"说已集成——它没被集成，只 vendored 了源码。**

@@ -36,6 +36,16 @@ import argparse
 import sys
 from typing import Any, Dict, List, Tuple
 
+# 2026-07-25 修：Windows GBK 终端/PowerShell 1> 重定向会把中文 emoji 写成 GBK bytes，
+# 致 PowerShell 文件读取乱码。显式 reconfigure stdout/stderr 为 utf-8，保证 PowerShell
+# 重定向 1> 时写出的也是 utf-8 bytes（Linux/macOS 默认已是 utf-8，幂等无副作用）。
+# 实测：reconfigure 后 PowerShell `> file.txt` 写的文件可用 Get-Content -Encoding utf8 正常读。
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:  # noqa: BLE001 - 旧 Python 兜底
+    pass
+
 
 def _build_mock_executor(captured: Dict[Tuple[int, str], str]):
     """mock executor：第 0 轮 acquire 故意失败，其余成功，并记录收到的任务文本。"""
@@ -97,13 +107,13 @@ def run_mock() -> int:
     assert "获客渠道白名单被拒" in analyze_cycle1, "第1轮 analyze 未携带上轮失败原因"
 
     print("=" * 64)
-    print("✅ MOCK 模式 PASS：闭环控制流 + 教训回流注入 机制真实可用")
+    print("[OK] MOCK 模式 PASS：闭环控制流 + 教训回流注入 机制真实可用")
     print(f"   阶段序列 : {stages}")
     print(f"   保存教训数: {len(store._lessons)}")
     print(f"   第1轮 analyze 已注入历史教训 (片段): ...{analyze_cycle1[-60:]!r}")
     print("=" * 64)
-    print("⚠ 诚实边界：以上仅证明『机制可用』，未用真 LLM。")
-    print("   真端到端（真 LLM 跑一轮→反思→下一轮变好）须主机 --real 模式。")
+    print("[!] 诚实边界：以上仅证明『机制可用』，未用真 LLM。")
+    print("    真端到端（真 LLM 跑一轮→反思→下一轮变好）须主机 --real 模式。")
     return 0
 
 
