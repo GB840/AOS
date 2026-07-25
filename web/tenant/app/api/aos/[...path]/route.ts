@@ -5,7 +5,7 @@ import { verifySession, SESSION_COOKIE } from '@/lib/session';
 // 对齐 AGENTS.md §5「能力即路由，权限即边界」：
 //   1. 公开路由白名单（/status）免登录，人人可探活；
 //   2. 其余受保护路由校验网关 session，无效即 401；
-//   3. 校验通过 → 网关统一注入内部 AOS_API_KEY 转发后端，前端不持任何系统密钥。
+//   3. 校验通过 → 网关注入后端签发的 JWT（存于 session）转发，前端不持任何系统密钥。
 const BACKEND = process.env.AOS_BACKEND_URL || 'http://127.0.0.1:8000';
 const PUBLIC_PATHS = new Set(['status']);
 
@@ -16,15 +16,13 @@ async function proxy(req: NextRequest, ctx: Ctx): Promise<NextResponse> {
   const path = segments.join('/');
 
   // ── 受保护路由门控：绝不信任前端携带的任何系统密钥 ──
-  if (!PUBLIC_PATHS.has(path)) {
-    const token = req.cookies.get(SESSION_COOKIE)?.value;
-    const session = verifySession(token);
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized', detail: '缺少有效会话，请先 POST /api/auth/login' },
-        { status: 401, headers: { 'WWW-Authenticate': 'Bearer realm="AOS Gateway"' } }
-      );
-    }
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  const session = PUBLIC_PATHS.has(path) ? null : verifySession(token);
+  if (!PUBLIC_PATHS.has(path) && !session) {
+    return NextResponse.json(
+      { error: 'Unauthorized', detail: '缺少有效会话，请先 POST /api/auth/login' },
+      { status: 401, headers: { 'WWW-Authenticate': 'Bearer realm="AOS Gateway"' } }
+    );
   }
 
   const target = `${BACKEND}/api/${path}${req.nextUrl.search}`;
@@ -33,7 +31,10 @@ async function proxy(req: NextRequest, ctx: Ctx): Promise<NextResponse> {
   const contentType = req.headers.get('content-type');
   if (contentType) headers['content-type'] = contentType;
 
-  // 权限即边界：网关统一注入内部 API Key，前端不持有系统密钥
+  // 权限即边界：网关持有后端签发的 JWT（存于 session），转发时注入 Authorization。
+  // 前端只持签名 session cookie，从不接触系统密钥 / 后端 JWT 明文。
+  if (session?.jwt) headers['Authorization'] = `Bearer ${session.jwt}`;
+  // 可选兼容：若仍配置了内部 AOS_API_KEY，一并注入（双因子，向后兼容）。
   const apiKey = process.env.AOS_API_KEY;
   if (apiKey) headers['x-api-key'] = apiKey;
 
