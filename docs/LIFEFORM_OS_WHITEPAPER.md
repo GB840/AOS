@@ -314,6 +314,14 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | 自检 harness | `src/kernel/self_harness.py` | ② |
 | 证据链 | `src/kernel/evidence_chain.py`、`confidence.py` | ② |
 | 仓库自进化 | `action.repo` 芯粒 | ②（端到端 ✗） |
+| **镜像分支试错**（影子对照→统计闸门→晋升/回滚） | `src/kernel/evolve/mirror_branch.py`（本批新增） | ② |
+
+**镜像分支四条纪律**（补的是"改动上线前的对照闸门"这道缺口）：
+① **影子不出门**——候选臂产出不投放真实世界，`emitted=True` 直接抛 `ShadowLeak`；
+② **不够样本不下结论**——每臂 < 20 例一律 `hold`，双比例 z 检验（自研，无 scipy）不显著也 `hold`，杜绝"跑两次就上线"；
+③ **一次伤害永久拉黑**——候选臂 `harm=True` 即 `BLOCKED`，与 `spirit/datong.py` 的 no_harm=1.0 同口径，不设容忍率；
+④ **不可逆改动必人审**——数据再好也只给 `needs_approval`，需 `approver` 或 L4 共识（`consensus_ok`）。
+并发上限 3 条分支（多处同改会污染归因）。晋升复用 `spirit/consensus.py`，不重复造共识轮子。
 
 ### L6 · 虚实交互闭环层 🔧复用
 
@@ -327,7 +335,24 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | 图/视频生成 | `media_gen_adapter.py`、`remotion_adapter.py`、`video_maker.py`、`cast_adapter.py` | ② |
 | 滚动世界落地页 | `scroll_world` skill | ② |
 | Web 控制台 | `src/web/app.py`（3000+ 行）+ `web/admin`、`web/tenant` | ③ |
-| **行动规划仲裁器**（分级+宪法优先） | `src/kernel/action_arbiter.py`（本批新增 ②） | ② |
+| **行动规划仲裁器**（分级+宪法优先） | `src/kernel/action_arbiter.py`（前批新增 ②） | ② |
+| **感知数据流网关**（进） | `src/kernel/interact/perception_gateway.py`（本批新增） | ② |
+| **人本因果仿真**（判） | `src/kernel/interact/human_causal_sim.py`（本批新增） | ② |
+| **故障紧急制动总线**（停） | `src/kernel/interact/emergency_brake.py`（本批新增） | ② |
+
+**本批补的是 L6 的"进—判—停"三道关口**（原来只有"露面"的出口，没有守门的入口与刹车）：
+
+- **感知数据流网关**：一切外部感知（STT/VLM/爬虫/浏览器/传感器）必须过六道工序——
+  背压限流（令牌桶）→ 指纹去重 → **入口即脱敏**（手机号/身份证/银行卡/邮箱，原文不落任何持久层）
+  → 注入检测（5 类特征，含中文两种语序）→ 可信度分层（human 1.0 / web 0.4 / unknown 0.2）→ 订阅分发。
+  注入嫌疑**隔离但留档**，不静默丢弃（理念6 诚实：拦了要说拦了什么）。
+- **人本因果仿真**：行动前在人本六维（时间/注意力/情绪/金钱/关系/**自主权**）上做反事实推演。
+  自主权权重最高（1.8）——生命体不能把人变成它的外设。
+  ⚠️ **诚实说明**：这是**先验结构因果模型**，边是人写的领域先验，不是从数据学出的因果结构；
+  有经验数据（`kernel/causal.py`）时用真实成功率**调制**先验，样本不足则不调制，输出一律标 `confidence`，**绝不报"已证因果"**。
+- **故障紧急制动总线**：三级全局急停（SOFT 禁派生/不可逆 → HARD 禁一切外部副作用 → FULL 全停）。
+  **只升不降**（latch 锁存）；**≥HARD 必须授权人解除，系统不得自称"我好了"**；
+  **死人开关**——主环心跳超时自动升 HARD（无人驾驶状态下禁止继续发车）。
 
 **外部复用**：video-shotcraft（分镜）、Mediakit CLI（**商业产品，只 opt-in subprocess 调用，不引码**）。
 
@@ -471,12 +496,19 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | L2 | ✓ | ✓ | ✓ | — |
 | L3 | ✓ | ✓ | ✗ | 价值排序器/情感状态机已建 `soul/`（②）；注入决策点（③ 集成待做） |
 | L4 | ✓ | ✓ | ✗ | **反思闭环真 LLM 未验** |
-| L5 | ✓ | ✓ | ⚡部分 | **自进化端到端未验（最大空心）→ 2026-08-02 已演示可复现 fail→reflect→improve 闭环（见构建计划 §2.6），全任务多轮自进化验证持续中** |
-| L6 | ✓ | ✓ | 部分 | 内容闭环反馈未回流 |
+| L5 | ✓ | ✓ | ⚡部分 | **自进化端到端未验（最大空心）→ 2026-08-02 已演示可复现 fail→reflect→improve 闭环（见构建计划 §2.6），全任务多轮自进化验证持续中**；2026-07-25 补 `evolve/mirror_branch.py` 影子对照晋升闸门（②，真实灰度流量 ③ 待验） |
+| L6 | ✓ | ✓ | 部分 | 内容闭环反馈未回流；2026-07-25 补 `interact/` 进—判—停三关口（感知网关/人本因果仿真/紧急制动，均 ②，接真实感知流与物理执行 ③ 待验） |
 | L7 | ✓ | ✓ | ✗ | 分形派生/生长约束已建 `fractal/`（②）；子进程崩溃不影响母体真机证据（③ 待做） |
 | L8 | 部分 | 部分 | ✗ | 生态调度基本是空壳 |
 
 **一句话总结现状（2026-08-02 执行后）**：L1/L2/L6 真的；L5 已演示可复现 fail→reflect→improve（③ 部分）；L0/L3/L7 + 蓝图指定自研核心（L2 内生欲望/生命节律/柔性目标、L4 双向思辨、L6 行动仲裁）已从"真缺口"补到"代码就绪+单元验证（②）"。剩的 ③ 是真实集成（autopilot 接状态/价值排序、行动仲裁接物理执行总线、子进程崩溃真机证据）——不夸大宣称已验。
+
+**补充（2026-07-25 蓝图全量执行收尾）**：九层自研核心已按蓝图逐层补齐并全部通过单测（159 项，`tests/test_body_layer.py` /
+`test_life_state.py` / `test_soul*.py` / `test_spirit_layer.py` / `test_mirror_branch.py` / `test_interact_layer.py` /
+`test_fractal*.py`）。本批新增 L5 `evolve/mirror_branch.py`、L6 `interact/{perception_gateway,human_causal_sim,emergency_brake}.py`。
+**诚实分级重申**：以上全部为 ②（代码就绪 + 单元验证），**没有一项**做到 ③（真 LLM + 真感知流 + 真物理执行的端到端验证）。
+`vendor/` 8 个外部组件已实测许可证（全部 MIT / Apache-2.0，无 AGPL 传染；早前把 acgs-lite 判为 AGPL-3.0 系预判失误，已在
+`docs/research/lifeform_os_reference_audit.md` §六 据实更正），当前仅作参照与 opt-in 复用，**未接入运行时主链**。
 
 ## 附录 B · 外部引用总表
 
