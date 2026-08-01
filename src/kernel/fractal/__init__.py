@@ -5,6 +5,16 @@
 """
 from .spawner import FractalSpawner, FractalNode, MAX_GEN, QUOTA_DECAY, MAX_SIBLINGS
 from .growth_guard import GrowthGuard
+from .conflict import (
+    ConflictCoordinator, Lease, ArbitrationResult, ConflictEscalation,
+)
+from .particles import (
+    ParticleType, ParticleSpec, ParticleRegistry,
+    SENSOR, WORKER, GUARDIAN, ARCHIVIST,
+)
 
 __all__ = ["FractalSpawner", "FractalNode", "GrowthGuard",
-           "MAX_GEN", "QUOTA_DECAY", "MAX_SIBLINGS"]
+           "MAX_GEN", "QUOTA_DECAY", "MAX_SIBLINGS",
+           "ConflictCoordinator", "Lease", "ArbitrationResult", "ConflictEscalation",
+           "ParticleType", "ParticleSpec", "ParticleRegistry",
+           "SENSOR", "WORKER", "GUARDIAN", "ARCHIVIST"]
