@@ -333,3 +333,49 @@ P0 (L5 端到端证据)  ← 必须最先，地基
   当前仅作参照与 opt-in 复用，**未接入运行时主链**。
 - 全量测试套件回归：`tests/test_bidding_agent.py` 存在**与本批无关的历史挂死**
   （pymupdf 在 Python 3.14 下解析 PDF 卡死触发 pytest 超时），复跑时以 `--ignore` 跳过。
+
+## 11. ✅ 记忆阶梯（数据底座层）执行记录（2026-08-02）
+
+蓝图新增「四层阶梯式融合架构」章节，按用户指令"该改的改/该删的删/该修的修/该增的增/该下载的下载"执行。
+
+### 11.1 先做的最关键一步：逐字核实（铁律，不照单全收）
+
+对 7 个外部项目 + 2 关联项（cel-memory-duckdb、Turso/libSQL）全部 WebSearch 核验：
+**8 项全部真实、许可证均 MIT/Apache-2.0、无 AGPL 传染，无一编撰。**
+（初判曾疑 TriviumDB/KowitoDB/SeekDB/DBX 为 AI 编撰，核实后证伪——这正是"先核实"的价值。）
+指标类（LOCOMO 73.70、Token 降 96%、TPC-H 快 200 倍、DBX 11.7k stars）**标记为营销口径、待独立复测**，不混入能力结论。
+
+### 11.2 按选型铁律分类（现有够好→复用，不盲目塞 6 个新库）
+
+| 层 | 项目 | 处置 |
+|---|---|---|
+| L1 瞬时 | **DuckDB** | ✅ 接入（本机实测 1.5.4 可 import，做 mirror_branch 统计后端） |
+| L2 工作 | TriviumDB / Turso | 🔗 参考 + opt-in 惰性适配器（不强制依赖） |
+| L3 语义 | KowitoDB / txtai | 🔗 **不新增**：AOS 已有 Chroma+cognee 覆盖，复用 |
+| L4 传承 | SeekDB | 🔗 参考（pip/yum 安装，非 git 克隆；代际传承用轻量归档） |
+| 可视化 | DBX | 🔗 参考（dev 工具，MCP Server） |
+
+### 11.3 该增的增（代码，②）
+
+- `src/kernel/store/memory_ladder.py`：四层抽象（MemoryTier/InMemoryTier/DuckDBTier/LazyExternalTier）
+  + MemoryLadder 编排器（分层路由 + 跨层晋升"数据向上沉淀"）+ build_default_ladder。
+- `src/kernel/store/__init__.py`：包导出。
+- `tests/test_memory_ladder.py`：**9 项单测全绿**（含 DuckDB L1 真后端、惰性降级、晋升纪律）。
+- `docs/research/memory_ladder_audit.md`：核实审计 + 分类 + 安装命令（新建）。
+
+### 11.4 该下载的下载（vendor/ 浅克隆，参考/审计用）
+
+已克隆 5 个 MIT/Apache git 仓库至 `vendor/`（不 import 主链，`.gitignore` 不入库）：
+TriviumDB / KowitoDB / DBX / libSQL(Turso) / txtai。DuckDB(已 pip 可用)、SeekDB(pip/yum) 不克隆源码。
+
+### 11.5 该改的改 / 该修的修（文档）
+
+- 白皮书新增「第十一章 · 数据底座层」+ 四层表 + 核实声明 + 选型铁律映射；附录 A 加记忆阶梯行；附录 B 指向新审计文档。
+- 本文件新增本节 §11。
+
+### 11.6 诚实分级（不许拔高）
+
+- **② 单元验证**：memory_ladder 9 项单测绿；8 外部项目真实性已核验。
+- **③ 端到端未做**：未真灌多模态数据跑通"瞬时→工作→语义→传承"全链路迁移；
+  外部库运行时集成（pip 后真连 TriviumDB/Turso/KowitoDB）仅留适配器骨架，未真机验证。
+- 全量回归同 §10.3 环境债（fitz/MCP/torch/transformers 采集期挂死），本批由 scoped 单测独立验证。

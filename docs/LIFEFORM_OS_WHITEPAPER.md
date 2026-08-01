@@ -487,6 +487,67 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 
 ---
 
+## 第十一章 · 数据底座层：四层阶梯式融合架构（记忆阶梯）
+
+> 本章为 2026-08-02 新增。理念：数字生命体的记忆也该像人一样分层——
+> 从瞬时感知到永久传承，各司其职、自然沉淀。它不是九层里的某一层，而是
+> 横切于 L3（灵魂记忆）/ L5（镜像统计）/ L7（粒子私有记忆）的**数据底座**。
+
+### 11.1 四层设计
+
+| 层级 | 主选 | 备选 | 核心职责 | 映射九层 |
+|---|---|---|---|---|
+| **L1 瞬时感知层** | **DuckDB**（MIT，本机实测 1.5.4 可 import） | cel-memory-duckdb（Apache-2.0） | 实时统计、热缓存、镜像分支分析 | L5 `mirror_branch` 统计 |
+| **L2 工作记忆层** | **TriviumDB**（Apache-2.0） | Turso/libSQL（MIT） | 每个分形粒子的私有记忆，随粒子启停 | L7 粒子私有记忆 |
+| **L3 长期语义层** | **复用 AOS 既有 Chroma + cognee** | KowitoDB（MIT）/ txtai（Apache-2.0） | 年轮记忆、知识图谱、语义检索 | L3 灵魂层 |
+| **L4 永久传承层** | Chroma 快照 + 文件版本归档（轻量） | SeekDB（Apache-2.0，OceanBase） | 数字家谱、代际传承、版本回溯 | L3 数字家谱 |
+| **统一可视化** | **DBX**（Apache-2.0） | — | 70+ 库跨层管理、AI SQL、MCP | 运维期工具 |
+
+### 11.2 层间数据流动
+
+```
+物理粒子感知 ──→ DuckDB（L1 实时统计）
+                      ↓ 有价值数据提炼
+                  TriviumDB/Turso（L2 粒子私有工作记忆）
+                      ↓ 记忆蒸馏与固化
+                  复用 Chroma/cognee（L3 年轮记忆·语义索引·知识图谱）
+                      ↓ 永久固化与版本归档
+                  SeekDB 或 轻量文件归档（L4 数字家谱·代际传承）
+```
+
+### 11.3 诚实核实声明（关键，2026-08-02 WebSearch 逐字核验）
+
+本章引入的 7 个外部项目 + 2 关联项（cel-memory-duckdb、Turso/libSQL）**全部真实存在，
+许可证均 MIT / Apache-2.0，无 AGPL 传染**。无任何一项为编撰。
+
+- DuckDB ✅ MIT（本机 `duckdb 1.5.4` 直接可用）
+- cel-memory-duckdb ✅ Apache-2.0 v0.1.0
+- TriviumDB ✅ Apache-2.0 v0.7.0（纯 Rust，向量×图谱×文档）
+- Turso / libSQL ✅ MIT（16.8k★，每粒子一库，原生向量）
+- KowitoDB ✅ MIT v0.40.5（Rust，ai.ask() 统一检索）
+- txtai ✅ Apache-2.0（向量+图谱+RAG）
+- SeekDB ✅ Apache-2.0（OceanBase 2025-11-18 开源）
+- DBX ✅ Apache-2.0（~20MB，70+ 库，内置 MCP Server）
+
+> ⚠️ **指标提示**：蓝图引用的具体数值（SeekDB LOCOMO 73.70 / Token 降 96%、
+> DuckDB TPC-H 快 200 倍、DBX 11.7k stars 等）为**项目方营销口径，未独立复测**，
+> 不得作为「已验证性能」对外陈述。详见 `docs/research/memory_ladder_audit.md`。
+
+### 11.4 按选型铁律的分类（不盲目塞 6 个新库）
+
+AOS 已有 Chroma + cognee + mem0 覆盖 L3 语义检索，**按「现有够好→复用」不新增 KowitoDB/txtai**。
+DuckDB 填补 L1 列式分析缺口（已实测可用），作为真后端接入；TriviumDB/Turso/SeekDB/DBX
+为参考/opt-in，提供惰性适配器（未安装则优雅降级，不强制依赖）。5 个 git 仓库已浅克隆至
+`vendor/`（参考/审计用，不 import 主链）。
+
+### 11.5 代码落地
+
+`src/kernel/store/memory_ladder.py`（四层抽象 + DuckDB L1 真后端 + 惰性适配器 + 跨层晋升），
+单测 `tests/test_memory_ladder.py` **9 项全绿（②）**。诚实级：③ 端到端（真灌多模态数据跑通
+全链路迁移）未做。
+
+---
+
 ## 附录 A · 三级诚实度全局盘点
 
 | 层 | 代码就绪① | 单元验证② | 端到端验证③ | 缺口 |
@@ -500,6 +561,7 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | L6 | ✓ | ✓ | 部分 | 内容闭环反馈未回流；2026-07-25 补 `interact/` 进—判—停三关口（感知网关/人本因果仿真/紧急制动，均 ②，接真实感知流与物理执行 ③ 待验） |
 | L7 | ✓ | ✓ | ✗ | 分形派生/生长约束已建 `fractal/`（②）；子进程崩溃不影响母体真机证据（③ 待做） |
 | L8 | 部分 | 部分 | ✗ | 生态调度基本是空壳 |
+| 数据底座(记忆阶梯) | ✓ | ✓ | ✗ | 2026-08-02 新增 `src/kernel/store/memory_ladder.py` 四层抽象 + DuckDB L1 真后端 + 惰性适配器（9 项单测绿，②）；外部 8 项已 WebSearch 核实真实，未做真灌数据全链路迁移（③） |
 
 **一句话总结现状（2026-08-02 执行后）**：L1/L2/L6 真的；L5 已演示可复现 fail→reflect→improve（③ 部分）；L0/L3/L7 + 蓝图指定自研核心（L2 内生欲望/生命节律/柔性目标、L4 双向思辨、L6 行动仲裁）已从"真缺口"补到"代码就绪+单元验证（②）"。剩的 ③ 是真实集成（autopilot 接状态/价值排序、行动仲裁接物理执行总线、子进程崩溃真机证据）——不夸大宣称已验。
 
@@ -514,3 +576,7 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 
 见 [`docs/research/lifeform_os_reference_audit.md`](research/lifeform_os_reference_audit.md)。
 所有引用均于 2026-07-26 经 WebSearch 交叉核验，硬伤已在 v2 中修正。
+
+记忆阶梯（数据底座层）的 8 项外部项目核实见 [`docs/research/memory_ladder_audit.md`](research/memory_ladder_audit.md)：
+DuckDB / TriviumDB / Turso / KowitoDB / txtai / SeekDB / DBX **全部真实、MIT/Apache-2.0、无 AGPL**；
+具体性能数值（LOCOMO 73.70、Token 降 96% 等）标记为营销口径、待独立复测。
