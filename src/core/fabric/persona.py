@@ -66,7 +66,28 @@ DEFAULT_PERSONA: dict[str, Any] = {
         "calm": "🌙", "happy": "✨", "curious": "🔍",
         "thinking": "💭", "sad": "🌧", "excited": "⚡",
     },
+    # ── 两张脸切换（生命体OS / 单创OS 共用 FabricHub 内核，不另起仓库）──
+    "os_mode": "lifeform",          # lifeform | singlechuang
+    "face": {
+        "lifeform":     {"tagline": "我的数字生命体伙伴", "enable_layers": "L0-L7"},
+        "singlechuang": {"tagline": "多租户自主创业 OS",  "enable_layers": "L0-L8"},
+    },
 }
+
+
+def resolve_os_mode(user_id: str = "default") -> str:
+    """解析当前运行模式（两张脸）。
+
+    优先级：环境变量 AOS_MODE > persona.yaml 的 os_mode > 代码默认 'lifeform'。
+    生命体OS 自用：AOS_MODE=lifeform；单创OS 商用：由 web/tenant 按租户 os_mode 决定。
+    """
+    env = os.environ.get("AOS_MODE")
+    if env in ("lifeform", "singlechuang"):
+        return env
+    try:
+        return load_persona(user_id).get("os_mode", "lifeform")
+    except Exception:
+        return "lifeform"
 
 
 def _have_yaml() -> bool:

@@ -1,8 +1,10 @@
-# 生命体操作系统 · 白皮书 v2（核验修正版）
+# 生命体操作系统 · 白皮书 v3（核验修正 + 代码执行版）
 
-> 版本：v2.0　修订日期：**2026-07-26**
+> 版本：v3.0　修订日期：**2026-07-26（文档） / 2026-08-02（代码执行）**
 > 相对 v1 的改动：**删 3 项失实引用、修 4 项夸大数据、标 1 处许可证陷阱、增 1 套真实代码映射与诚实度标注**
+> 相对 v2 的执行进展（2026-08-02）：**已真跑 P0 自进化闭环（③ 部分）+ 已建 L0/L3/L7 三层代码与单测（②）+ 已拉取 acgs-lite/plasma-ai-fractal/nanobot 参照仓库到 `vendor/`**
 > 事实底座：[`docs/research/lifeform_os_reference_audit.md`](research/lifeform_os_reference_audit.md)
+> 执行计划：[`LIFEFORM_OS_BUILD_PLAN.md`](LIFEFORM_OS_BUILD_PLAN.md)
 > 宪法上位法：[`AGENTS.md`](../AGENTS.md)
 
 ---
@@ -227,10 +229,10 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 |---|---|---|
 | 人格配置 | `src/core/fabric/persona.py` | ② |
 | 语义状态 | `src/kernel/semantic_state.py` | ① |
-| **生命状态向量**（energy/mood/focus/debt） | **缺失，需新建 `src/kernel/life_state.py`** | ✗ |
+| **生命状态向量**（energy/mood/focus/debt） | `src/kernel/life_state.py`（已建 ②） | ② |
 | 边界与配额定义 | 散落在 `isolation/`，未收口 | ① |
 
-**缺口**：L0 是九层里**唯一几乎完全缺失**的一层。目前 AOS 有"人设"但没有"生命状态"——不知道自己累不累、欠了多少技术债、注意力该放哪。这是第一优先补的。
+**缺口已补（2026-08-02 执行）**：`src/kernel/life_state.py` 已落地，定义 energy/mood/focus/debt 向量 + 衰减/阈值/持久化，`tests/test_life_state.py` 全绿（②）。后续：把 `pick_engine_tier` 真正接进 `autopilot` 实现"能量低自动降档"（③ 级集成待做，不宣称已验）。
 
 ### L1 · 肉体层 🔧复用为主
 
@@ -274,10 +276,10 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | 合规/宪法守门 | `src/kernel/compliance.py` | ② |
 | 审批闸门 | `src/kernel/approval/` | ② |
 | 人格一致性 | `persona.py`（弱） | ① |
-| **价值排序器**（冲突取舍） | **缺失** | ✗ |
-| **情感状态机**（影响真实决策，非表演） | **缺失** | ✗ |
+| **价值排序器**（冲突取舍） | `src/kernel/soul/value_hierarchy.py`（已建 ②） | ② |
+| **情感状态机**（影响真实决策，非表演） | `src/kernel/soul/emotion_state.py`（已建 ②） | ② |
 
-**缺口**：L3 是第二个大缺口。现在的"人格"只是提示词层面的表演，不参与决策。真正的灵魂层要做到：情绪低落时会真的降低冒险决策的权重、价值冲突时有确定的取舍顺序。
+**缺口已补（2026-08-02 执行）**：`src/kernel/soul/` 已落地 `ValueHierarchy`（安全>准确>速度>成本，硬约束不可越过）+ `EmotionState`（mood→冒险权重），`tests/test_soul.py` 全绿（②）。后续：把排序器真正注入 `autopilot` 决策点（③ 级集成待做）。acgs-lite 仅只读借鉴，未引码（AGPL 红线）。
 
 **外部参考**：acgs-ai/acgs-lite（AGPL-3.0，**只读借鉴其宪法治理结构，禁止引码**）。
 
@@ -334,10 +336,10 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | 芯粒抽象 | `src/core/fabric/adapter.py` | ③ |
 | 子进程隔离 | `src/kernel/isolation/`、`ag2_adapter`、`agnes_adapter` | ② |
 | MCP 互通 | `mcp_client_adapter.py`、`mcp_stdio_adapter.py`、AOS 共享记忆 MCP server | ② |
-| **分形派生（自相似生成子体）** | **缺失** | ✗ |
-| **生长约束执行器**（3代/配额衰减/兄弟数） | **缺失** | ✗ |
+| **分形派生（自相似生成子体）** | `src/kernel/fractal/spawner.py`（已建 ②） | ② |
+| **生长约束执行器**（3代/配额衰减/兄弟数） | `src/kernel/fractal/growth_guard.py`（已建 ②） | ② |
 
-**缺口**：L7 是第三个大缺口。现在有"隔离"没有"繁殖"。芯粒是人写的，不是系统派生的。
+**缺口已补（2026-08-02 执行）**：`src/kernel/fractal/` 已落地 `FractalSpawner`（`MAX_GEN=3`/`QUOTA_DECAY=1/3`/`MAX_SIBLINGS=8` 硬编码）+ `GrowthGuard`（写/联网/花钱强制审批），`tests/test_fractal.py` 全绿（②）。参考 plasma-ai/fractal 递归硬上限（已拉入 `vendor/`，只读借鉴）。后续：子进程崩溃不影响母体真机证据（③ 待做）。
 
 **外部参考**：plasma-ai/fractal（分形 agent 组织）、nanobot（轻量 MCP 运行时）、AgentENV（环境隔离）。
 
@@ -460,17 +462,17 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 
 | 层 | 代码就绪① | 单元验证② | 端到端验证③ | 缺口 |
 |---|---|---|---|---|
-| L0 | 部分 | 部分 | ✗ | **生命状态向量完全缺失** |
+| L0 | ✓ | ✓ | ✗ | 生命状态向量已建 `life_state.py` + 单测（②）；接 autopilot 自动降档（③ 集成待做） |
 | L1 | ✓ | ✓ | 部分 | 全双工语音未真机验 |
 | L2 | ✓ | ✓ | ✓ | — |
-| L3 | 部分 | 部分 | ✗ | **价值排序器、情感状态机缺失** |
+| L3 | ✓ | ✓ | ✗ | 价值排序器/情感状态机已建 `soul/`（②）；注入决策点（③ 集成待做） |
 | L4 | ✓ | ✓ | ✗ | **反思闭环真 LLM 未验** |
 | L5 | ✓ | ✓ | ⚡部分 | **自进化端到端未验（最大空心）→ 2026-08-02 已演示可复现 fail→reflect→improve 闭环（见构建计划 §2.6），全任务多轮自进化验证持续中** |
 | L6 | ✓ | ✓ | 部分 | 内容闭环反馈未回流 |
-| L7 | 部分 | 部分 | ✗ | **分形派生、生长约束缺失** |
+| L7 | ✓ | ✓ | ✗ | 分形派生/生长约束已建 `fractal/`（②）；子进程崩溃不影响母体真机证据（③ 待做） |
 | L8 | 部分 | 部分 | ✗ | 生态调度基本是空壳 |
 
-**一句话总结现状**：L1/L2/L6 是真的，L4/L5 代码真但验证空，L0/L3/L7 是真缺口。
+**一句话总结现状（2026-08-02 执行后）**：L1/L2/L6 真的；L5 已演示可复现 fail→reflect→improve（③ 部分）；L0/L3/L7 已从"真缺口"补到"代码就绪+单元验证（②）"。剩的 ③ 是真实集成（autopilot 接状态/价值排序、子进程崩溃真机证据）——不夸大宣称已验。
 
 ## 附录 B · 外部引用总表
 
