@@ -5,5 +5,10 @@ acgs-lite（AGPL-3.0）仅作只读借鉴，本包零外部依赖、无 import a
 """
 from .value_hierarchy import ValueHierarchy
 from .emotion_state import EmotionState
+from .dialectic import DialecticRegulator
+from .tree_ring import TreeRingMemory, Memory, RING_NAMES
+from .lineage import Lineage, Individual, Lesson
 
-__all__ = ["ValueHierarchy", "EmotionState"]
+__all__ = ["ValueHierarchy", "EmotionState", "DialecticRegulator",
+           "TreeRingMemory", "Memory", "RING_NAMES",
+           "Lineage", "Individual", "Lesson"]

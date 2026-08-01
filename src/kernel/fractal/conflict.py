@@ -36,7 +36,7 @@ class Lease:
     acquired_at: float = field(default_factory=time.time)
 
     def expired(self, now: Optional[float] = None) -> bool:
-        return (now or time.time()) >= self.expires_at
+        return ((time.time() if now is None else now)) >= self.expires_at
 
     def to_dict(self) -> dict:
         return {"resource": self.resource, "holder": self.holder,
@@ -72,7 +72,7 @@ class ConflictCoordinator:
     # ---------------------------------------------------------------- 内部
     def _reap(self, now: Optional[float] = None) -> List[str]:
         """回收过期租约（防死锁：持有者崩溃也不会永久占住）。"""
-        now = now or time.time()
+        now = (time.time() if now is None else now)
         dead = [r for r, l in self._leases.items() if l.expired(now)]
         for r in dead:
             self._leases.pop(r, None)
@@ -88,7 +88,7 @@ class ConflictCoordinator:
     def acquire(self, resource: str, holder: str, *, generation: int = 0,
                 priority: int = 0, ttl: Optional[float] = None,
                 now: Optional[float] = None) -> ArbitrationResult:
-        now = now or time.time()
+        now = (time.time() if now is None else now)
         self._reap(now)
         ttl = self.default_ttl if ttl is None else ttl
         cur = self._leases.get(resource)
