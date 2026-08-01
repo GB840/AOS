@@ -2,7 +2,7 @@
 
 > 版本：v3.0　修订日期：**2026-07-26（文档） / 2026-08-02（代码执行）**
 > 相对 v1 的改动：**删 3 项失实引用、修 4 项夸大数据、标 1 处许可证陷阱、增 1 套真实代码映射与诚实度标注**
-> 相对 v2 的执行进展（2026-08-02）：**已真跑 P0 自进化闭环（③ 部分）+ 已建 L0/L3/L7 三层代码与单测（②）+ 已拉取 acgs-lite/plasma-ai-fractal/nanobot 参照仓库到 `vendor/`**
+> 相对 v2 的执行进展（2026-08-02）：**已真跑 P0 自进化闭环（③ 部分）+ 已建 L0/L3/L7 三层代码与单测（②）+ 已建蓝图指定自研核心（L2 内生欲望/生命节律/柔性目标、L4 双向思辨、L6 行动仲裁，均 ②）+ 已拉取 acgs-lite/plasma-ai-fractal/nanobot 参照仓库到 `vendor/`**
 > 事实底座：[`docs/research/lifeform_os_reference_audit.md`](research/lifeform_os_reference_audit.md)
 > 执行计划：[`LIFEFORM_OS_BUILD_PLAN.md`](LIFEFORM_OS_BUILD_PLAN.md)
 > 宪法上位法：[`AGENTS.md`](../AGENTS.md)
@@ -267,6 +267,8 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 
 **结论**：L2 基本完备，**不需要重造**。生命体OS 直接继承。
 
+**蓝图指定自研核心（本批新增，2026-08-02 执行，②）**：除了复用 AOS 的路由/记忆，蓝图明确要求的三项"原生自主驱动"核心已落成真实代码——`src/kernel/desire.py`（内生欲望引擎：好奇心+认知缺口驱动目标涌现，能量低于阈值只产低成本目标）、`src/kernel/rhythm.py`（生命节律：active/rest/deep_sleep/review 四模式，由 energy/debt/时段驱动）、`src/kernel/goal_evolution.py`（柔性目标演化：promote/demote/shelve/swap 随真实成败流动）。`tests/test_desire.py`/`test_rhythm.py`/`test_goal_evolution.py` 全绿。
+
 ### L3 · 灵魂层 ⚡自研
 
 **职责**：价值观排序、人格一致性、情感对决策的真实影响。
@@ -294,6 +296,7 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | 工作流引擎 | `src/kernel/workflow_engine.py` | ② |
 | 并行规划 | `plan_bridge`（依赖感知并行组） | ② |
 | 反思闭环 | 反思链路已接线 | ②（真 LLM 下 ③ **未验证**） |
+| **双向思辨演化调节器** | `src/kernel/soul/dialectic.py`（本批新增 ②） | ② |
 
 **诚实红线**：这是用户最在意的痛点——「跑一轮 → 反思 → 下一轮变好」在真实 LLM 任务下**从未端到端验证过**。代码是真的，验证是缺的。不许说成跑通了。
 
@@ -324,6 +327,7 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | 图/视频生成 | `media_gen_adapter.py`、`remotion_adapter.py`、`video_maker.py`、`cast_adapter.py` | ② |
 | 滚动世界落地页 | `scroll_world` skill | ② |
 | Web 控制台 | `src/web/app.py`（3000+ 行）+ `web/admin`、`web/tenant` | ③ |
+| **行动规划仲裁器**（分级+宪法优先） | `src/kernel/action_arbiter.py`（本批新增 ②） | ② |
 
 **外部复用**：video-shotcraft（分镜）、Mediakit CLI（**商业产品，只 opt-in subprocess 调用，不引码**）。
 
@@ -472,7 +476,7 @@ v1 只写了三条公理，v2 给出可落地的数值与实现方式。
 | L7 | ✓ | ✓ | ✗ | 分形派生/生长约束已建 `fractal/`（②）；子进程崩溃不影响母体真机证据（③ 待做） |
 | L8 | 部分 | 部分 | ✗ | 生态调度基本是空壳 |
 
-**一句话总结现状（2026-08-02 执行后）**：L1/L2/L6 真的；L5 已演示可复现 fail→reflect→improve（③ 部分）；L0/L3/L7 已从"真缺口"补到"代码就绪+单元验证（②）"。剩的 ③ 是真实集成（autopilot 接状态/价值排序、子进程崩溃真机证据）——不夸大宣称已验。
+**一句话总结现状（2026-08-02 执行后）**：L1/L2/L6 真的；L5 已演示可复现 fail→reflect→improve（③ 部分）；L0/L3/L7 + 蓝图指定自研核心（L2 内生欲望/生命节律/柔性目标、L4 双向思辨、L6 行动仲裁）已从"真缺口"补到"代码就绪+单元验证（②）"。剩的 ③ 是真实集成（autopilot 接状态/价值排序、行动仲裁接物理执行总线、子进程崩溃真机证据）——不夸大宣称已验。
 
 ## 附录 B · 外部引用总表
 
