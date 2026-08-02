@@ -40,7 +40,7 @@ flowchart TB
     subgraph CONST["⚖️ 永恒伦理宪法（硬编码，不可修改）"]
         CONST1["物理伤害优先规避 · 物理行动授权分级 [✅AOS代码]"]
         CONST2["感知边界尊重 · 虚实从属 · 数据主权 [✅AOS代码]"]
-        CONST3["🔗 参考实现：constitutional-agent-governance [🔁自研等价]"]
+        CONST3["⚖️ 宪法治理：constitutional-agent（MIT 本地六闸门评估，已真接）[✅AOS已接开源]"]
     end
 
     subgraph L0["🧬 第零层：人本生命状态建模内核（最高决策标尺）"]
@@ -50,12 +50,13 @@ flowchart TB
     end
 
     subgraph L1["⚙️ 第一层：肉体层（硬件 · 语音 · 推理 · 部署 · 协议）"]
-        L1A["🔧 多模态推理引擎：LocalAI v4.7.1 [🔁自研等价]"]
-        L1B["🔧 模型路由网关：CLIProxyAPI [🔁自研等价]"]
+        L1A["🔧 多模态推理引擎：LocalAI v4.7.1（Apache-2.0 已真接客户端）[✅AOS已接开源]"]
+        L1B["🔧 模型路由网关：LiteLLM（MIT 100+ provider，已真接）[✅AOS已接开源]"]
         L1C["🔧 跨平台交互客户端：Cindy / nanobot [🔁自研等价]"]
         L1D["🔧 部署与运维层：openship [🔁自研等价]"]
-        L1E["🔧 语音交互子层：Fish Speech（权重禁商用）[🔁自研等价]"]
-        L1E2["🔧 离线语音识别：Vosk（Apache-2.0，中文引擎）[🔁自研等价]"]
+        L1E["🔧 语音交互子层：Fish Speech（CC-BY-NC-SA 禁商用）[🔗纯参考]"]
+        L1E2["🔧 离线语音识别：Vosk（Apache-2.0 已真接）[✅AOS已接开源]"]
+        L1E3["🔧 离线语音合成：Piper（Apache-2.0 已真接，替代 Fish Speech）[✅AOS已接开源]"]
         L1F["🔧 端侧推理优化（实验性）：turbo-fieldfare [🔗纯参考]"]
         L1G["⚡ 硬件抽象层：统一指令集 [✅AOS代码]"]
         L1H["⚡ Phy-Bus物理适配总线 [✅AOS代码]"]
@@ -75,11 +76,11 @@ flowchart TB
     end
 
     subgraph L3["📚 数据底座层（记忆存储内核）"]
-        L3A["⚡ 第四层·永久传承层：SeekDB（OceanBase开源/Apache2.0，与PowerMem同源）[🔁自研等价]"]
-        L3B["⚡ 第三层·长期语义层：KowitoDB(实验性) + txtai [🔁自研等价]"]
+        L3A["⚡ 第四层·永久传承层：LanceDB（已装0.36 版本/表分支实测；SeekDB为OceanBase服务端参考）[✅AOS已接开源]"]
+        L3B["⚡ 第三层·长期语义层：Chroma/cognee/mem0（已复用，不新增依赖）[✅AOS已用开源]"]
         L3C["⚡ 第二层·工作记忆层：TriviumDB(Alpha) + Turso [🔁自研等价]"]
         L3D["⚡ 第一层·瞬时感知层：DuckDB（实时分析）[✅AOS代码]"]
-        L3E["🔧 统一可视化层：DBX（约15MB，70+数据库，AGPL-3.0）[🔁自研等价]"]
+        L3E["🔧 统一可视化层：DBX（AGPL-3.0 许可红线，不集成）[🔗纯参考]"]
     end
 
     subgraph L4["📖 第四层：灵魂层（记忆与身份）"]
@@ -96,7 +97,7 @@ flowchart TB
         L5D["⚡ 大同指数 [✅AOS代码]"]
         L5E["⚡ 文明试错镜像 [✅AOS代码]"]
         L5F["⚡ 共识自演化通道 [✅AOS代码]"]
-        L5G["🔧 内容创作技能：video-shotcraft [🔁自研等价]"]
+        L5G["🔧 内容创作技能：video-shotcraft（Apache-2.0 已真接）[✅AOS已接开源]"]
     end
 
     subgraph L6["🌱 第六层：演进层（持续生长）"]
@@ -148,7 +149,7 @@ flowchart TB
 
     subgraph LEGEND["📋 图例（性质 × 实现状态）"]
         LGD0["🔧 = 开源组件/工具 · ⚡ = 自研内核 · 🔗 = 参考/生态对齐（架构性质）"]
-        LGD1["[✅AOS代码] = AOS 仓库已有真实 .py 实现（多数②级：代码+单测，非③端到端）"]
+        LGD1["[✅AOS代码] 自研真实现 · [✅AOS已接开源] 真接外部开源(MIT/Apache) · [✅AOS已用开源] 复用开源（均②级：代码+单测，非③端到端）"]
         LGD2["[🔁自研等价] = 外部工具未集成，但 AOS 已有自研等价能力（表内给路径）"]
         LGD3["[🔗纯参考] = 参考实现/生态对齐，本就不需要 AOS 代码"]
         LGD4["[🚧概念] = 无任何代码的空壳 —— 本次逐节点核对后为 0"]
@@ -159,8 +160,8 @@ flowchart TB
 
 ### 架构节点实现状态总览（白盒诚实地图 · 逐节点核对 src/ 真值）
 
-> 本表把架构图 **58 个节点**逐一对照 AOS 仓库真实代码（`src/` 共 664 个 `.py`），四态诚实标注，杜绝"看着像全建好"的误导。
-> 表内每一条 AOS 代码路径均经 `test -e` 逐条校验存在（45/45 通过，零断链）。
+> 本表把架构图 **59 个节点**（含 L1E3 Piper）逐一对照 AOS 仓库真实代码（`src/` 共 664 个 `.py`），四态诚实标注，杜绝"看着像全建好"的误导。
+> 表内每一条 AOS 代码路径 / 已接开源结构均经 `test -e` 批量校验存在（自研代码类全 OK，零断链；许可红线/未接项按铁律不 import）。
 >
 > | 标记 | 含义 |
 > | :--- | :--- |
@@ -379,7 +380,7 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 4. **虚实从属公理**：物理执行永远服务于人，禁止为达成系统自身目标而干预人类现实活动
 5. **数据主权公理**：所有数据归属使用者本人，系统无权擅自复制、转移、分析
 
-> **开源参考**：`constitutional-agent-governance`提供了“六个宪法门（Six Gates：Epistemic/Risk/Governance/Economic/Autonomy/Constitutional）+ 12个硬约束（HC-1～HC-12）”的决策治理框架，可作为永恒伦理宪法的参考实现。
+> **开源参考（已真接为 CONST3）**：`constitutional-agent-governance`（MIT）提供了“六个宪法门（Six Gates：Epistemic/Risk/Governance/Economic/Autonomy/Constitutional）+ 12个硬约束（HC-1～HC-12）”的决策治理框架，AOS 已真接为 `core/fabric/adapters/constitutional_governor.py`（`ConstitutionalGovernor`，封装六闸门+硬约束本地评估，无需外部 LLM），与 `compliance/` + `kernel/spirit/values_market.py` 宪法红线互补。
 
 
 ### 第零层：人本生命状态建模内核（最高决策标尺）
@@ -469,9 +470,9 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 | 层级 | 主选 | 备选 | 核心职责 | 关键指标 |
 | :--- | :--- | :--- | :--- | :--- |
 | **瞬时感知层** | DuckDB | — | 实时统计、热缓存、镜像分支分析 | 列式引擎；第三方基准显示 TPC-H 分析型查询较 InnoDB 快 2–3 个数量级（阿里云 RDS SF100 实测 15.31s vs 25234s） |
-| **工作记忆层** | TriviumDB | Turso | 粒子私有记忆、短期上下文 | 单文件，向量×图谱×文档三位一体（TriviumDB 仍 Alpha） |
-| **长期语义层** | KowitoDB | txtai | 年轮记忆、知识图谱、语义检索 | `ai.ask()`一站式检索（KowitoDB 为个人早期项目，成熟度待验证） |
-| **永久传承层** | SeekDB | LanceDB | 数字家谱、版本归档、代际传承 | 四合一混合存储，Apache 2.0（LanceDB 0.34.0 仍活跃，为有效备选） |
+| **工作记忆层** | TriviumDB（本环境 Py3.13/Rust 接不上→`LazyExternalTier` opt-in 诚实降级） | Turso（Py<3.13） | 粒子私有记忆、短期上下文 | 单文件，向量×图谱×文档三位一体（TriviumDB 仍 Alpha） |
+| **长期语义层** | Chroma + cognee + mem0（已复用，不新增依赖） | KowitoDB / txtai（按需） | 年轮记忆、知识图谱、语义检索 | AOS 长期语义层直接复用开源，KowitoDB/txtai 按「现有够好→复用」不引入 |
+| **永久传承层** | LanceDB（已装 0.36，版本/表分支实测通过） | SeekDB（OceanBase 服务端参考） | 数字家谱、版本归档、代际传承 | LanceDB 本地版已真接；跨分支合并需 LanceDB Cloud；SeekDB 为服务端备选 |
 | **统一可视化** | DBX | — | 跨层统一管理、AI SQL、MCP | 约15MB，70+数据库，**AGPL-3.0** |
 
 > ➡️ **前沿方向（P0，见第十一章 11.2）**：在 L3 之上增设**记忆生命周期管理引擎**（重要性评分晋升 / 蒸馏压缩 / 遗忘衰减 / 用户锚定），为四层存储注入「记忆流动」的灵魂。
@@ -849,7 +850,8 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 *版本：V6.0（基于2026年8月前沿生态整合 + 八个前沿维度深度推演）*
 *涵盖：宪法层 · 人本建模层 · 肉体层 · 心智内核层 · 数据底座层 · 灵魂层 · 精神层 · 演进层 · 虚实闭环层 · 粒子集群层 · 生态层 · 前沿演进维度（第十一章）*
 *协议对齐：MCP 2026-07-28 无状态规范 · x402（Coinbase 发起 / Linux 基金会 x402 Foundation 治理）*
-*开源整合：LocalAI · AgentENV · CLIProxyAPI · Cindy/nanobot · openship · SeekDB · KowitoDB · TriviumDB · DuckDB · DBX · video-shotcraft · turbo-fieldfare(实验) · dg-ai-notes · Fish Speech · Vosk*
+*已真接开源（架构图诚实地图标 ✅AOS已接/已用开源）：DuckDB · LanceDB · Vosk · LocalAI · video-shotcraft · Piper · LiteLLM · constitutional-agent · Chroma · cognee · mem0*
+*开源参考/生态（未集成或仅参考，不引许可不明/传染）：AgentENV · CLIProxyAPI · Cindy/nanobot · openship · SeekDB · KowitoDB · TriviumDB · DBX · turbo-fieldfare(实验) · dg-ai-notes · Fish Speech*
 *Web4.0整合：Automaton · Conway Terminal*
 *前沿维度新增参考（均经核验）：世界模型=Aether AI / 无界动力 MWA™ / LeWM(JEPA)；记忆=mas-memory-layer(ADR-004) / Mandol / EverMind Raven；具身=ACE-Brain-0.5 / LingBot-VLA 2.0 / 清华 Harness VLA / MiniCPM-RobotManip·RobotTrack；认知=GENesis-AGI / Core-1 / LAAP AGI（个人自述，未验证）；OS 原生=openKylin Agent OS / openEuler / OpenHarmony / 龙蜥 / 谢少锋；分形生态=plasma-ai/fractal / TinyAGI/fractals / FSM(未评审预印本)*
 *参考生态：openKylin AgentOS SIG · PhyAgentOS · plasma-ai/fractal · constitutional-agent-governance · Fysiverse/Kairos/Cosmos*
