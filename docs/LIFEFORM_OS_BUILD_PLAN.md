@@ -349,7 +349,7 @@ P0 (L5 端到端证据)  ← 必须最先，地基
 
 | 层 | 项目 | 处置 |
 |---|---|---|
-| L1 瞬时 | **DuckDB** | ✅ 接入（本机实测 1.5.4 可 import，做 mirror_branch 统计后端） |
+| L1 瞬时 | **DuckDB** | ✅ 接入（本机实测 1.5.5 可 import，已升最新并重测，做 mirror_branch 统计后端） |
 | L2 工作 | TriviumDB / Turso | 🔗 参考 + opt-in 惰性适配器（不强制依赖） |
 | L3 语义 | KowitoDB / txtai | 🔗 **不新增**：AOS 已有 Chroma+cognee 覆盖，复用 |
 | L4 传承 | SeekDB | 🔗 参考（pip/yum 安装，非 git 克隆；代际传承用轻量归档） |
@@ -379,3 +379,60 @@ TriviumDB / KowitoDB / DBX / libSQL(Turso) / txtai。DuckDB(已 pip 可用)、Se
 - **③ 端到端未做**：未真灌多模态数据跑通"瞬时→工作→语义→传承"全链路迁移；
   外部库运行时集成（pip 后真连 TriviumDB/Turso/KowitoDB）仅留适配器骨架，未真机验证。
 - 全量回归同 §10.3 环境债（fitz/MCP/torch/transformers 采集期挂死），本批由 scoped 单测独立验证。
+
+### 11.7 新鲜度复核（2026-08-02，应「过时的换最新的」指令）
+
+用户要求：记忆阶梯里的外部项目，过时的就换成最新的。同日重新全网核验 8 个项目最新状态：
+
+| 项目 | 首轮记录 | 当前最新 | 处置 |
+|---|---|---|---|
+| DuckDB | 1.5.4 | **1.5.5** | 🔴 升最新 + 本机升级重测通过 |
+| TriviumDB | 0.7.0 | **0.7.1** | 🔴 升最新 |
+| Turso/libSQL | 16.8k★ 快照 | **v0.7.0** | 🔴 补版本号 |
+| KowitoDB | 0.40.5 | 0.40.5 | 🟢 仍最新 |
+| txtai | 无版本 | **v9.11.0** | 🟡 补版本号 |
+| SeekDB | "2025-11 开源" | **v1.3.0** | 🔴 补版本号（Fork Database/Diff&Merge 强化代际传承） |
+| DBX | 11.7k★ / v0.5.70 自报 | **v0.5.62** / ~10.7k★（官方称 70+ 库，dbxio.com 枚举约80引擎配置；第三方追踪曾测 60+，非夸大） | 🔴 上轮版本号记错（v0.5.70 实为 v0.5.62）；库数 70+ 为官方口径（上轮误判为夸大，本轮纠正）；星标 11.7k→实测 10.7k 为口径差异 |
+| cel-memory-duckdb | v0.1.0 | v0.1.0（父 0.2.1） | 🟢 仍最新 |
+
+**结论**：8 个项目无一被废弃/更名/换许可证（全 MIT/Apache，无 AGPL），所谓"过时"纯属版本漂移。
+5 个落后项已在白皮书第十一章 + 审计文档升到最新；vendor/ 5 克隆已 `git fetch --depth 1` 刷新到最新 HEAD
+（txtai 沙箱浅克隆分支元数据损坏，工作树已为最新，主机重拉即可）。受管 Python 3.13.12 + duckdb 1.5.5
+重跑 `tests/test_memory_ladder.py` = **9 passed**，证明代码兼容最新 duckdb。
+
+⚠️ 操作事故（诚实）：本轮在沙箱用 `pip install -U duckdb` 升级系统 Python 3.14.5 时，卸载 1.5.4 触发沙箱
+写时复制覆盖层把该 Python 的 `Lib` 目录弄丢，导致沙箱内 `python3.14` 启动报 `No module named 'encodings'`。
+此为沙箱局部损坏、不回写真主机；受管 Python 3.13.12 完好已用于复测。真主机若遇同类报错，运行
+`python-3.14.5-amd64.exe /repair` 或 `winget install --repair Python.Python.3.14` 恢复。
+
+### 11.8 深度推理 · 更优技术自动执行（2026-08-02，应「有过时/更优想法就自动执行」指令）
+
+**常驻铁律（已固化 MEMORY.md 第十三节）**：记忆阶梯每次改动前先全网核验；版本落后升最新、有更优技术**自动换/增**；
+引入需 MIT/Apache-2.0（无 AGPL），source-available / 许可不明一律观察项不采纳。
+
+**本轮深度推理命中并执行：**
+
+| 发现 | 处置 |
+|---|---|
+| LanceDB 0.34.0（2026-07-02）table branches：Git 式零拷贝分支 + 每次写自动版本化，比 SeekDB Fork/Diff&Merge 更原生命中「数字家谱」；Apache-2.0（FAQ+LICENSE 双确认），与 DuckDB 直接集成 | ✅ **自动接入**为 L4 opt-in 备选：`_lancedb_connect()` + `build_default_ladder()` L4 = `LazyExternalTier("lancedb", ...)`；SeekDB 仍主选 |
+| DuckDB Lance 扩展（`INSTALL lance; LOAD lance;`）让 L1 获版本血缘 | ✅ DuckDBTier 加 `lance=True` best-effort（无网络/未发布静默降级） |
+| AionDB：仅 source-available，许可不明 | ⛔ 观察项不采纳 |
+| SurrealDB：偏服务/分布式，不符「每粒子一文件轻量」 | ⛔ 观察项不采纳 |
+| DuckDB 1.6.0 仅 dev 预发布，稳定版仍 1.5.5 | 保持 1.5.5 |
+| DBX v0.5.70 实为记错，真最新 **v0.5.62**（2026-07-31 前后，10.7k★，官方称 70+ 库）；70+ 为 DBX 官方口径（dbxio.com 枚举约80引擎配置），非夸大 | 🔴 纠错（上轮版本号写错 + 库数误判夸大） |
+
+**落地**：`memory_ladder.py` 增 `_lancedb_connect()` + L4 接 LanceDB + DuckDBTier(lance=True)；
+`test_memory_ladder.py` 增 2 项；受管 3.13.12 + duckdb 1.5.5 重跑 = **11 passed**。
+诚实分级：代码+单测=**②**；LanceDB 真机 Git 式分支版本化=**③ 端到端未做**（待主机 `pip install lancedb` 后扩展）。
+
+### 11.9 第三轮深度推理 · 自动分层引擎补 + DBX 纠错（2026-08-02）
+
+用户重申"每次全网搜索+深度推理，过时/更优自动执行，全部做完再回复，自检三遍"。完整执行：
+
+**全网核验**：9 项目（含 LanceDB）全部仍为最新、无废弃/更名/换许可。
+**纠错**：DBX 上轮误记 `v0.5.70`（实为不存在）→ 真最新 **v0.5.62**（2026-07-31 前后，10.7k★）；库数官方称 70+（dbxio.com 枚举约80引擎配置），第三方追踪曾测 60+，非夸大（上轮误判，本轮纠正）。已同步白皮书 §11.3/§11.6、审计 §七/§九、本表 §11.7。
+**更优自动执行**：蓝图灵魂"自动分层"与初版手动 `promote()` 脱节 → 补 `heat()` / `_route_by_heat()` / `auto_promote()` / `distill()`，`store(tier=None)` 按热度自动选层；新增 6 项单测，总计 17 passed。
+**额外发现（观察项，不改代码）**：TriviumDB 被 PeroCore 真实落地（PEDSA 2.95ms/1亿条）强化 L2 选型；KowitoDB storage 原生支持 Lance 后端（L3↔L4 存储兼容）；LanceDB 版本号分叉（0.34.0 表分支 / Rust crate 同日 0.31.0）。
+
+**落地**：`memory_ladder.py` 增自动分层引擎（访问热度跟踪 + 4 个方法）；`test_memory_ladder.py` 增 6 项；受管 3.13.12 + duckdb 1.5.5 重跑 = **17 passed**。
+诚实分级：代码+单测=**②**；真灌数据接 DuckDB/TriviumDB/LanceDB 跑通"热数据自动向上沉淀"全链路=**③ 端到端未做**。
