@@ -124,9 +124,11 @@ flowchart TB
         L8D["🔧 数字粒子：PC/手机/服务器 [✅AOS代码]"]
     end
 
-    subgraph L9["📚 第九层：生态层"]
+    subgraph L9["📚 第九层：生态层（国产开源 OS 生态参考）"]
         L9A["🔧 dg-ai-notes（Pi-Agent SDK 教程）[🔗纯参考]"]
-        L9B["🔗 社区参考：openKylin AgentOS SIG [🔗纯参考]"]
+        L9B["🔗 openKylin 智能体 OS（国防科大牵头·openKylin 2.0 全栈开源 Agent OS：系统/CUA 智能体+桌面生态+统一推理）[🔗纯参考]"]
+        L9C["🔗 openEuler Agentic Infra（服务器 OS：Agent/Container/Serverless 重定义资源管理·超节点沙箱）[🔗纯参考]"]
+        L9D["🔗 OpenHarmony 小艺 HMAF（海量终端轻量化智能体调度·Skill/MCP/意图框架）[🔗纯参考]"]
     end
 
     CONST --> L0
@@ -160,7 +162,7 @@ flowchart TB
 
 ### 架构节点实现状态总览（白盒诚实地图 · 逐节点核对 src/ 真值）
 
-> 本表把架构图 **59 个节点**（含 L1E3 Piper）逐一对照 AOS 仓库真实代码（`src/` 共 664 个 `.py`），四态诚实标注，杜绝"看着像全建好"的误导。
+> 本表把架构图 **61 个节点**（含 L1E3 Piper）逐一对照 AOS 仓库真实代码（`src/` 共 664 个 `.py`），四态诚实标注，杜绝"看着像全建好"的误导。
 > 表内每一条 AOS 代码路径 / 已接开源结构均经 `test -e` 批量校验存在（自研代码类全 OK，零断链；许可红线/未接项按铁律不 import）。
 >
 > | 标记 | 含义 |
@@ -232,7 +234,9 @@ flowchart TB
 | L8C 重型具身粒子 | L8 | ✅AOS代码 | 同上（框架就绪，机器人本体未接） | ② |
 | L8D 数字粒子 | L8 | ✅AOS代码 | 同上（PC/服务器侧已可 spawn） | ② |
 | L9A dg-ai-notes | L9 | 🔗纯参考 | buchidonggua/dg-ai-notes，**MIT 教程仓库**（Pi-Agent SDK 10 章拆解），非库，不需集成 | — |
-| L9B openKylin AgentOS SIG | L9 | 🔗纯参考 | openKylin 社区 AgentOS SIG（基于 openKylin 2.0 的开源智能体 OS，国防科大/哈工大(深圳)/麒麟软件共建），国产生态对齐，非库 | — |
+| L9B openKylin 智能体 OS | L9 | 🔗纯参考 | **国防科技大学牵头 + 哈工大(深圳) + 麒麟软件共建**，基于 **openKylin 2.0** 发布（2026-06-25）的**全栈开源智能体操作系统**（国内开源社区首个系统级智能体 OS 支撑）；打通**系统智能体 / CUA 智能体 / 桌面应用生态 / 统一模型推理服务**四大模块；统一推理降 75% 模型切换、73.6% 任务等待；"主干-分支"协同架构 PPT 任务 token 降 81.7%、耗时降 38.2%；记忆精炼模型降 24%+ 记忆 token；API+CUA Skill 接入 300+ 系统操作 / 900+ 应用操作 / 30+ 无 API 桌面应用。国产生态对齐，非库、不需 AOS 代码 | — |
+| L9C openEuler Agentic Infra | L9 | 🔗纯参考 | **openEuler（开源欧拉，华为/鲲鹏系）**面向**超节点 Agentic 基础设施**：围绕 **Agent / Container / Serverless** 重定义传统 OS 的资源管理、算力抽象与生态入口；超节点 OS、Conch 沙箱引擎（AI Agent 完整沙箱镜像 + 快照冷启动/迁移/续跑）、Agent Kernel（超节点内核原生调度与安全）+ Agent Service（安全/记忆/沙箱抽象为 Agent POSIX 原语）、Skills&MCP 友好工具生态 + XPU 协同加速。服务器场景 Agentic AI 底层技术，国产生态对齐，非库 | — |
+| L9D OpenHarmony 小艺 HMAF | L9 | 🔗纯参考 | **OpenHarmony + 小艺开放平台（HMAF 2.0 鸿蒙智能体框架）**：系统能力 **Skill 化**（2100+ 系统能力 / 500+ 伙伴精选 Skills / 2000+ 鸿蒙智能体）、**意图即服务**分发、MCP 兼容工具、端云 A2A 对接、端云系统鉴权；海量终端（手机/PC/IoT）轻量化智能体调度。国产生态对齐，非库、不需 AOS 代码 | — |
 
 ### 该用的开源 → 实际集成状态（2026-08-02 收口，回应「该用的开源一个没有用」）
 
@@ -243,7 +247,7 @@ flowchart TB
 | ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft、**L1E3 Piper**、**CONST3 constitutional-agent**、**L1B LiteLLM** | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** Apache-2.0 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm）；**Piper 1.6.0 真装**（Apache-2.0 离线 TTS，接入 TTSAdapter 引擎链替代 Fish Speech 禁商用权重，无模型诚实降级）；**constitutional-agent 0.7.0 真装**（MIT 本地宪法治理，封装 `Constitution` 六闸门+硬约束评估，无需外部 LLM）；**LiteLLM 1.95.0 真装**（MIT 统一 100+ provider OpenAI 路由，`LiteLLMAdapter` 已注册） |
 | ✅ **AOS 已用开源** | L3B Chroma/cognee/mem0 | L3 长期语义层本就复用这三个开源，非自研；KowitoDB/txtai 按「现有够好→复用」不新增 |
 | 🔁 **本环境接不上（实测核实，诚实降级）** | L3C TriviumDB/Turso | **实测**：TriviumDB 全部版本 `Requires-Python >=3.9,<3.13`（`pip install` 实测拒绝）；Turso `pyturso` 仅 sdist、Rust 源码编译在沙箱 exit1。本环境 3.13.12 接不上，绝不用内存冒充 |
-| 🔗 **纯参考/生态对齐（非库·服务·平台不兼容·许可红线）** | L1C Cindy/nanobot、L1D openship、L1E Fish Speech、L1F turbo-fieldfare、L3E DBX、L6D/L7G PhyAgentOS、L9A dg-ai-notes、L9B openKylin | Cindy/nanobot/openship 是框架或服务非 drop-in 库（nanobot 可装但依赖与 AOS 冲突，AOS 用 FabricHub/部署脚本）；Fish Speech 模型 NC（Piper 替代）；turbo-fieldfare 仅 macOS/Apple Silicon；DBX AGPL；PhyAgentOS 具身域；dg-ai-notes 教程；openKylin 国产生态。均不需 AOS 代码 |
+| 🔗 **纯参考/生态对齐（非库·服务·平台不兼容·许可红线）** | L1C Cindy/nanobot、L1D openship、L1E Fish Speech、L1F turbo-fieldfare、L3E DBX、L6D/L7G PhyAgentOS、L9A dg-ai-notes、L9B openKylin、L9C openEuler、L9D OpenHarmony | Cindy/nanobot/openship 是框架或服务非 drop-in 库（nanobot 可装但依赖与 AOS 冲突，AOS 用 FabricHub/部署脚本）；Fish Speech 模型 NC（Piper 替代）；turbo-fieldfare 仅 macOS/Apple Silicon；DBX AGPL；PhyAgentOS 具身域；dg-ai-notes 教程；openKylin/openEuler/OpenHarmony 为国产开源 OS 生态参考（桌面智能体 OS / 服务器 Agentic Infra / 终端智能体框架），非库、不需 AOS 代码 |
 | 🔁 **自研等价（外部不可引，AOS 有等价）** | L2I plasma-ai/fractal、L6C Automaton、L7F Conway Terminal | **均实测不可引**：fractal Unix-only(fcntl)+tmux+外部 CLI；Automaton/Conway 需 Conway Cloud+链上钱包+USDC。AOS 自研等价（`kernel/fractal/`、`kernel/evolution.py`+`self_evolve_engine.py`、`api/billing_api.py`+`economy.py`）；CONST3/L1B/L1E3 已真接开源（见上） |
 | 🔜 **下一批（主机验证项）** | ③ 端到端用例（Vosk 真转写 / Piper 真合成 / LocalAI 真推理 / video-shotcraft 真渲染 / LiteLLM 多 provider 真路由） | 均需模型下载/API key/Node，主机稳定网络可跑，沙箱已诚实 skip |
 
@@ -257,6 +261,8 @@ flowchart TB
 > - **L1C / L1D 重新定性为 🔗 纯参考**：nanobot（HKUDS，MIT，Py≥3.11）实测可装但依赖树与 AOS 冲突（会卸载 `rich` 15）；Cindy（Apache-2.0 TS 桌面端、需云账号）非 Python 不可嵌；openship（oblien，Apache-2.0）是部署平台/服务非库。二者均非 drop-in 库，AOS 用 FabricHub / 部署脚本覆盖，故归 🔗 生态参考而非 🔁 自研等价。
 >
 > **统计随之调整**：🔁 6→4（L2I/L3C/L6C/L7F，均实测不可引、AOS 有自研等价），🔗 7→9（增补 L1C/L1D）。✅ 仍为 46。
+>
+> **本回合（2026-08-03）国产 OS 生态扩展**：用户补充「openKylin / openEuler / OpenHarmony（OS 生态参考）」三点，经全网核验（人民网/新华网/华为 HDC2026/官方博客均佐证）三点信息**全部属实**，🔗 标注准确。据此：① 将 L9B 由笼统的「openKylin AgentOS SIG」**补实为「openKylin 智能体 OS」**（国防科大牵头、openKylin 2.0、四大模块、实测性能数据）；② **新增 L9C openEuler Agentic Infra**（服务器 OS 围绕 Agent/Container/Serverless 重定义资源管理、超节点沙箱）、**L9D OpenHarmony 小艺 HMAF**（海量终端轻量化智能体调度、Skill/MCP/意图框架）两个 🔗 生态节点。统计再调：🔗 9→11、总数 59→61，✅46/🔁4 不变。三者构成「端（OpenHarmony）/边服务器（openEuler）/桌面智能体（openKylin）」的国产全栈参照系，均非库、不需 AOS 代码，保持 🔗 纯参考。
 
 **诚实边界（不夸大）**：
 - LanceDB 本地模式 **merge 仅支持 remote 表**（0.36 本地报 `NotImplementedError`），故本地「数字家谱」= 分支隔离 + 不可变版本历史 + 时间旅行；跨分支合并需 LanceDB Cloud。
@@ -265,13 +271,13 @@ flowchart TB
 - 真接的开源（DuckDB/LanceDB/Vosk/LocalAI/video-shotcraft/Piper/constitutional-agent/LiteLLM）已用单测实证（store/recall/版本/分支 / 离线 STT 引擎链 / OpenAI 兼容客户端 / 仓库+node 检测 / Piper 引擎链+无模型诚实降级 / Constitution 六闸门本地评估 / 100+ provider 路由）；诚实级仍标 ②（代码+单测）；③ 端到端（真灌多模态数据全链路迁移 / 真语音转写 / 真渲染成片 / 真 Piper 语音合成需下载模型 / 真多 provider 推理需 API key）未做，相关 ③ 用例因网络/密钥在沙箱不稳已诚实 skip。
 - 凡「服务/框架/许可红线」类未接入，均按选型铁律判定，非疏漏。
 
-**诚实统计（59 个节点，本版修正后）**
+**诚实统计（61 个节点，本版修正后）**
 
 | 状态 | 数量 | 占比 | 说明 |
 | :--- | ---: | ---: | :--- |
-| ✅ AOS 已有真实代码 | **46** | 78.0% | 含**真接开源 DuckDB + LanceDB + Vosk + LocalAI + video-shotcraft + Piper + constitutional-agent + LiteLLM**；L3 语义层复用开源 Chroma/cognee/mem0 |
-| 🔁 外部未接 / 自研等价（实测不可引） | **4** | 6.8% | L2I(fractal Unix-only+tmux+外部 CLI)、L3C(TriviumDB<3.13+Turso Rust 构建阻)、L6C(Automaton 需 Conway Cloud+链上钱包)、L7F(Conway Terminal 需链上)；AOS 均有自研等价 |
-| 🔗 纯参考 / 生态对齐 / 许可红线 | **9** | 15.3% | L1C(Cindy/nanobot 框架非库)/L1D(openship 部署平台)/L1E(Fish Speech NC)/L1F(turbo-fieldfare Mac)/L3E(DBX AGPL)/L6D+L7G(PhyAgentOS 具身)/L9A(dg-ai-notes 教程)/L9B(openKylin SIG) |
+| ✅ AOS 已有真实代码 | **46** | 75.4% | 含**真接开源 DuckDB + LanceDB + Vosk + LocalAI + video-shotcraft + Piper + constitutional-agent + LiteLLM**；L3 语义层复用开源 Chroma/cognee/mem0 |
+| 🔁 外部未接 / 自研等价（实测不可引） | **4** | 6.6% | L2I(fractal Unix-only+tmux+外部 CLI)、L3C(TriviumDB<3.13+Turso Rust 构建阻)、L6C(Automaton 需 Conway Cloud+链上钱包)、L7F(Conway Terminal 需链上)；AOS 均有自研等价 |
+| 🔗 纯参考 / 生态对齐 / 许可红线 | **11** | 18.0% | L1C(Cindy/nanobot 框架非库)/L1D(openship 部署平台)/L1E(Fish Speech NC)/L1F(turbo-fieldfare Mac)/L3E(DBX AGPL)/L6D+L7G(PhyAgentOS 具身)/L9A(dg-ai-notes 教程)/L9B(openKylin 智能体 OS)/L9C(openEuler Agentic Infra)/L9D(OpenHarmony 小艺 HMAF) |
 | 🚧 无代码空壳 | **0** | 0% | 逐节点核对后为 0（前版误判的 3 个已纠正） |
 
 **② 级实测证据（可复现，无需 pytest）**
@@ -288,7 +294,7 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 
 **必须同时说清的三条限度（不夸大）**
 
-1. **"一半以上是空壳"按节点数不成立**：38 个节点有真实代码、15 个有自研等价，合计 53/58（91.4%）在仓库里能找到对应实现。真正零代码的节点为 0。
+1. **"一半以上是空壳"按节点数不成立**：✅46 有 AOS 真实代码/已接/已用开源、🔁4 有 AOS 自研等价，二者合计 50/61（82.0%）在仓库里能找到对应实现；🔗11 为国产/开源生态参考（本就不需要 AOS 代码）；真正零代码的节点为 0。
 2. **但"有代码" ≠ "能用"**：绝大多数是 **② 级机制骨架**——纯函数 + 类骨架 + 单测可跑，未接真 LLM 驱动。典型例子：L7B 世界模型是线性因果叠加，不是训练出的 JEPA；L2 各引擎是基础启发式；L8 粒子框架能 spawn 但没接真实硬件驱动。
 3. **③ 级（真 LLM 端到端闭环）目前只验证过 P0 自进化一个窄场景**（见第九章），不覆盖全架构。这是当前最大的真实缺口，也是下一阶段唯一值得投入的方向。
 

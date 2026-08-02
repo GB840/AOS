@@ -4,7 +4,7 @@
 防止「架构图标注重构滞后 / 标注与统计不一致」这类问题复发：
 - mermaid 架构图的每个节点标注（✅/🔁/🔗）必须与诚实地图表格一致；
 - 诚实地图表格的 ✅/🔁/🔗 计数必须与底部「诚实统计」表一致；
-- 总数为 59 节点。
+- 总数为 61 节点。
 
 用户铁律：凡贴标签必须逐个调研吃透；本测试把「文档内部自洽」钉死，
 任何后续编辑若改了标注却忘改统计 / 表格，CI 直接红。
@@ -17,8 +17,8 @@ WHITEPAPER = os.path.join(
     os.path.dirname(__file__), "..", "docs", "LIFEFORM_OS_WHITEPAPER_V6.md"
 )
 
-EXPECTED_TOTAL = 59
-EXPECTED = {"✅": 46, "🔁": 4, "🔗": 9}
+EXPECTED_TOTAL = 61
+EXPECTED = {"✅": 46, "🔁": 4, "🔗": 11}
 
 
 def _read():
@@ -123,3 +123,7 @@ def test_no_phantom_nodes():
     assert tbl.get("L3C") == "🔁", f"L3C 必须为 🔁 外部未接，实际 {tbl.get('L3C')}"
     # L1E Fish Speech 必须非 ✅（模型 NC 禁商用）
     assert tbl.get("L1E") == "🔗", f"L1E 必须为 🔗 纯参考，实际 {tbl.get('L1E')}"
+    # L9B openKylin / L9C openEuler / L9D OpenHarmony 国产 OS 生态参考，必须 🔗 纯参考
+    assert tbl.get("L9B") == "🔗", f"L9B 必须为 🔗 纯参考，实际 {tbl.get('L9B')}"
+    assert tbl.get("L9C") == "🔗", f"L9C 必须为 🔗 纯参考，实际 {tbl.get('L9C')}"
+    assert tbl.get("L9D") == "🔗", f"L9D 必须为 🔗 纯参考，实际 {tbl.get('L9D')}"
