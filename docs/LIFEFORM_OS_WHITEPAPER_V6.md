@@ -55,6 +55,7 @@ flowchart TB
         L1C["🔧 跨平台交互客户端：Cindy / nanobot"]
         L1D["🔧 部署与运维层：openship"]
         L1E["🔧 语音交互子层：Fish Speech（权重禁商用）"]
+        L1E2["🔧 离线语音识别：Vosk（Apache-2.0，中文引擎）"]
         L1F["🔧 端侧推理优化（实验性）：turbo-fieldfare"]
         L1G["⚡ 硬件抽象层：统一指令集"]
         L1H["⚡ Phy-Bus物理适配总线"]
@@ -558,7 +559,7 @@ flowchart TB
 
 | 维度 | 映射层级 | 验证总况 | 优先级 |
 | :--- | :--- | :--- | :--- |
-| 一、世界模型（因果理解） | L7 虚实闭环 | 4 项 VERIFIED / PARTIAL | P1 |
+| 一、世界模型（因果理解） | L7 虚实闭环 | 5 项（2 VERIFIED / 2 PARTIAL / 1 FABRICATED已删） | P1 |
 | 二、记忆生命周期引擎 | L3 数据底座 | 3 项 PARTIAL（含 1 伪造出处已纠） | P0 |
 | 三、Physical Agentic 粒子 | L8 粒子集群 | 4 项 VERIFIED / PARTIAL | P2 |
 | 四、认知架构工程化 | L2 心智内核 | 3 项 PARTIAL（均为个人自述项目） | P0 |
@@ -683,10 +684,10 @@ flowchart TB
 
 | 外部声称 | 核验结论 | 保留的架构能力 | 自研落地（self-build） | 优先级 |
 | :--- | :--- | :--- | :--- | :--- |
-| Mobius「全球首个自进化开源 Agent OS」 | ❌ 无法证实（仅 tiny 同名项目） | 持续生长、自我重写的内核 | L6 个体自进化引擎（借鉴 Raven 双向记忆 + plasma-ai/fractal 硬上限）⚡已落地 `src/lifeform/self_evolve_engine.py` | P1 |
-| Holo「分形全息 Agent · 3.02× / 98.1%」 | ❌ 指标伪造 | 分形全息自适应 Agent（自学习→自完善→自适应） | L2/L6 分形全息自适应 Agent⚡已落地 `src/lifeform/fractal_holo_agent.py` | P1/P2 |
-| IEEE 2026-02「四层记忆 + CIAR」论文 | ❌ 出处伪造（实为 mas-memory-layer ADR-004） | 认知科学四层记忆 + 生命周期流动引擎 | L3 记忆生命周期管理引擎（重要性评分晋升 / 蒸馏压缩 / 遗忘衰减 / 用户锚定）⚡已落地 `src/kernel/store/memory_lifecycle.py` | P0 |
-| LeWM「1GB 显存跑 JEPA」 | ❌ 指标编造 | 轻量 JEPA 因果世界模型（真项目 `lucas-maes/le-wm` ~15M 参数） | L7 双层世界模型引擎（第一层因果 / 第二层人本因果），可选接入 le-wm⚡已落地 `src/lifeform/world_model_engine.py` | P1 |
+| Mobius「全球首个自进化开源 Agent OS」 | ❌ 无法证实（仅 tiny 同名项目） | 持续生长、自我重写的内核 | L6 个体自进化引擎（借鉴 Raven 双向记忆 + plasma-ai/fractal 硬上限）⚡已落地 `src/lifeform/self_evolve_engine.py`（②级骨架） | P1 |
+| Holo「分形全息 Agent · 3.02× / 98.1%」 | ❌ 指标伪造 | 分形全息自适应 Agent（自学习→自完善→自适应） | L2/L6 分形全息自适应 Agent⚡已落地 `src/lifeform/fractal_holo_agent.py`（②级骨架） | P1/P2 |
+| IEEE 2026-02「四层记忆 + CIAR」论文 | ❌ 出处伪造（实为 mas-memory-layer ADR-004） | 认知科学四层记忆 + 生命周期流动引擎 | L3 记忆生命周期管理引擎（重要性评分晋升 / 蒸馏压缩 / 遗忘衰减 / 用户锚定）⚡已落地 `src/kernel/store/memory_lifecycle.py`（②级骨架） | P0 |
+| LeWM「1GB 显存跑 JEPA」 | ❌ 指标编造 | 轻量 JEPA 因果世界模型（真项目 `lucas-maes/le-wm` ~15M 参数） | L7 双层世界模型引擎（第一层因果 / 第二层人本因果），可选接入 le-wm⚡已落地 `src/lifeform/world_model_engine.py`（②级骨架） | P1 |
 
 > 诚实分级：上表四项均为**自研骨架（② 代码 + 单测可跑，见 `tests/test_lifeform_selfbuild.py`）**，非端到端跑通。实现遵循「可验证即真理」——每个公开方法都带硬判定与护栏（如自进化迭代/深度/成本硬上限、分形派生深度闸门），不得谎报闭环；真 LLM 驱动的自我重写与世界模型权重加载属 ③ 级，待真机验证。
 
