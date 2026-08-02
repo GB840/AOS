@@ -1,0 +1,3 @@
+{"phase": "round1", "capability": "web.search", "engine": "bing", "ok": true, "real_metrics": {"is_real": true}, "summary": "经 baidu 检索到 2 条"}
+{"phase": "round2", "capability": "web.search", "engine": "duckduckgo", "ok": true, "real_metrics": {"is_real": true}, "summary": "经 baidu 检索到 5 条"}
+{"phase": "verdict", "engine_switched": true, "round1_engine": "bing", "round1_ok": true, "round1_real": true, "round2_engine": "duckduckgo", "round2_ok": true, "round2_real": true, "end_to_end_passed": false, "honesty_level": "② 引擎按证据切换（环境未产生成败差，反思/蒸馏器真实发生）"}

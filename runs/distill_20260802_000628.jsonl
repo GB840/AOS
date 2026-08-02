@@ -1,0 +1,3 @@
+{"engine": "anysearch", "capability": "web.search", "total": 10, "ok": 10, "fail": 0, "last_error": ""}
+{"engine": "bing", "capability": "web.search", "total": 11, "ok": 3, "fail": 8, "last_error": ""}
+{"engine": "duckduckgo", "capability": "web.search", "total": 11, "ok": 2, "fail": 9, "last_error": ""}
