@@ -2,28 +2,23 @@
 
 把蓝图「四层阶梯式融合架构」落地为可运行的代码骨架：
 - L1 瞬时感知层（DuckDB 1.5.5，已升最新；可选 Lance 扩展获得版本血缘）
-- L2 工作记忆层（TriviumDB / Turso，opt-in 惰性适配器）
-- L3 长期语义层（复用 AOS 既有 Chroma/cognee；KowitoDB/txtai 仅参考）
-- L4 永久传承层（SeekDB 主选；LanceDB 为「更优技术」opt-in 备选——Git 式
-  分支版本化，Apache-2.0，与 DuckDB 直接集成）
+- L2 工作记忆层（TriviumDB / Turso，opt-in 惰性适配器，**诚实降级**）
+- L3 长期语义层（复用 AOS 既有 Chroma/cognee/mem0 —— 这些本就是开源，非自研）
+- L4 永久传承层（**LanceDB 已真接入并可跑 Git 式表分支**；SeekDB 为服务端参考项）
 
-深度推理新增（2026-08-02 全网核验）：AionDB/SurrealDB 虽涌现，但 AionDB 仅
-source-available（许可不明）、SurrealDB 偏服务/分布式不符「每粒子一文件轻量」，
-按铁律列为观察项、不采纳。
-
-自动分层引擎（2026-08-02 第二轮深度推理补）：蓝图灵魂是「让不同数据库根据
-数据热度、访问频率、生命周期自动分层」。初版仅手动 promote()，与理念脱节。
-现补 `heat()` / `auto_promote()` / `distill()` / `_route_by_heat()`：记忆被
-访问（store/recall）越频繁越热，热度达阈值即自动向上沉淀一层，无需手工调用；
-`distill()` 批量执行——实现蓝图「层间数据流动」的自动版。
-
-诚实纪律：所有外部依赖惰性 import，缺失即优雅降级到内存实现，
-保证 ② 单元可测；外部库的运行时真连仅留适配器骨架，未做 ③ 端到端验证。
+诚实纪律（2026-08-02 收口）：
+- 凡能装的 MIT/Apache 开源 **真接入、真跑通**（DuckDB 已装；LanceDB 0.36.0 已装、store/recall/branch 实测通过）。
+- 接不上的（TriviumDB=Rust crate 无 PyPI 轮子；Turso=libsql 仅支持 Py<3.13）：
+  **import 即 ImportError，由 LazyExternalTier 诚实降级为 available:False，绝不退回内存实现冒充**。
+- SeekDB 是 OceanBase 服务端产品，本地优先 OS 偏重，列为参考项不强制接入。
+- 所有外部依赖惰性 import，缺失即优雅降级到内存实现，保证 ② 单元可测；
+  外部库的运行时真连仅留适配器骨架，未做 ③ 端到端验证（真灌多模态数据全链路）。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any, Callable, Dict, Optional
 
@@ -76,7 +71,7 @@ class InMemoryTier(MemoryTier):
 class DuckDBTier(MemoryTier):
     """L1 瞬时感知层：DuckDB 列式实时统计。
 
-    本机实测 duckdb 1.5.5 在 Python 3.14 下可直接 import，故作为 L1 真后端。
+    本机实测 duckdb 1.5.5 在 Python 3.13/3.14 下可直接 import，故作为 L1 真后端。
     适合 mirror_branch 的实时统计、生命周期数据复盘。
 
     ``lance=True`` 时 best-effort 加载 DuckDB 的 Lance 扩展
@@ -126,7 +121,8 @@ class LazyExternalTier(MemoryTier):
     """opt-in 外部库适配器骨架。
 
     仅在对应库已安装时通过 ``connect`` 工厂建立真实连接；否则调用即抛
-    ImportError（清晰告知需 pip install）。不强制任何重型依赖，符合选型铁律。
+    ImportError（清晰告知需 pip install / 构建绑定），**绝不退回内存实现冒充**。
+    不强制任何重型依赖，符合选型铁律。
     """
 
     name = "external"
@@ -153,88 +149,179 @@ class LazyExternalTier(MemoryTier):
             s = inner.stats()
             s["backend"] = self.backend
             return s
-        except ImportError as exc:  # 未安装：诚实告知
-            return {"name": self.name, "backend": self.backend, "available": False, "reason": str(exc)}
+        except ImportError as exc:  # 未安装：诚实告知（含真实约束原因）
+            return {
+                "name": self.name,
+                "backend": self.backend,
+                "available": False,
+                "reason": str(exc),
+            }
 
 
 def _trivium_connect() -> MemoryTier:
-    """TriviumDB 连接工厂（L2 工作记忆）。需 ``pip install triviumdb``。"""
-    import triviumdb  # 缺失即 ImportError
+    """TriviumDB 连接工厂（L2 工作记忆）。
 
-    db = triviumdb.TriviumDB("particle.tdb", dim=384)
-    # 包装为 MemoryTier 接口
+    诚实说明：TriviumDB 是 **Rust crate**（github.com/YoKONCy/TriviumDB），
+    PyPI 上**没有** ``triviumdb`` 轮子，需从源码/Cargo 构建 pyo3 绑定，或降到
+    Python <3.13。本托管环境是 Python 3.13.12，故 ``import triviumdb`` 会
+    ImportError——这是真实约束，不是代码 bug。由 LazyExternalTier 诚实降级为
+    available:False。一旦环境具备该绑定，请在此实现真实 _Wrap（按 key 存/取）。
+    """
+    import triviumdb  # 缺失（Py3.13 / 未构建）即 ImportError → 上层诚实降级
+
+    # 环境具备绑定时才执行到此处；其真实 API 未在本环境验证，故显式要求实现。
+    raise RuntimeError(
+        "TriviumDB Python 绑定已 import 成功，但其真实 API 未经本环境验证；"
+        "请在具备该绑定的环境中实现按 key 存/取的 _Wrap 后再启用。"
+    )
+
+
+def _turso_connect() -> MemoryTier:
+    """Turso/libSQL 连接工厂（L2 工作记忆，每粒子一库）。
+
+    诚实说明：Turso 的 Python 绑定 ``libsql`` 在 PyPI 仅支持 Python <3.13；
+    本托管环境是 3.13.12，``import libsql`` 会 ImportError。这是真实环境约束，
+    不是 bug。若环境降到 <3.13 或构建了绑定，则真正连接 libSQL 文件库。
+    **绝不退回内存实现冒充 Turso**（旧代码曾这样骗，已修）。
+    """
+    import libsql  # <3.13 才可用；此处 ImportError → 上层诚实降级
+
+    con = libsql.connect("file:particle.tdb")  # 真实 libSQL 文件库连接
+
     class _Wrap(MemoryTier):
-        name = "triviumdb"
+        name = "turso"
 
-        def store(self, key, value, **meta):
-            db.insert([0.0] * 384, {"key": key, "value": value, **meta})
+        def store(self, key: str, value: Any, **meta: Any) -> None:
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT, ts DOUBLE)"
+            )
+            con.execute(
+                "INSERT OR REPLACE INTO kv VALUES (?, ?, ?)",
+                [key, json.dumps({"value": value, "meta": meta}), time.time()],
+            )
 
-        def recall(self, key):
-            return None  # 向量检索需 query 向量，read 接口按需扩展
+        def recall(self, key: str) -> Optional[Any]:
+            row = con.execute("SELECT v FROM kv WHERE k=?", [key]).fetchone()
+            return json.loads(row[0])["value"] if row else None
 
-        def stats(self):
-            return {"name": self.name, "count": 0}
+        def stats(self) -> Dict[str, Any]:
+            n = con.execute("SELECT COUNT(*) FROM kv").fetchone()[0]
+            return {"name": self.name, "count": n}
 
     return _Wrap()
 
 
-def _turso_connect() -> MemoryTier:
-    """Turso/libSQL 连接工厂（L2 工作记忆，每粒子一库）。需 libsql Python 绑定。"""
-    import libsql  # 缺失即 ImportError
+def _seekdb_connect() -> MemoryTier:
+    """SeekDB 连接工厂（L4 永久传承层，OceanBase 开源产品）。
 
-    # 真实接入在此展开；骨架阶段返回内存实现并标注 backend
-    t = InMemoryTier()
-    t.name = "turso"
-    return t
+    诚实说明：SeekDB 是 **服务端产品**（OceanBase 源分发，非纯 pip 库），对
+    本地优先 OS 偏重。本环境未安装即 ImportError → 诚实降级。其 Fork Database
+    + Diff&Merge 能力是「数字家谱」的强参考；本地优先场景由 LanceDB 表分支承担。
+    """
+    import seekdb  # 未安装（服务端产品）即 ImportError → 上层诚实降级
+
+    raise RuntimeError(
+        "SeekDB 为 OceanBase 服务端产品，本环境未安装；请部署服务端后在具备依赖的"
+        "环境中实现真实 _Wrap（Fork Database / Diff&Merge）再启用。"
+    )
 
 
 def _lancedb_connect() -> MemoryTier:
-    """L4 永久传承层：LanceDB 连接工厂（「更优技术」opt-in 备选，Apache-2.0）。
+    """L4 永久传承层：LanceDB 连接工厂（**已真接入、可跑 Git 式表分支**）。
 
-    深度推理（2026-08-02 全网核验）：LanceDB 0.34.0（2026-07-02）新增 table branches
-    —— Git 式零拷贝分支，写分支不动 main，可 checkout/diff/merge；每次写自动版本化
-    （不可变 fragment + 时间旅行 + tag）。这比 SeekDB 的 Fork/Diff&Merge **更原生地**
-    命中蓝图「数字家谱/Git 式版本分支」需求，且与 DuckDB 直接集成（L1↔L4 血缘打通）。
-    故作为 L4 opt-in 备选自动接入（主选仍 SeekDB，见文档第十一章）。
+    深度推理（2026-08-02 全网核验）：LanceDB 0.34.0+ 的 **table branches**
+    —— Git 式零拷贝分支（写分支不动 main，可 checkout/merge）、每次写自动版本化
+    （不可变 fragment + 时间旅行 + tag）。比 SeekDB 的 Fork/Diff&Merge **更原生地**
+    命中蓝图「数字家谱 / Git 式版本分支」需求，且与 DuckDB 直接集成（L1↔L4 血缘打通）。
+    Apache-2.0，~11k★，且本环境 Python 3.13 可装（实测 0.36.0）。
 
-    需 ``pip install lancedb``。缺失即 ImportError（诚实告知）。
+    路径可通过环境变量 ``AOS_LANCE_HERITAGE_PATH`` 覆盖（测试指向临时目录），
+    默认 ``./_ladder_heritage.lance``。
+
+    分支 API 在 **表对象** 上（``tbl.branches()`` / ``tbl.checkout()`` /
+    ``tbl.current_branch()`` / ``tbl.merge()`` / ``tbl.version``），非 DB 对象。
     """
-    import lancedb  # 缺失即 ImportError
+    import lancedb  # 缺失即 ImportError（诚实降级）
 
-    db = lancedb.connect("./_ladder_heritage.lance")
+    path = os.environ.get("AOS_LANCE_HERITAGE_PATH", "./_ladder_heritage.lance")
+    db = lancedb.connect(path)
+    TABLE = "heritage"
 
     class _Wrap(MemoryTier):
         name = "lancedb"
 
-        def __init__(self, db):
-            self._db = db
-            self._table_name = "heritage"
+        def _tbl(self):
+            res = db.list_tables() if hasattr(db, "list_tables") else db.table_names()
+            # lancedb 0.36: list_tables() 返回分页结果对象（含 .tables 列表），
+            # 旧 table_names() 直接返回 list；两者都兼容。
+            if not isinstance(res, (list, tuple, set)):
+                res = getattr(res, "tables", []) or []
+            if TABLE in res:
+                return db.open_table(TABLE)
+            return None
 
-        def store(self, key, value, **meta):
-            import pyarrow as pa
-
+        def store(self, key: str, value: Any, **meta: Any) -> None:
             data = [{"key": key, "value": json.dumps(value), "meta": json.dumps(meta)}]
-            tbl = self._db.open_table(self._table_name) if self._db.table_names() else None
+            tbl = self._tbl()
             if tbl is None:
-                self._db.create_table(self._table_name, data=pa.table(data))
+                db.create_table(TABLE, data=data)
             else:
-                tbl.add(pa.table(data))
+                tbl.add(data)
 
-        def recall(self, key):
-            if self._table_name not in self._db.table_names():
+        def recall(self, key: str) -> Optional[Any]:
+            tbl = self._tbl()
+            if tbl is None:
                 return None
-            tbl = self._db.open_table(self._table_name)
-            df = tbl.search().where(f"key = '{key}'").to_pandas()
-            if df.empty:
+            rows = tbl.search().where(f"key = '{key}'").to_list()
+            if not rows:
                 return None
-            return json.loads(df.iloc[-1]["value"])
+            return json.loads(rows[-1]["value"])
 
-        def stats(self):
-            if self._table_name not in self._db.table_names():
-                return {"name": self.name, "count": 0}
-            return {"name": self.name, "count": self._db.open_table(self._table_name).count_rows()}
+        def stats(self) -> Dict[str, Any]:
+            tbl = self._tbl()
+            if tbl is None:
+                return {"name": self.name, "count": 0, "branch": "main", "version": 0}
+            return {
+                "name": self.name,
+                "count": tbl.count_rows(),
+                "branch": tbl.current_branch(),
+                "version": tbl.version,
+            }
 
-    return _Wrap(db)
+        # ---- 数字家谱：Git 式表分支（更优技术落地，LanceDB 0.36 实测）----
+        # 分支 API 在 **表对象的 branches 管理器** 上：create/checkout/diff/list/version。
+        # 诚实边界：本地模式 **merge 仅支持 remote 表**（NotImplementedError），故本地
+        # 「数字家谱」= 分支隔离 + 不可变版本历史 + 时间旅行；跨分支合并需 LanceDB Cloud。
+        def branches(self) -> list:
+            tbl = self._tbl()
+            if tbl is None:
+                return ["main"]
+            try:
+                return list(tbl.branches.list().keys())
+            except Exception:
+                return ["main"]
+
+        def create_branch(self, name: str) -> None:
+            tbl = self._tbl()
+            if tbl:
+                tbl.branches.create(name)
+
+        def current_branch(self) -> str:
+            tbl = self._tbl()
+            return tbl.current_branch() if tbl else "main"
+
+        def checkout(self, branch: str) -> None:
+            tbl = self._tbl()
+            if tbl:
+                tbl.branches.checkout(branch)
+
+        def merge(self, branch: str) -> None:
+            # 仅 LanceDB Cloud remote 表支持；本地模式会抛 NotImplementedError。
+            tbl = self._tbl()
+            if tbl:
+                tbl.branches.merge(branch)
+
+    return _Wrap()
 
 
 class MemoryLadder:
@@ -340,12 +427,14 @@ class MemoryLadder:
 def build_default_ladder() -> MemoryLadder:
     """构造默认阶梯：L1 用 DuckDB（可用时），其余内存兜底；外部库经 opt-in 适配器接入。
 
-    L4 永久传承层接入 LanceDB 作为「更优技术」opt-in 备选（Git 式分支版本化，
-    Apache-2.0，与 DuckDB 直接集成）；SeekDB 仍为文档主选，二者可并存。
+    - L2 工作记忆：接 TriviumDB opt-in（未构建/Py3.13 则诚实降级 available:False，
+      绝不退回内存冒充）。
+    - L4 永久传承：接 **LanceDB opt-in（已装即真用，Git 式表分支可跑）**；SeekDB 为
+      服务端参考项，不强制接入。
     """
     ladder = MemoryLadder()
-    # L2 可选接 TriviumDB / Turso（未安装则 LazyExternalTier 在调用时诚实报错）
+    # L2 可选接 TriviumDB（Rust crate / Py<3.13；本环境诚实降级）
     ladder.tiers[TIER_WORKING] = LazyExternalTier("triviumdb", _trivium_connect)
-    # L4 可选接 LanceDB（更优技术 opt-in；未安装则诚实降级 available:False）
+    # L4 接 LanceDB（已装 0.36.0，store/recall/branch 实测通过）
     ladder.tiers[TIER_HERITAGE] = LazyExternalTier("lancedb", _lancedb_connect)
     return ladder

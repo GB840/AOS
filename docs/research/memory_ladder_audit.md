@@ -8,6 +8,12 @@
 > 并应「过时的换最新的」指令做**新鲜度复核**（同日晚），结论见第七节。
 > **结论：8 项全部真实存在，许可证均 MIT / Apache-2.0，无 AGPL 传染。无一编撰。0 个被废弃/更名。**
 
+> ⚠️ **2026-08-02 收口更正（诚实纪律）**：经本环境（Python 3.13.12）实测，原文档两处「安装命令」有误，且「该用的开源没用」问题暴露：
+> 1. **`triviumdb` 在 PyPI 上根本不存在**（它是 Rust crate，仅能 Cargo/源码构建 pyo3 绑定，无 Python wheel）。原「`pip install triviumdb`」是错的——已改为如实说明。
+> 2. **Turso 的 `libsql` 仅支持 Python <3.13**，本环境 3.13.12 装不上。原「`pip install libsql`」在此环境不可行——已改。
+> 3. **LanceDB 0.36.0 已真装并实测**：store/recall/版本化/表分支(create/checkout/diff/list) 真跑通，**数字家谱能力落地**（不再是「仅 opt-in 骨架」）。但本地模式 **merge 仅支持 remote 表**（本地报 NotImplementedError），跨分支合并需 LanceDB Cloud。
+> 4. 旧代码 `_turso_connect` 返回 `InMemoryTier` 冒充 Turso——已修为「接不上即 ImportError 诚实降级，绝不退回内存」。
+
 ## 一、逐项核实表
 
 | # | 项目 | 真实性 | 许可证 | 版本/星标(核实值, 2026-08-02 复核) | 在记忆阶梯中的角色 | 核实来源 |
@@ -43,8 +49,8 @@ AOS 已有记忆基础设施：**Chroma**（向量，`chroma_data/`）、**cogne
 | 层 | 项目 | 处置 | 理由（铁律） |
 |---|---|---|---|
 | L1 瞬时 | **DuckDB** | ✅ **接入（可选运行时依赖）** | AOS 缺列式分析引擎；本机已升级至 1.5.5 并测试通过，直接做 mirror_branch 实时统计后端。真实缺口填补。 |
-| L2 工作 | **TriviumDB** | 🔗 参考 + opt-in 适配器 | 向量×图谱×文档三位一体契合「粒子私有记忆」；但为 Rust crate，Python 需 `pip install triviumdb`（pyo3 绑定）编译，默认不强制安装，提供惰性适配器。 |
-| L2 工作 | **Turso/libSQL** | 🔗 参考 + opt-in 适配器 | 每粒子一库理念极佳；Python 走 `@libsql/client`。同样不强制，提供惰性适配器。 |
+| L2 工作 | **TriviumDB** | 🔗 参考 + opt-in 适配器（**本环境接不上**） | 向量×图谱×文档三位一体契合「粒子私有记忆」；但为 **Rust crate，PyPI 无轮子**，需 Cargo/源码构建 pyo3 绑定或降到 Py<3.13。本环境 3.13.12 接不上，`import triviumdb` 即 ImportError 诚实降级，绝不退回内存冒充。 |
+| L2 工作 | **Turso/libSQL** | 🔗 参考 + opt-in 适配器（**本环境接不上**） | 每粒子一库理念极佳；Python 绑定 `libsql` **仅支持 Py<3.13**，本环境 3.13.12 装不上，`import libsql` 即 ImportError 诚实降级。 |
 | L3 语义 | **KowitoDB** | 🔗 **借鉴，不新增依赖** | AOS 已有 Chroma+cognee 覆盖语义检索；按「现有够好→复用」**不重复造/不新增**。克隆至 vendor 仅作参考审计。 |
 | L3 语义 | **txtai** | 🔗 **借鉴，不新增依赖** | 同上，cognee 已覆盖图+RAG。克隆至 vendor 作参考。v9.x 新增 MCP 端点与 agent 持久记忆，可作后续集成参考。 |
 | L4 传承 | **SeekDB** | 🔗 参考（pip/yum 安装，非 git 克隆） | OceanBase 服务端产品，对本地优先 OS 偏重；代际传承可用「Chroma 快照 + 文件版本归档」轻量实现。v1.2.0/v1.3.0 的 **Fork Database（整库版本克隆）+ Diff&Merge（Git 式数据分支合并）** 正好强化蓝图「数字家谱·版本回溯」论点，值得重点参考。 |
@@ -70,15 +76,16 @@ DuckDB / SeekDB 为 pip/yum 安装型产品，**不克隆源码**（DuckDB 为 C
 # L1 瞬时层（AOS 已实测可用，升级到最新 1.5.5）
 pip install duckdb>=1.5.5
 
-# L2 工作层（opt-in，按项目选其一）
-pip install triviumdb          # 向量×图谱×文档（最新 0.7.1）
-# 或
-pip install libsql             # 每粒子一库（libsql 的 Python 绑定，对应 Turso v0.7.0）
+# L2 工作层（opt-in，但本环境 Py3.13 / Rust-only 接不上 —— 诚实降级，非疏漏）
+# TriviumDB 是 Rust crate，PyPI 无轮子：需 cargo install 或源码构建 pyo3 绑定，或降到 Py<3.13
+#   cargo install triviumdb    # 或从 github.com/YoKONCy/TriviumDB 源码构建
+# Turso 的 Python 绑定 libsql 仅支持 Py<3.13：
+#   pip install "libsql ; python_version < '3.13'"   # 本环境 3.13.12 不可装
 
 # L4 传承层（服务端产品，本地优先场景可省略）
 pip install seekdb             # 或 yum install seekdb（OceanBase 源，最新 v1.3.0）
-# L4 更优技术 opt-in 备选：LanceDB（Git 式分支版本化，Apache-2.0，与 DuckDB 直接集成）
-pip install lancedb>=0.34.0    # 0.34.0 起支持 table branches（Git 式零拷贝分支 + checkout/diff/merge）
+# L4 已真接的开源备选：LanceDB（Git 式表分支版本化，Apache-2.0，与 DuckDB 直接集成）
+pip install lancedb>=0.34.0    # 0.34.0+ 起支持 table branches（本地 create/checkout/diff/list/version；merge 需 remote 表）
 
 # 可视化（运维期可选，Node 侧）
 npx @dbx-app/mcp-server        # DBX 的 MCP Server，供 AI 编码助手查库

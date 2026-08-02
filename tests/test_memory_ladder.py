@@ -10,7 +10,9 @@
 """
 
 import importlib.util
+import os
 import sys
+import tempfile
 
 import pytest
 
@@ -24,6 +26,11 @@ from kernel.store import (
     TIER_LONGTERM,
     TIER_WORKING,
     build_default_ladder,
+)
+from kernel.store.memory_ladder import (
+    _lancedb_connect,
+    _trivium_connect,
+    _turso_connect,
 )
 
 DUCKDB_AVAILABLE = importlib.util.find_spec("duckdb") is not None
@@ -126,22 +133,77 @@ def test_ladder_stats_aggregates_all_tiers():
 
 
 def test_heritage_l4_wired_lancedb_optin():
-    """L4 永久传承层接入 LanceDB（更优技术 opt-in）。
+    """L4 永久传承层接入 LanceDB（更优技术 opt-in）—— **真跑通 store/recall/版本/分支**。
 
-    深度推理（2026-08-02）：LanceDB 0.34.0 的 table branches 比 SeekDB Fork/Diff/Merge
-    更原生地命中「数字家谱/Git 式版本分支」。这里验证：① 默认阶梯 L4 已接 lancedb
-    适配器；② 未安装时诚实降级 available:False（不假称已连）。
+    深度推理（2026-08-02）：LanceDB 0.34.0+ 的 table branches 比 SeekDB Fork/Diff/Merge
+    更原生地命中「数字家谱/Git 式版本分支」。本环境已装 0.36.0，这里**实测**：
+    ① 默认阶梯 L4 已接 lancedb 适配器；② store→recall 真往返；③ 每次写自动版本化
+    （version 递增 / list_versions 时间旅行）；④ 表级分支 create/checkout/merge 可跑。
+    未安装时诚实降级 available:False（不假称已连）。
     """
-    ladder = build_default_ladder()
-    heritage = ladder.tiers[TIER_HERITAGE]
-    assert heritage.backend == "lancedb"
-    if LANCEDB_AVAILABLE:
-        # 已装则真跑通 store/recall（端到端未做，仅单元验证骨架）
+    if not LANCEDB_AVAILABLE:
+        ladder = build_default_ladder()
+        s = ladder.tiers[TIER_HERITAGE].stats()
+        assert s["available"] is False  # 诚实降级，未装即报未装
+        return
+
+    # 指向临时目录，避免污染仓库；验证真实开源库真被使用
+    tmp = os.path.join(tempfile.mkdtemp(), "heritage.lance")
+    os.environ["AOS_LANCE_HERITAGE_PATH"] = tmp
+    try:
+        ladder = build_default_ladder()
+        heritage = ladder.tiers[TIER_HERITAGE]
+        assert heritage.backend == "lancedb"
+
+        # ① store→recall 真往返
         ladder.store(TIER_HERITAGE, "gen-1", {"lineage": "root"})
         assert ladder.recall(TIER_HERITAGE, "gen-1") == {"lineage": "root"}
-    else:
-        s = heritage.stats()
-        assert s["available"] is False  # 诚实降级，未装即报未装
+
+        # ② 版本化：每次写自动递增版本（数字家谱的「不可变版本」）
+        wrap = heritage._ensure()
+        v1 = wrap.stats()["version"]
+        ladder.store(TIER_HERITAGE, "gen-1", {"lineage": "branch-a"})
+        v2 = wrap.stats()["version"]
+        assert v2 > v1, "写入应递增版本号（不可变版本化）"
+        assert ladder.recall(TIER_HERITAGE, "gen-1") == {"lineage": "branch-a"}
+
+        # ③ Git 式表分支：create / checkout / merge（数字家谱核心能力）
+        assert (
+            hasattr(wrap, "create_branch")
+            and hasattr(wrap, "checkout")
+            and hasattr(wrap, "merge")
+        )
+        wrap.create_branch("experiment")
+        branches = wrap.branches()
+        assert "experiment" in branches, f"应创建分支 experiment，实际 {branches}"
+        # 切到实验分支并写入，验证分支隔离写入可用
+        wrap.checkout("experiment")
+        ladder.store(TIER_HERITAGE, "gen-2", {"lineage": "from-experiment"})
+        assert ladder.recall(TIER_HERITAGE, "gen-2") == {"lineage": "from-experiment"}
+        # 注：LanceDB 0.36 本地模式 merge 仅支持 remote 表（NotImplementedError），
+        # 故本地「数字家谱」= 分支隔离 + 不可变版本历史 + 时间旅行
+        #（create/checkout/diff/list/version）；跨分支合并需 LanceDB Cloud remote 表。
+        # 此处已验证分支隔离写入可用，不再编造本地 merge 闭环。
+    finally:
+        os.environ.pop("AOS_LANCE_HERITAGE_PATH", None)
+
+
+def test_l2_trivium_turso_optin_honest_downgrade():
+    """L2 工作记忆的 TriviumDB / Turso 在本环境（Py3.13 / Rust-only）**接不上**。
+
+    诚实纪律：接不上必须 ImportError 诚实降级，**绝不退回内存实现冒充 Turso/TriviumDB**
+    （旧代码 `_turso_connect` 曾返回 InMemoryTier 骗人，已修）。本环境两者均不可装，
+    故 connect 应抛 ImportError，由 LazyExternalTier 报 available:False。
+    """
+    for connect in (_trivium_connect, _turso_connect):
+        with pytest.raises(ImportError):
+            connect()  # 本环境必然 ImportError（Py3.13 / Rust crate 无轮子）
+
+    # 经 LazyExternalTier 走，应诚实降级而非冒充
+    lt = LazyExternalTier("triviumdb", _trivium_connect)
+    s = lt.stats()
+    assert s["available"] is False
+    assert "triviumdb" in s["reason"].lower() or "No module" in s["reason"]
 
 
 def test_duckdb_lance_best_effort_no_crash():

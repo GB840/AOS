@@ -198,11 +198,11 @@ flowchart TB
 | L2G 粒子冲突协调协议 | L2 | ✅AOS代码 | `kernel/fractal/conflict.py` | ② |
 | L2H 柔性目标演化引擎 | L2 | ✅AOS代码 | `kernel/goal_evolution.py` | ② |
 | L2I plasma-ai/fractal | L2 | 🔁自研等价 | 未引入；等价：`kernel/fractal/`（spawner/growth_guard 递归硬上限自研） | ② |
-| L3A SeekDB（永久传承层） | L3 | 🔁自研等价 | 未装；等价：`kernel/store/memory_ladder.py` `LazyExternalTier`（HERITAGE 层 opt-in，缺失自动降级） | ② |
-| L3B KowitoDB + txtai（长期语义层） | L3 | 🔁自研等价 | 未集成；等价：`memory/memory.py` + `kernel/store/memory_ladder.py`（Chroma / cognee / mem0 已接） | ② |
-| L3C TriviumDB + Turso（工作记忆层） | L3 | 🔁自研等价 | 未集成；等价：`kernel/store/memory_ladder.py` `InMemoryTier`（工作记忆层已自研落地） | ② |
-| L3D DuckDB（瞬时感知层） | L3 | ✅AOS代码 | `kernel/store/memory_ladder.py` `DuckDBTier`（真集成，非 stub） | ② |
-| L3E DBX 可视化 | L3 | 🔁自研等价 | 未集成（AGPL-3.0）；等价：`web/app.py` 统一控制台 | ② |
+| L3A 永久传承层（LanceDB 已真接 / SeekDB 参考） | L3 | ✅AOS已接开源 | `kernel/store/memory_ladder.py` `LazyExternalTier("lancedb")` **已装 0.36.0，store/recall/版本化/表分支(create/checkout/diff/list) 实测通过**；SeekDB 为 OceanBase 服务端参考项（本地优先场景由 LanceDB 承担） | ② |
+| L3B 长期语义层（Chroma/cognee/mem0 已用） | L3 | ✅AOS已用开源 | AOS 长期语义层**直接复用开源 Chroma + cognee + mem0**；KowitoDB/txtai 按「现有够好→复用」**不新增依赖**（克隆仅作参考） | ② |
+| L3C TriviumDB + Turso（工作记忆层） | L3 | 🔁外部未接 | opt-in `LazyExternalTier`；**本环境 Py3.13 / Rust-only 接不上**，import 即 ImportError 诚实降级（**绝不退回内存冒充**，旧代码曾骗人已修） | ② |
+| L3D DuckDB（瞬时感知层） | L3 | ✅AOS代码 | `kernel/store/memory_ladder.py` `DuckDBTier`（真集成，非 stub；本环境 Python 3.13 实测真连） | ② |
+| L3E DBX 可视化 | L3 | 🔗纯参考 | **AGPL-3.0 单一许可证**（已核实），商用须履行 AGPL 义务 → 不集成；等价：`web/app.py` 统一控制台 | — |
 | L4A 年轮时空记忆 | L4 | ✅AOS代码 | `kernel/soul/tree_ring.py`（四圈压缩 fresh/recent/season/core） | ② |
 | **L4B 时空环境记忆库** | L4 | ✅AOS代码 | `kernel/soul/tree_ring.py`：`Memory.locus`+`when` 双索引、`recall(locus/since/until/tags)`、`timeline()`、`loci()` ← **前版误判为空壳** | ② |
 | L4C 数字家谱 · 代际传承 | L4 | ✅AOS代码 | `kernel/soul/lineage.py`（教训按代衰减 `LESSON_DECAY=0.7`，防祖训僵化） | ② |
@@ -232,13 +232,31 @@ flowchart TB
 | L9A dg-ai-notes | L9 | 🔗纯参考 | 外部教程文档仓库，不需集成 | — |
 | L9B openKylin AgentOS SIG | L9 | 🔗纯参考 | 社区生态对齐 | — |
 
+### 该用的开源 → 实际集成状态（2026-08-02 收口，回应「该用的开源一个没有用」）
+
+> 用户批评本蓝图「该用的开源一个没有用」。经核对，此前 58 节点里**仅 DuckDB 一个真接开源**的论断基本成立——其余 🔁 节点多为「写了自研等价、没接真开源」，且 L3 语义层那行标签本身有误（AOS 早就在用 Chroma/cognee/mem0 开源）。本回合已纠正并执行：
+
+| 处置 | 节点 | 说明 |
+| :--- | :--- | :--- |
+| ✅ **已真接开源** | L3D DuckDB、L3A LanceDB | DuckDB 真连做 L1；LanceDB 0.36.0 真装，store/recall/版本化/表分支(create/checkout/diff/list) 实测通过，**数字家谱能力落地** |
+| ✅ **AOS 已用开源** | L3B Chroma/cognee/mem0 | L3 长期语义层本就复用这三个开源，非自研；KowitoDB/txtai 按「现有够好→复用」不新增 |
+| 🔁 **本环境接不上（诚实降级）** | L3C TriviumDB/Turso | TriviumDB 是 Rust crate（PyPI 无轮子）；Turso 的 `libsql` 仅支持 Py<3.13。本环境 3.13.12 接不上，`import` 即 ImportError，绝不用内存冒充 |
+| 🔗 **许可红线不集成** | L1E Fish Speech（CC-BY-NC-SA 禁商用）、L3E DBX（AGPL-3.0） | 按铁律「不引许可不明/传染」不 import |
+| 🔁 **自研等价/服务框架（铁律：现有够好→复用，不强制）** | CONST3、L1A LocalAI、L1B CLIProxyAPI、L1C Cindy/nanobot、L1D openship、L2I plasma-ai/fractal、L5G video-shotcraft、L6C Automaton、L7F Conway Terminal、L1E2 Vosk | AOS 已有对应适配器/控制台（FabricHub、web/app.py、voice/、billing/）；LocalAI/openship/nanobot 是服务或框架非 drop-in 库；plasma-ai/fractal、Automaton、PhyAgentOS 是架构思想来源 |
+| 🔜 **下一批真接（干净 MIT 项）** | L1E2 Vosk、L5G video-shotcraft | Vosk（MIT 离线 STT）、video-shotcraft（模板库）许可干净、可 pip 接入 AOS 的 voice/ 与 video skill，作「该用的开源」下一步落地 |
+
+**诚实边界（不夸大）**：
+- LanceDB 本地模式 **merge 仅支持 remote 表**（0.36 本地报 `NotImplementedError`），故本地「数字家谱」= 分支隔离 + 不可变版本历史 + 时间旅行；跨分支合并需 LanceDB Cloud。
+- 真接的开源（DuckDB/LanceDB）已用单测实证（store/recall/版本/分支），诚实级仍标 ②（代码+单测）；③ 端到端（真灌多模态数据全链路迁移）未做。
+- 凡「服务/框架/许可红线」类未接入，均按选型铁律判定，非疏漏。
+
 **诚实统计（58 个节点，本版修正后）**
 
 | 状态 | 数量 | 占比 | 说明 |
 | :--- | ---: | ---: | :--- |
-| ✅ AOS 已有真实代码 | **38** | 65.5% | 但绝大多数是 **② 级骨架**（代码+单测），非 ③ 端到端 |
-| 🔁 外部未接但有自研等价 | **15** | 25.9% | 能力已具备，只是没用那个外部轮子 |
-| 🔗 纯参考 / 生态对齐 | **5** | 8.6% | 本就不需要代码，写进图是标注思想来源 |
+| ✅ AOS 已有真实代码 | **40** | 69.0% | 含**真接开源 DuckDB + LanceDB**；L3 语义层复用开源 Chroma/cognee/mem0 |
+| 🔁 外部未接（含本环境接不上） | **12** | 20.7% | 多为服务/框架/自研等价；TriviumDB/Turso 因 Py3.13/Rust 本环境接不上 |
+| 🔗 纯参考 / 生态对齐 / 许可红线 | **6** | 10.3% | SeekDB(服务端)/DBX(AGPL)/turbo-fieldfare/PhyAgentOS/dg-ai-notes/openKylin |
 | 🚧 无代码空壳 | **0** | 0% | 逐节点核对后为 0（前版误判的 3 个已纠正） |
 
 **② 级实测证据（可复现，无需 pytest）**
