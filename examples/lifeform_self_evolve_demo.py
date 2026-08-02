@@ -12,12 +12,18 @@
 - 反思文本由真智谱 LLM 生成（③）
 - 引擎切换由真实蒸馏器证据驱动（②→③）
 - round1/round2 搜索为真实网络调用，成败由环境决定，如实记录，绝不虚构
+
+运行模式（三种，按环境变量切换，无需改代码）：
+- 默认（真实联网）：需外网可达，round1 失败 + 真智谱 LLM 反思 + round2 真实命中 → ③
+- AOS_REFLECT_OFF=1：仍联网，但反思走蒸馏器降级（②），用于 LLM 不可达 / 离线演示
+- AOS_SELF_EVOLVE_LOCAL=1：完全离线，stub 模拟失败→成功，证明闭环逻辑本身，任何环境稳定可复现
 """
 import os
 import sys
 import json
 import datetime
 import traceback
+import types
 
 sys.excepthook = lambda et, ev, tb: traceback.print_exception(et, ev, tb)
 
@@ -78,6 +84,38 @@ ap._DISTILLER_INITED = True
 
 search = SearchAdapter()
 
+# 本地机制验证模式（AOS_SELF_EVOLVE_LOCAL=1）：用离线 stub 替代真实联网搜索，
+# bing 必失败、反思建议引擎必成功，证明「失败→反思→换引擎→成功」闭环逻辑本身，
+# 不依赖外网，任何环境稳定可复现。诚实标注：非真实网络，属机制验证。
+LOCAL = os.environ.get("AOS_SELF_EVOLVE_LOCAL")
+
+
+class LocalStubSearch:
+    """离线 stub：bing 模拟失败，其他引擎（蒸馏器选的最佳）模拟成功返回真实格式。"""
+
+    def invoke(self, req):
+        engine = (req.payload or {}).get("engine")
+        if engine == "bing":
+            return types.SimpleNamespace(
+                ok=False, data=None, error="[LOCAL] bing 模拟不可用（机制验证）"
+            )
+        return types.SimpleNamespace(
+            ok=True,
+            data={
+                "engine": engine,
+                "count": 3,
+                "results": [
+                    {"title": f"开源语音识别模型 #{i + 1}", "url": f"https://example.com/m{i + 1}"}
+                    for i in range(3)
+                ],
+            },
+            error=None,
+        )
+
+
+if LOCAL:
+    search = LocalStubSearch()
+
 
 def real_trace_from(result, engine, cap="web.search"):
     ok = bool(result.ok)
@@ -112,27 +150,27 @@ def _best_engine(distill, cap):
 records = []
 print(f"[任务] {TASK}\n")
 
-# 2) Round 1：真实搜索，但临时停用所有可用源（anysearch/baidu/ddg），
-#    模拟「本轮可用搜索源全不可用」这一真实失败场景 → 逼出真失败供反思。
-import types  # noqa: E402
+# 2) Round 1：构造失败场景
+#    - 真实模式：临时停用所有可用源（anysearch/baidu/ddg），模拟「本轮源全不可用」
+#    - 本地模式(AOS_SELF_EVOLVE_LOCAL=1)：stub 直接让 bing 失败，不联网
+#    两种模式都逼出真失败供反思，验证「失败即训练」
+if not LOCAL:
+    _anysearch_ep = os.environ.get("ANYSEARCH_ENDPOINT")
+    _anysearch_key = os.environ.get("ANYSEARCH_API_KEY")
+    os.environ["ANYSEARCH_ENDPOINT"] = "http://127.0.0.1:9/nope"  # 必然连接失败
+    if "ANYSEARCH_API_KEY" in os.environ:
+        del os.environ["ANYSEARCH_API_KEY"]
 
-_anysearch_ep = os.environ.get("ANYSEARCH_ENDPOINT")
-_anysearch_key = os.environ.get("ANYSEARCH_API_KEY")
-os.environ["ANYSEARCH_ENDPOINT"] = "http://127.0.0.1:9/nope"  # 必然连接失败
-if "ANYSEARCH_API_KEY" in os.environ:
-    del os.environ["ANYSEARCH_API_KEY"]
+    def _blocked_source(self, query, max_results):
+        raise RuntimeError("本轮该搜索源不可用（演示失败场景）")
 
+    _orig_baidu = search._search_baidu
+    _orig_ddg = search._search_ddg
+    search._search_baidu = types.MethodType(_blocked_source, search)
+    search._search_ddg = types.MethodType(_blocked_source, search)
 
-def _blocked_source(self, query, max_results):
-    raise RuntimeError("本轮该搜索源不可用（演示失败场景）")
-
-
-_orig_baidu = search._search_baidu
-_orig_ddg = search._search_ddg
-search._search_baidu = types.MethodType(_blocked_source, search)
-search._search_ddg = types.MethodType(_blocked_source, search)
-
-print(f"[Round1] 真实搜索 engine=bing（anysearch/baidu/ddg 均已停用，模拟源不可用）  query={QUERY!r}")
+_mode_tag = "本地机制验证(离线stub)" if LOCAL else "真实联网"
+print(f"[Round1] 搜索 engine=bing（{_mode_tag}）  query={QUERY!r}")
 r1 = search.invoke(
     InvokeRequest(
         capability=Capability.WEB_SEARCH,
@@ -143,19 +181,21 @@ t1 = real_trace_from(r1, "bing")
 distill.record_outcome("web.search", "bing", bool(t1["real_metrics"]["is_real"]))
 print(f"[Round1] ok={t1['ok']} is_real={t1['real_metrics']['is_real']} :: {t1['summary'][:90]}")
 
-# 恢复所有源，供 round2 使用
-search._search_baidu = _orig_baidu
-search._search_ddg = _orig_ddg
-if _anysearch_ep is not None:
-    os.environ["ANYSEARCH_ENDPOINT"] = _anysearch_ep
-if _anysearch_key is not None:
-    os.environ["ANYSEARCH_API_KEY"] = _anysearch_key
+# 恢复所有源（真实模式），供 round2 使用
+if not LOCAL:
+    search._search_baidu = _orig_baidu
+    search._search_ddg = _orig_ddg
+    if _anysearch_ep is not None:
+        os.environ["ANYSEARCH_ENDPOINT"] = _anysearch_ep
+    if _anysearch_key is not None:
+        os.environ["ANYSEARCH_API_KEY"] = _anysearch_key
 print()
 
 # 3) 反思（真智谱 LLM）：诊断 round1 失败 → 产出换引擎建议
 #    AOS_REFLECT_OFF=1 时跳过 LLM，直接走蒸馏器降级（②），用于离线/CI/LLM 不可达演示
-if os.environ.get("AOS_REFLECT_OFF"):
-    print("[Reflect] AOS_REFLECT_OFF=1，跳过 LLM 反思，改用蒸馏器证据降级（②）")
+if os.environ.get("AOS_REFLECT_OFF") or LOCAL:
+    _why = "本地机制验证模式(离线)" if LOCAL else "AOS_REFLECT_OFF=1"
+    print(f"[Reflect] {_why}，跳过 LLM 反思，改用蒸馏器证据降级（②）")
     reflect = None
 else:
     print("[Reflect] 调用 autopilot._reflect_and_redesign（真智谱 LLM）...")
@@ -224,10 +264,15 @@ verdict = {
     "round2_ok": t2["ok"],
     "round2_real": t2["real_metrics"]["is_real"],
     "end_to_end_passed": improved,
+    "mode": "local-mechanism" if LOCAL else ("live-llm" if reflect else "live-distiller"),
     "honesty_level": (
-        "③ 真LLM反思 + 真搜索调用 + 蒸馏器证据（蒸馏器含代表性种子数据，round1/round2真实结果已追加）"
-        if (reflect and switched)
-        else "② 蒸馏器证据驱动引擎切换（LLM反思不可用，闭环仍真实有效）"
+        "LOCAL 机制验证：离线 stub 证明「失败→反思→换引擎→成功」闭环逻辑本身（非真实网络，属机制验证）"
+        if LOCAL
+        else (
+            "③ 真LLM反思 + 真搜索调用 + 蒸馏器证据（蒸馏器含代表性种子数据，round1/round2真实结果已追加）"
+            if (reflect and switched)
+            else "② 蒸馏器证据驱动引擎切换（LLM反思不可用，闭环仍真实有效）"
+        )
     ),
     "reflect_mode": reflect_mode,
 }

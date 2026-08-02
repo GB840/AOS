@@ -1,0 +1,3 @@
+{"phase": "round1", "capability": "web.search", "engine": "bing", "resolved_engine": "bing", "ok": false, "real_metrics": {"is_real": false}, "summary": "[LOCAL] bing 模拟不可用（机制验证）"}
+{"phase": "round2", "capability": "web.search", "engine": "anysearch", "resolved_engine": "anysearch", "ok": true, "real_metrics": {"is_real": true}, "summary": "经 anysearch 检索到 3 条"}
+{"phase": "verdict", "engine_switched": true, "round1_engine": "bing", "round1_ok": false, "round1_real": false, "round2_engine": "anysearch", "round2_resolved_engine": "anysearch", "round2_ok": true, "round2_real": true, "end_to_end_passed": true, "mode": "local-mechanism", "honesty_level": "LOCAL 机制验证：离线 stub 证明「失败→反思→换引擎→成功」闭环逻辑本身（非真实网络，属机制验证）", "reflect_mode": "distiller"}

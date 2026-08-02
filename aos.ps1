@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("setup", "api", "web", "test", "shell", "crewai", "status", "help")]
+    [ValidateSet("setup", "api", "web", "test", "shell", "crewai", "demo", "status", "help")]
     [string]$Action = "help"
 )
 
@@ -126,6 +126,13 @@ print('=== CrewAI + Adapter 验证通过 ===')
 "@
     }
 
+    "demo" {
+        Ensure-Venv
+        Write-Host "[aos] 运行 P0 自进化闭环演示..." -ForegroundColor Cyan
+        Write-Host "  默认: 真实联网(③) | AOS_REFLECT_OFF=1: 蒸馏器降级(②) | AOS_SELF_EVOLVE_LOCAL=1: 离线机制验证" -ForegroundColor Gray
+        & $VenvPython examples\lifeform_self_evolve_demo.py
+    }
+
     "status" { Show-Status }
 
     "help" {
@@ -139,6 +146,7 @@ AOS 统一入口 (2026 uv 标准环境)
   test     运行测试
   shell    进入 Python REPL
   crewai   验证 CrewAI + LLM 适配器
+  demo     运行 P0 自进化闭环演示（联网③/离线机制验证）
   status   查看环境状态
   help     显示此帮助
 "@
