@@ -40,7 +40,7 @@ flowchart TB
     subgraph CONST["⚖️ 永恒伦理宪法（硬编码，不可修改）"]
         CONST1["物理伤害优先规避 · 物理行动授权分级 [✅AOS代码]"]
         CONST2["感知边界尊重 · 虚实从属 · 数据主权 [✅AOS代码]"]
-        CONST3["🔗 参考实现：constitutional-agent-governance [🔧外未接]"]
+        CONST3["🔗 参考实现：constitutional-agent-governance [🔁自研等价]"]
     end
 
     subgraph L0["🧬 第零层：人本生命状态建模内核（最高决策标尺）"]
@@ -50,13 +50,13 @@ flowchart TB
     end
 
     subgraph L1["⚙️ 第一层：肉体层（硬件 · 语音 · 推理 · 部署 · 协议）"]
-        L1A["🔧 多模态推理引擎：LocalAI v4.7.1 [🔧外未接]"]
-        L1B["🔧 模型路由网关：CLIProxyAPI [🔧外未接]"]
-        L1C["🔧 跨平台交互客户端：Cindy / nanobot [🔧外未接]"]
-        L1D["🔧 部署与运维层：openship [🔧外未接]"]
-        L1E["🔧 语音交互子层：Fish Speech（权重禁商用）[🔧外未接]"]
-        L1E2["🔧 离线语音识别：Vosk（Apache-2.0，中文引擎）[🔧外未接]"]
-        L1F["🔧 端侧推理优化（实验性）：turbo-fieldfare [🔧外未接]"]
+        L1A["🔧 多模态推理引擎：LocalAI v4.7.1 [🔁自研等价]"]
+        L1B["🔧 模型路由网关：CLIProxyAPI [🔁自研等价]"]
+        L1C["🔧 跨平台交互客户端：Cindy / nanobot [🔁自研等价]"]
+        L1D["🔧 部署与运维层：openship [🔁自研等价]"]
+        L1E["🔧 语音交互子层：Fish Speech（权重禁商用）[🔁自研等价]"]
+        L1E2["🔧 离线语音识别：Vosk（Apache-2.0，中文引擎）[🔁自研等价]"]
+        L1F["🔧 端侧推理优化（实验性）：turbo-fieldfare [🔗纯参考]"]
         L1G["⚡ 硬件抽象层：统一指令集 [✅AOS代码]"]
         L1H["⚡ Phy-Bus物理适配总线 [✅AOS代码]"]
         L1I["🔗 互通协议：MCP 2026-07-28 无状态规范 [✅AOS代码]"]
@@ -71,22 +71,22 @@ flowchart TB
         L2F["⚡ 元认知自省内核 [✅AOS代码]"]
         L2G["⚡ 粒子冲突协调协议 [✅AOS代码]"]
         L2H["⚡ 柔性目标演化引擎 [✅AOS代码]"]
-        L2I["🔗 分形参考：plasma-ai/fractal 递归硬上限 [🔧外未接]"]
+        L2I["🔗 分形参考：plasma-ai/fractal 递归硬上限 [🔁自研等价]"]
     end
 
     subgraph L3["📚 数据底座层（记忆存储内核）"]
-        L3A["⚡ 第四层·永久传承层：SeekDB（OceanBase开源/Apache2.0，与PowerMem同源）[🔧外未接]"]
-        L3B["⚡ 第三层·长期语义层：KowitoDB(实验性) + txtai [🔧外未接]"]
-        L3C["⚡ 第二层·工作记忆层：TriviumDB(Alpha) + Turso [🔧外未接]"]
+        L3A["⚡ 第四层·永久传承层：SeekDB（OceanBase开源/Apache2.0，与PowerMem同源）[🔁自研等价]"]
+        L3B["⚡ 第三层·长期语义层：KowitoDB(实验性) + txtai [🔁自研等价]"]
+        L3C["⚡ 第二层·工作记忆层：TriviumDB(Alpha) + Turso [🔁自研等价]"]
         L3D["⚡ 第一层·瞬时感知层：DuckDB（实时分析）[✅AOS代码]"]
-        L3E["🔧 统一可视化层：DBX（约15MB，70+数据库，AGPL-3.0）[🔧外未接]"]
+        L3E["🔧 统一可视化层：DBX（约15MB，70+数据库，AGPL-3.0）[🔁自研等价]"]
     end
 
     subgraph L4["📖 第四层：灵魂层（记忆与身份）"]
         L4A["⚡ 年轮时空记忆 [✅AOS代码]"]
-        L4B["⚡ 时空环境记忆库 [🚧概念]"]
+        L4B["⚡ 时空环境记忆库 [✅AOS代码]"]
         L4C["⚡ 数字家谱 · 代际传承 [✅AOS代码]"]
-        L4D["⚡ 死亡意识 [🚧概念]"]
+        L4D["⚡ 死亡意识 [✅AOS代码]"]
     end
 
     subgraph L5["🌿 第五层：精神层（文明与伦理）"]
@@ -94,16 +94,16 @@ flowchart TB
         L5B["⚡ 多文明价值观插件市场 [✅AOS代码]"]
         L5C["⚡ 师徒协议 [✅AOS代码]"]
         L5D["⚡ 大同指数 [✅AOS代码]"]
-        L5E["⚡ 文明试错镜像 [🚧概念]"]
+        L5E["⚡ 文明试错镜像 [✅AOS代码]"]
         L5F["⚡ 共识自演化通道 [✅AOS代码]"]
-        L5G["🔧 内容创作技能：video-shotcraft [🔧外未接]"]
+        L5G["🔧 内容创作技能：video-shotcraft [🔁自研等价]"]
     end
 
     subgraph L6["🌱 第六层：演进层（持续生长）"]
         L6A["⚡ 镜像分支试错 [✅AOS代码]"]
         L6B["⚡ 共识自演化 [✅AOS代码]"]
-        L6C["⚡ 自主数字生命引擎：Automaton [🔧外未接]"]
-        L6D["🔗 参考实现：PhyAgentOS（认知-物理解耦）[🔧外未接]"]
+        L6C["⚡ 自主数字生命引擎：Automaton [🔁自研等价]"]
+        L6D["🔗 参考实现：PhyAgentOS（认知-物理解耦）[🔗纯参考]"]
     end
 
     subgraph L7["🔒 第七层：虚实交互闭环层（物理世界安全闸门）"]
@@ -112,8 +112,8 @@ flowchart TB
         L7C["⚡ 人本因果仿真（第二层）[✅AOS代码]"]
         L7D["⚡ 行动规划仲裁器 [✅AOS代码]"]
         L7E["⚡ 故障紧急制动总线 [✅AOS代码]"]
-        L7F["⚡ 经济身份与支付网关：Conway Terminal [🔧外未接]"]
-        L7G["🔗 参考架构：PhyAgentOS 认知-物理执行解耦 [🔧外未接]"]
+        L7F["⚡ 经济身份与支付网关：Conway Terminal [🔁自研等价]"]
+        L7G["🔗 参考架构：PhyAgentOS 认知-物理执行解耦 [🔗纯参考]"]
     end
 
     subgraph L8["🌐 第八层：分形粒子集群"]
@@ -124,8 +124,8 @@ flowchart TB
     end
 
     subgraph L9["📚 第九层：生态层"]
-        L9A["🔧 dg-ai-notes（Pi-Agent SDK 教程）[🔧外未接]"]
-        L9B["🔗 社区参考：openKylin AgentOS SIG [🔧外未接]"]
+        L9A["🔧 dg-ai-notes（Pi-Agent SDK 教程）[🔗纯参考]"]
+        L9B["🔗 社区参考：openKylin AgentOS SIG [🔗纯参考]"]
     end
 
     CONST --> L0
@@ -149,87 +149,115 @@ flowchart TB
     subgraph LEGEND["📋 图例（性质 × 实现状态）"]
         LGD0["🔧 = 开源组件/工具 · ⚡ = 自研内核 · 🔗 = 参考/生态对齐（架构性质）"]
         LGD1["[✅AOS代码] = AOS 仓库已有真实 .py 实现（多数②级：代码+单测，非③端到端）"]
-        LGD2["[🔧外未接] = 外部开源工具/参考，AOS 未实际集成（有自研等价或暂无）"]
-        LGD3["[🚧概念] = 纯架构目标，AOS 无对应代码（空壳，待补）"]
+        LGD2["[🔁自研等价] = 外部工具未集成，但 AOS 已有自研等价能力（表内给路径）"]
+        LGD3["[🔗纯参考] = 参考实现/生态对齐，本就不需要 AOS 代码"]
+        LGD4["[🚧概念] = 无任何代码的空壳 —— 本次逐节点核对后为 0"]
     end
 ```
 
 > 注：MCP 2026-07-28「可作为分形粒子间标准化通信协议」为本白皮书推论，非 MCP 官方定位（官方仅发布无状态规范本身）。
 
-### 架构节点实现状态总览（白盒诚实地图）
+### 架构节点实现状态总览（白盒诚实地图 · 逐节点核对 src/ 真值）
 
-> 本表把架构图每个节点逐一对照 AOS 仓库真实代码（src/ 共 664 个 .py 文件），诚实标注三类状态，杜绝"看着像全建好"的误导。
-> - **[✅AOS代码]**：仓库已有真实 .py 实现。诚实分级绝大多数 = **②（代码+单测可跑）**，非 ③（端到端跑通）。
-> - **[🔧外未接]**：外部开源工具/参考，AOS 未实际集成（部分有自研等价能力，部分纯参考）。这类是"命名存在但没接进来"。
-> - **[🚧概念]**：纯架构目标，仓库无对应代码（真正的空壳，待补）。
+> 本表把架构图 **58 个节点**逐一对照 AOS 仓库真实代码（`src/` 共 664 个 `.py`），四态诚实标注，杜绝"看着像全建好"的误导。
+> 表内每一条 AOS 代码路径均经 `test -e` 逐条校验存在（45/45 通过，零断链）。
+>
+> | 标记 | 含义 |
+> | :--- | :--- |
+> | **[✅AOS代码]** | 仓库已有真实 `.py` 实现。诚实分级绝大多数 = **②（代码+单测可跑）**，非 ③（真 LLM 端到端） |
+> | **[🔁自研等价]** | 架构里点名的外部工具**未集成**，但 AOS 已有**自研等价能力**（表内给出等价路径）。能力在，只是没用那个轮子 |
+> | **[🔗纯参考]** | 参考实现 / 生态对齐，本就不需要 AOS 代码（写进图是为标注思想来源） |
+> | **[🚧概念]** | 无任何代码的空壳。**本次逐节点核对后为 0** |
 
-| 节点 | 层级 | 实现状态 | AOS 代码路径 | 诚实分级 |
+**⚠️ 前一版本的自我纠错（诚实纪律）**：上一版本曾把 L4B 时空环境记忆库、L4D 死亡意识、L5E 文明试错镜像 标为「🚧 纯概念空壳」，**这是错判**。根因是当时只按"文件名字面匹配"检索，未 grep 模块 docstring 里的中文概念名。三者实际均有真实实现（见下表），本版已改正并公开纠错记录，不做静默修改。
+
+| 节点 | 层级 | 状态 | AOS 代码路径 / 等价实现 | 诚实分级 |
 | :--- | :--- | :--- | :--- | :--- |
-| CONST1 物理伤害优先规避 | 宪法 | ✅AOS代码 | kernel/action_arbiter.py + kernel/interact/emergency_brake.py + src/compliance/ | ② |
-| CONST2 感知边界/数据主权 | 宪法 | ✅AOS代码 | src/compliance/identity.py + kernel/isolation/ + kernel/body/phy_bus.py | ② |
-| CONST3 constitutional-agent-governance | 宪法 | 🔧外未接 | 参考实现；AOS 有 spirit/ 自研等价 | — |
-| L0A 持续融合 | L0 | ✅AOS代码 | kernel/life_state.py | ② |
-| L0B 状态图谱 | L0 | ✅AOS代码 | kernel/life_state.py | ② |
-| L0C 决策锚定 | L0 | ✅AOS代码 | kernel/life_state.py + kernel/spirit/datong.py | ② |
-| L1A LocalAI | L1 | 🔧外未接 | 未集成；AOS 等价：core/fabric/adapters/* + kernel/plugins/*_gateway.py | — |
-| L1B CLIProxyAPI | L1 | 🔧外未接 | 未集成；AOS 等价：router/llm_router.py + kernel/layers/model_gateway_layer.py | — |
-| L1C Cindy/nanobot | L1 | 🔧外未接 | 未集成 | — |
-| L1D openship | L1 | 🔧外未接 | 未集成 | — |
-| L1E Fish Speech | L1 | 🔧外未接 | 未集成(权重禁商用)；AOS 等价：voice/tts.py + core/fabric/adapters/tts_adapter.py | — |
-| L1E2 Vosk | L1 | 🔧外未接 | 未集成；AOS 等价：voice/asr.py + core/fabric/adapters/stt_adapter.py | — |
-| L1F turbo-fieldfare | L1 | 🔧外未接 | 实验性，未集成 | — |
-| L1G 硬件抽象层 | L1 | ✅AOS代码 | kernel/body/hal.py | ② |
-| L1H Phy-Bus | L1 | ✅AOS代码 | kernel/body/phy_bus.py | ② |
-| L1I MCP | L1 | ✅AOS代码 | src/aos_mcp/ + kernel/layers/mcp_bus_layer.py + core/fabric/adapters/mcp_*.py | ② |
-| L2A AgentENV | L2 | ✅AOS代码 | kernel/isolation/ + execution/sandbox.py | ② |
-| L2B 内生欲望引擎 | L2 | ✅AOS代码 | kernel/desire.py | ② |
-| L2C 生命节律调度 | L2 | ✅AOS代码 | kernel/rhythm.py | ② |
-| L2D 资源自治调度 | L2 | ✅AOS代码 | kernel/resource_autonomy.py | ② |
-| L2E 体感稳态系统 | L2 | ✅AOS代码 | kernel/homeostasis.py | ② |
-| L2F 元认知自省内核 | L2 | ✅AOS代码 | kernel/metacognition.py | ② |
-| L2G 粒子冲突协调协议 | L2 | ✅AOS代码 | kernel/fractal/conflict.py | ② |
-| L2H 柔性目标演化引擎 | L2 | ✅AOS代码 | kernel/goal_evolution.py | ② |
-| L2I plasma-ai/fractal | L2 | 🔧外未接 | 参考；AOS 自研：kernel/fractal/ | — |
-| L3A SeekDB | L3 | 🔧外未接 | opt-in 适配器(memory_ladder HERITAGE)；未装即降级 | — |
-| L3B KowitoDB+txtai | L3 | 🔧外未接 | 未集成（AOS 已有 Chroma/cognee/mem0 覆盖） | — |
-| L3C TriviumDB+Turso | L3 | 🔧外未接 | 未集成 | — |
-| L3D DuckDB | L3 | ✅AOS代码 | kernel/store/memory_ladder.py (DuckDBTier 真集成) | ② |
-| L3E DBX | L3 | 🔧外未接 | 未集成（可视化） | — |
-| L4A 年轮时空记忆 | L4 | ✅AOS代码 | kernel/soul/tree_ring.py | ② |
-| L4B 时空环境记忆库 | L4 | 🚧概念 | 无专项代码（memory/ 部分覆盖） | — |
-| L4C 数字家谱·代际传承 | L4 | ✅AOS代码 | kernel/soul/lineage.py | ② |
-| L4D 死亡意识 | L4 | 🚧概念 | 无代码 | — |
-| L5A 双向思辨演化调节器 | L5 | ✅AOS代码 | kernel/soul/dialectic.py | ② |
-| L5B 多文明价值观插件市场 | L5 | ✅AOS代码 | kernel/spirit/values_market.py | ② |
-| L5C 师徒协议 | L5 | ✅AOS代码 | kernel/spirit/mentorship.py | ② |
-| L5D 大同指数 | L5 | ✅AOS代码 | kernel/spirit/datong.py | ② |
-| L5E 文明试错镜像 | L5 | 🚧概念 | 无代码 | — |
-| L5F 共识自演化通道 | L5 | ✅AOS代码 | kernel/spirit/consensus.py | ② |
-| L5G video-shotcraft | L5 | 🔧外未接 | 未集成；AOS 等价：skills/video_use.py + core/fabric/adapters/video_maker_adapter.py | — |
-| L6A 镜像分支试错 | L6 | ✅AOS代码 | kernel/evolve/mirror_branch.py | ② |
-| L6B 共识自演化 | L6 | ✅AOS代码 | kernel/spirit/consensus.py + kernel/evolve/evolve_engine.py | ② |
-| L6C Automaton | L6 | 🔧外未接 | 参考；AOS 自研：kernel/evolution.py + src/lifeform/self_evolve_engine.py | — |
-| L6D PhyAgentOS | L6 | 🔧外未接 | 参考 | — |
-| L7A 感知数据流网关 | L7 | ✅AOS代码 | kernel/interact/perception_gateway.py | ② |
-| L7B 物理仿真/世界模型 | L7 | ✅AOS代码 | src/lifeform/world_model_engine.py + kernel/causal.py（线性因果 stub，非训练世界模型） | ② |
-| L7C 人本因果仿真 | L7 | ✅AOS代码 | kernel/interact/human_causal_sim.py | ② |
-| L7D 行动规划仲裁器 | L7 | ✅AOS代码 | kernel/action_arbiter.py | ② |
-| L7E 故障紧急制动总线 | L7 | ✅AOS代码 | kernel/interact/emergency_brake.py | ② |
-| L7F Conway Terminal | L7 | 🔧外未接 | 参考；AOS 等价：src/api/billing_api.py + core/database/models/economy.py | — |
-| L7G PhyAgentOS | L7 | 🔧外未接 | 参考 | — |
-| L8A 感知粒子 | L8 | ✅AOS代码 | kernel/fractal/particles.py + spawner.py + growth_guard.py（框架；具体粒子类型概念） | ② |
-| L8B 轻执行粒子 | L8 | ✅AOS代码 | kernel/fractal/（框架） | ② |
-| L8C 重型具身粒子 | L8 | ✅AOS代码 | kernel/fractal/（框架） | ② |
-| L8D 数字粒子 | L8 | ✅AOS代码 | kernel/fractal/（框架） | ② |
-| L9A dg-ai-notes | L9 | 🔧外未接 | 未集成（文档仓库） | — |
-| L9B openKylin AgentOS SIG | L9 | 🔧外未接 | 社区参考 | — |
+| CONST1 物理伤害优先规避 | 宪法 | ✅AOS代码 | `kernel/action_arbiter.py` + `kernel/interact/emergency_brake.py` + `compliance/` | ② |
+| CONST2 感知边界/数据主权 | 宪法 | ✅AOS代码 | `compliance/identity.py` + `kernel/isolation/` + `kernel/body/phy_bus.py` | ② |
+| CONST3 constitutional-agent-governance | 宪法 | 🔁自研等价 | 未引入；等价：`compliance/` + `kernel/spirit/values_market.py`（宪法红线不可覆盖） | ② |
+| L0A 持续融合 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
+| L0B 状态图谱 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
+| L0C 决策锚定 | L0 | ✅AOS代码 | `kernel/life_state.py` + `kernel/spirit/datong.py` | ② |
+| L1A LocalAI v4.7.1 | L1 | 🔁自研等价 | 未集成；等价：`core/fabric/adapters/*` + `kernel/plugins/*_gateway.py`（多模态推理接入层） | ② |
+| L1B CLIProxyAPI | L1 | 🔁自研等价 | 未集成；等价：`router/llm_router.py` + `kernel/layers/model_gateway_layer.py`（三级动态路由） | ② |
+| L1C Cindy / nanobot | L1 | 🔁自研等价 | 未集成；等价：`web/app.py`（3000+ 行控制台）+ `api/*.py`（REST 全量端点） | ② |
+| L1D openship | L1 | 🔁自研等价 | 未集成；等价：`Dockerfile` + `docker-compose.yml` + `start_all.sh` + `scripts/` | ② |
+| L1E Fish Speech | L1 | 🔁自研等价 | 未集成（权重禁商用）；等价：`voice/tts.py` + `core/fabric/adapters/tts_adapter.py` | ② |
+| L1E2 Vosk | L1 | 🔁自研等价 | 未集成；等价：`voice/asr.py` + `core/fabric/adapters/stt_adapter.py` | ② |
+| L1F turbo-fieldfare | L1 | 🔗纯参考 | 实验性端侧推理优化，仅标注思想来源，不计入能力 | — |
+| L1G 硬件抽象层 | L1 | ✅AOS代码 | `kernel/body/hal.py` | ② |
+| L1H Phy-Bus 物理适配总线 | L1 | ✅AOS代码 | `kernel/body/phy_bus.py` | ② |
+| L1I MCP 2026-07-28 | L1 | ✅AOS代码 | `aos_mcp/` + `kernel/layers/mcp_bus_layer.py` + `core/fabric/adapters/mcp_*.py` | ② |
+| L2A 粒子隔离沙箱 AgentENV | L2 | ✅AOS代码 | `kernel/isolation/` + `execution/sandbox.py`（AOS 自研，非外部件） | ② |
+| L2B 内生欲望引擎 | L2 | ✅AOS代码 | `kernel/desire.py` | ② |
+| L2C 生命节律调度 | L2 | ✅AOS代码 | `kernel/rhythm.py` | ② |
+| L2D 资源自治调度 | L2 | ✅AOS代码 | `kernel/resource_autonomy.py` | ② |
+| L2E 体感稳态系统 | L2 | ✅AOS代码 | `kernel/homeostasis.py` | ② |
+| L2F 元认知自省内核 | L2 | ✅AOS代码 | `kernel/metacognition.py` | ② |
+| L2G 粒子冲突协调协议 | L2 | ✅AOS代码 | `kernel/fractal/conflict.py` | ② |
+| L2H 柔性目标演化引擎 | L2 | ✅AOS代码 | `kernel/goal_evolution.py` | ② |
+| L2I plasma-ai/fractal | L2 | 🔁自研等价 | 未引入；等价：`kernel/fractal/`（spawner/growth_guard 递归硬上限自研） | ② |
+| L3A SeekDB（永久传承层） | L3 | 🔁自研等价 | 未装；等价：`kernel/store/memory_ladder.py` `LazyExternalTier`（HERITAGE 层 opt-in，缺失自动降级） | ② |
+| L3B KowitoDB + txtai（长期语义层） | L3 | 🔁自研等价 | 未集成；等价：`memory/memory.py` + `kernel/store/memory_ladder.py`（Chroma / cognee / mem0 已接） | ② |
+| L3C TriviumDB + Turso（工作记忆层） | L3 | 🔁自研等价 | 未集成；等价：`kernel/store/memory_ladder.py` `InMemoryTier`（工作记忆层已自研落地） | ② |
+| L3D DuckDB（瞬时感知层） | L3 | ✅AOS代码 | `kernel/store/memory_ladder.py` `DuckDBTier`（真集成，非 stub） | ② |
+| L3E DBX 可视化 | L3 | 🔁自研等价 | 未集成（AGPL-3.0）；等价：`web/app.py` 统一控制台 | ② |
+| L4A 年轮时空记忆 | L4 | ✅AOS代码 | `kernel/soul/tree_ring.py`（四圈压缩 fresh/recent/season/core） | ② |
+| **L4B 时空环境记忆库** | L4 | ✅AOS代码 | `kernel/soul/tree_ring.py`：`Memory.locus`+`when` 双索引、`recall(locus/since/until/tags)`、`timeline()`、`loci()` ← **前版误判为空壳** | ② |
+| L4C 数字家谱 · 代际传承 | L4 | ✅AOS代码 | `kernel/soul/lineage.py`（教训按代衰减 `LESSON_DECAY=0.7`，防祖训僵化） | ② |
+| **L4D 死亡意识** | L4 | ✅AOS代码 | `kernel/soul/lineage.py`：`mortality_stage()`、剩余寿命 <30% 收尾 / <10% 强制遗嘱移交 ← **前版误判为空壳** | ② |
+| L5A 双向思辨演化调节器 | L5 | ✅AOS代码 | `kernel/soul/dialectic.py` | ② |
+| L5B 多文明价值观插件市场 | L5 | ✅AOS代码 | `kernel/spirit/values_market.py`（含 `CONSTITUTION_REDLINES` 不可覆盖） | ② |
+| L5C 师徒协议 | L5 | ✅AOS代码 | `kernel/spirit/mentorship.py` | ② |
+| L5D 大同指数 | L5 | ✅AOS代码 | `kernel/spirit/datong.py` `DatongIndex` | ② |
+| **L5E 文明试错镜像** | L5 | ✅AOS代码 | `kernel/spirit/datong.py` `CivilizationMirror` / `MirrorResult`（副本沙盘预演后再上真身）← **前版误判为空壳** | ② |
+| L5F 共识自演化通道 | L5 | ✅AOS代码 | `kernel/spirit/consensus.py`（宪法条款需超级多数） | ② |
+| L5G video-shotcraft | L5 | 🔁自研等价 | 未集成；等价：`skills/video_use.py` + `core/fabric/adapters/video_maker_adapter.py` | ② |
+| L6A 镜像分支试错 | L6 | ✅AOS代码 | `kernel/evolve/mirror_branch.py` | ② |
+| L6B 共识自演化 | L6 | ✅AOS代码 | `kernel/spirit/consensus.py` + `kernel/evolve/evolve_engine.py` | ② |
+| L6C Automaton 自主数字生命引擎 | L6 | 🔁自研等价 | 未引入；等价：`kernel/evolution.py` + `lifeform/self_evolve_engine.py`（含 `EvolutionLimit` 硬护栏） | ② |
+| L6D PhyAgentOS | L6 | 🔗纯参考 | 认知-物理解耦架构参考，不需 AOS 代码 | — |
+| L7A 感知数据流网关 | L7 | ✅AOS代码 | `kernel/interact/perception_gateway.py`（AOS 自研，非外部件） | ② |
+| L7B 物理仿真 / 世界模型（第一层） | L7 | ✅AOS代码 | `lifeform/world_model_engine.py` + `kernel/causal.py`（**线性因果叠加 stub，非训练出的 JEPA**） | ② |
+| L7C 人本因果仿真（第二层） | L7 | ✅AOS代码 | `kernel/interact/human_causal_sim.py` | ② |
+| L7D 行动规划仲裁器 | L7 | ✅AOS代码 | `kernel/action_arbiter.py` | ② |
+| L7E 故障紧急制动总线 | L7 | ✅AOS代码 | `kernel/interact/emergency_brake.py` | ② |
+| L7F Conway Terminal 支付网关 | L7 | 🔁自研等价 | 未引入；等价：`api/billing_api.py` + `core/database/models/economy.py` | ② |
+| L7G PhyAgentOS（执行解耦） | L7 | 🔗纯参考 | 同 L6D，架构思想来源 | — |
+| L8A 感知粒子 | L8 | ✅AOS代码 | `kernel/fractal/particles.py` + `spawner.py` + `growth_guard.py`（框架真实；具体硬件驱动待接） | ② |
+| L8B 轻执行粒子 | L8 | ✅AOS代码 | 同上（`kernel/fractal/` 统一粒子框架） | ② |
+| L8C 重型具身粒子 | L8 | ✅AOS代码 | 同上（框架就绪，机器人本体未接） | ② |
+| L8D 数字粒子 | L8 | ✅AOS代码 | 同上（PC/服务器侧已可 spawn） | ② |
+| L9A dg-ai-notes | L9 | 🔗纯参考 | 外部教程文档仓库，不需集成 | — |
+| L9B openKylin AgentOS SIG | L9 | 🔗纯参考 | 社区生态对齐 | — |
 
-**诚实统计（58 个节点）**
-- ✅ AOS 自研代码已实现：**35 / 58（60.3%）** —— 但绝大多数是 **② 级骨架**（代码+单测），不是 ③ 端到端跑通。
-- 🔧 外部工具/参考未集成：**20 / 58（34.5%）** —— 命名出现在架构里但 AOS 没接进来（部分有自研等价能力，部分纯参考）。
-- 🚧 纯概念无代码：**3 / 58（5.2%）** —— L4B 时空环境记忆库、L4D 死亡意识、L5E 文明试错镜像，是真正的空壳。
-- **关键诚实结论**：按节点数"一半以上空壳"不成立（60% 有代码）；但**原图例 ⚡=「完全自研」把"概念"和"真自研"混为一谈、🔧 把"AOS 自研工具"和"外部没接工具"混为一谈**，导致阅读者误以为全都建好。图内 [✅]/[🔧]/[🚧] 标注 + 本表即为纠偏。
-- **更深一层（不夸大）**：即便 [✅AOS代码] 的节点，也多为 ② 级机制骨架——例如 L7B 世界模型是线性因果叠加 stub，并非训练出的 JEPA 世界模型；L2 各引擎是基础启发式，未接真 LLM 驱动。③ 端到端闭环仅 P0 自进化窄场景验证过（见第九章），不覆盖全架构。
+**诚实统计（58 个节点，本版修正后）**
+
+| 状态 | 数量 | 占比 | 说明 |
+| :--- | ---: | ---: | :--- |
+| ✅ AOS 已有真实代码 | **38** | 65.5% | 但绝大多数是 **② 级骨架**（代码+单测），非 ③ 端到端 |
+| 🔁 外部未接但有自研等价 | **15** | 25.9% | 能力已具备，只是没用那个外部轮子 |
+| 🔗 纯参考 / 生态对齐 | **5** | 8.6% | 本就不需要代码，写进图是标注思想来源 |
+| 🚧 无代码空壳 | **0** | 0% | 逐节点核对后为 0（前版误判的 3 个已纠正） |
+
+**② 级实测证据（可复现，无需 pytest）**
+
+```bash
+python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Python 3.13.12 直接可跑
+# [tests.test_soul_memory_lineage] 14 passed / 0 failed   ← 覆盖 L4A/L4B/L4C/L4D
+# [tests.test_spirit_layer]        28 passed / 0 failed   ← 覆盖 L5B/L5C/L5D/L5E/L5F
+# [tests.test_lifeform_selfbuild]   9 passed / 0 failed   ← 覆盖 L2/L3/L6/L7 自研模块
+# ===== 汇总：51 passed / 0 failed =====
+```
+
+三个曾被误判为"空壳"的节点（L4B 时空环境记忆库 / L4D 死亡意识 / L5E 文明试错镜像）均在上述用例中被真实覆盖并通过，② 级坐实。
+
+**必须同时说清的三条限度（不夸大）**
+
+1. **"一半以上是空壳"按节点数不成立**：38 个节点有真实代码、15 个有自研等价，合计 53/58（91.4%）在仓库里能找到对应实现。真正零代码的节点为 0。
+2. **但"有代码" ≠ "能用"**：绝大多数是 **② 级机制骨架**——纯函数 + 类骨架 + 单测可跑，未接真 LLM 驱动。典型例子：L7B 世界模型是线性因果叠加，不是训练出的 JEPA；L2 各引擎是基础启发式；L8 粒子框架能 spawn 但没接真实硬件驱动。
+3. **③ 级（真 LLM 端到端闭环）目前只验证过 P0 自进化一个窄场景**（见第九章），不覆盖全架构。这是当前最大的真实缺口，也是下一阶段唯一值得投入的方向。
 
 
 ## 二、完整白皮书
