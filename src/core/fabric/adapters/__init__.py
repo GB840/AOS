@@ -186,6 +186,21 @@ try:
 except Exception:  # noqa: BLE001 - 零依赖（仅 stdlib urllib）；服务未起则 health=False，不拖垮内核
     KnowmeshAdapter = None
 
+try:
+    from .vosk_backend import VoskSTT
+except Exception:  # noqa: BLE001 - 缺 vosk 则跳过，不拖垮内核
+    VoskSTT = None
+
+try:
+    from .video_shotcraft_backend import VideoShotcraft
+except Exception:  # noqa: BLE001 - 零依赖（stdlib）；仓库/node 缺失则 health=False，不拖垮内核
+    VideoShotcraft = None
+
+try:
+    from .localai_backend import LocalAIBackend
+except Exception:  # noqa: BLE001 - 缺 requests 则跳过，不拖垮内核
+    LocalAIBackend = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -223,6 +238,9 @@ __all__ = [
         "Img2ThreejsAdapter",
         "KnowmeshAdapter",
         "MediakitAdapter",
+        "VoskSTT",
+        "VideoShotcraft",
+        "LocalAIBackend",
     )
     if globals().get(n) is not None
 ]

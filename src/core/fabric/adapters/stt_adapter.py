@@ -3,6 +3,7 @@
 引擎无关契约（对齐 AOS 第一性「不绑定、未来-proof」）：
 - whisper_cpp：本地 whisper.cpp CLI（ggml 模型，全离线、8G 可跑）。
 - faster_whisper：本地 Python 库（int8 量化，CPU/GPU 皆可）。
+- vosk：本地 Python 库（Apache-2.0，约 40-50MB 模型，全离线、低资源、流式）。
 - web_speech：浏览器端 Web Speech API 已完成识别，服务端只接收 transcript
   （零服务端依赖、任何环境可用，是诚实的兜底路径）。
 
@@ -74,6 +75,17 @@ def _faster_whisper_model_cached(size: str) -> bool:
     return os.path.isdir(d)
 
 
+def _vosk_model_cached() -> bool:
+    """Vosk 模型：AOS_VOSK_MODEL 指向目录，或默认缓存目录下存在 cn/en 小模型。"""
+    p = os.environ.get("AOS_VOSK_MODEL")
+    if p:
+        return os.path.isdir(p)
+    base = os.environ.get("AOS_VOSK_MODEL_DIR") or os.path.expanduser("~/.cache/vosk-models")
+    return os.path.isdir(os.path.join(base, "vosk-model-cn-0.22")) or os.path.isdir(
+        os.path.join(base, "vosk-model-small-en-us-0.15")
+    )
+
+
 def _pick_engine() -> str:
     forced = os.environ.get("AOS_STT_ENGINE")
     if forced:
@@ -84,7 +96,16 @@ def _pick_engine() -> str:
         import faster_whisper  # noqa: F401 - 仅探测导入
         return "faster_whisper"
     except Exception:
-        return "web_speech"
+        pass
+    # Vosk：Apache-2.0 离线 STT，模型已下载即可用（不依赖 GPU/网络）
+    try:
+        import vosk  # noqa: F401 - 仅探测导入
+
+        if _vosk_model_cached():
+            return "vosk"
+    except Exception:
+        pass
+    return "web_speech"
 
 
 class STTAdapter(BaseAgentAdapter):
@@ -119,6 +140,13 @@ class STTAdapter(BaseAgentAdapter):
                 return _faster_whisper_model_cached(size)
             except Exception:
                 return False
+        if self._engine == "vosk":
+            try:
+                from .vosk_backend import VoskSTT
+
+                return VoskSTT().available
+            except Exception:
+                return False
         # web_speech：服务端只收 transcript，永远可用
         return True
 
@@ -142,6 +170,13 @@ class STTAdapter(BaseAgentAdapter):
                         "note": "全离线；首次需从 HuggingFace 下载 ggml 模型（约 75-150MB）"}
             except Exception as e:
                 return {"engine": "faster_whisper", "ready": False, "error": repr(e)}
+        if self._engine == "vosk":
+            try:
+                from .vosk_backend import VoskSTT
+
+                return VoskSTT().health_detail()
+            except Exception as e:
+                return {"engine": "vosk", "ready": False, "error": repr(e)}
         return {"engine": "web_speech", "ready": True,
                 "note": "浏览器已完成识别，服务端只收 transcript"}
 
@@ -178,6 +213,8 @@ class STTAdapter(BaseAgentAdapter):
         try:
             if self._engine == "whisper_cpp":
                 text = self._run_whisper_cpp(audio_path)
+            elif self._engine == "vosk":
+                text = self._run_vosk(audio_path)
             else:
                 text = self._run_faster_whisper(audio_path)
         except Exception as e:
@@ -196,8 +233,8 @@ class STTAdapter(BaseAgentAdapter):
 
     # ---- 流式识别（边说边出字）----
     def supports_streaming(self) -> bool:
-        """是否真·流式：faster_whisper 原生 segment 流式；whisper_cpp 退化整段；web_speech 不适用。"""
-        return self._engine in ("faster_whisper", "whisper_cpp")
+        """是否真·流式：faster_whisper 原生 segment 流式；vosk 原生增量；whisper_cpp 退化整段；web_speech 不适用。"""
+        return self._engine in ("faster_whisper", "vosk", "whisper_cpp")
 
     def stream_transcribe(self, audio_path: str, language: str = "zh") -> "Iterator[str]":
         """流式转写：对一段音频边识别边 yield 部分文本（Iterator[str]）。
@@ -220,6 +257,34 @@ class STTAdapter(BaseAgentAdapter):
                 text = (seg.text or "").strip()
                 if text:
                     yield text
+        elif self._engine == "vosk":
+            # Vosk 原生增量：PartialResult 边识别边出字
+            from .vosk_backend import VoskSTT, vosk as _vosk
+
+            stt = VoskSTT(lang=os.environ.get("AOS_VOSK_LANG", "cn"))
+            if not stt.available:
+                stt.ensure_model()
+            model = stt._load()
+            import json as _json
+            import wave as _wave
+
+            wf = _wave.open(audio_path, "rb")
+            try:
+                rec = _vosk.KaldiRecognizer(model, wf.getframerate())
+                rec.SetWords(True)
+                while True:
+                    data = wf.readframes(4000)
+                    if len(data) == 0:
+                        break
+                    if rec.AcceptWaveform(data):
+                        part = _json.loads(rec.Result()).get("text", "").strip()
+                        if part:
+                            yield part
+                final = _json.loads(rec.FinalResult()).get("text", "").strip()
+                if final:
+                    yield final
+            finally:
+                wf.close()
         else:  # whisper_cpp 退化：整段后 yield 一次
             full = self._run_whisper_cpp(audio_path)
             if full and full.strip():
@@ -246,3 +311,13 @@ class STTAdapter(BaseAgentAdapter):
                              device=os.environ.get("AOS_WHISPER_DEVICE", "cpu"))
         segs, _ = model.transcribe(audio_path, language="zh", beam_size=5)
         return " ".join(s.text for s in segs).strip()
+
+    def _run_vosk(self, audio_path: str) -> str:
+        from .vosk_backend import VoskSTT
+
+        stt = VoskSTT(lang=os.environ.get("AOS_VOSK_LANG", "cn"))
+        if not stt.available:
+            # 诚实：模型缺失即明确报错，不退回其它引擎假装成功
+            stt.ensure_model()
+        res = stt.transcribe_file(audio_path)
+        return res.get("text", "")
