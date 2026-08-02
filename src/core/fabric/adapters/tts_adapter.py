@@ -66,6 +66,11 @@ def _pick_engine() -> str:
     except Exception as e:
         logger.warning("kokoro 引擎不可用，尝试下一引擎: %s", e)
     try:
+        import piper  # noqa: F401 - Apache-2.0 离线 TTS，无网络依赖
+        return "piper"
+    except Exception as e:
+        logger.warning("piper 引擎不可用，尝试下一引擎: %s", e)
+    try:
         import edge_tts  # noqa: F401
         return "edge_tts"
     except Exception:
@@ -106,6 +111,21 @@ class TTSAdapter(BaseAgentAdapter):
             try:
                 import TTS  # noqa: F401
                 return True
+            except Exception:
+                return False
+        if self._engine == "piper":
+            try:
+                from .piper_backend import PIPER_AVAILABLE
+
+                if not PIPER_AVAILABLE:
+                    return False
+                # 模型存在才真能合成；仅装库无模型 → 诚实 False
+                mp = os.environ.get("AOS_PIPER_VOICE")
+                if mp and os.path.isfile(mp):
+                    return True
+                from .piper_backend import _DEFAULT_VOICE, _voice_model_path
+
+                return os.path.isfile(_voice_model_path(_DEFAULT_VOICE))
             except Exception:
                 return False
         return False
@@ -218,7 +238,31 @@ class TTSAdapter(BaseAgentAdapter):
             return self._run_kokoro(text, payload), "wav"
         if self._engine == "xtts":
             return self._run_xtts(text, payload), "wav"
+        if self._engine == "piper":
+            return self._run_piper(text, payload), "wav"
         raise RuntimeError(f"未知 TTS 引擎 {self._engine}")
+
+    def _run_piper(self, text: str, payload: dict) -> bytes:
+        """Piper 离线 TTS（Apache-2.0，替代 Fish Speech 禁商用权重）。
+
+        已有模型则直接合成；无模型则 opt-in 尝试从 HuggingFace 下载
+        （需网络，主机稳定网络可跑），下载失败报清晰错误，不静默、不冒充。
+        """
+        from .piper_backend import PiperTTS
+
+        model_path = payload.get("model_path") or os.environ.get("AOS_PIPER_VOICE")
+        voice_name = payload.get("voice_name") or os.environ.get("AOS_PIPER_VOICE_NAME")
+        tts = PiperTTS(model_path=model_path, voice_name=voice_name)
+        if not tts.available:
+            try:
+                tts.ensure_voice()
+            except Exception as e:
+                raise RuntimeError(
+                    f"Piper 语音模型缺失且自动下载失败：{e}"
+                    "（请设 AOS_PIPER_VOICE 指向 .onnx 或确保联网）"
+                )
+        data, _ext = tts.synthesize(text)
+        return data
 
     def _run_edge_tts(self, text: str, payload: dict) -> bytes:
         import edge_tts

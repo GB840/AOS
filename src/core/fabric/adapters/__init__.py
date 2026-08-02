@@ -201,6 +201,16 @@ try:
 except Exception:  # noqa: BLE001 - 缺 requests 则跳过，不拖垮内核
     LocalAIBackend = None
 
+try:
+    from .piper_backend import PiperTTS
+except Exception:  # noqa: BLE001 - 缺 piper 则跳过，不拖垮内核
+    PiperTTS = None
+
+try:
+    from .constitutional_governor import ConstitutionalGovernor
+except Exception:  # noqa: BLE001 - 缺 constitutional-agent 则跳过，不拖垮内核
+    ConstitutionalGovernor = None
+
 __all__ = [
     n for n in (
         "AG2Adapter",
@@ -241,6 +251,8 @@ __all__ = [
         "VoskSTT",
         "VideoShotcraft",
         "LocalAIBackend",
+        "PiperTTS",
+        "ConstitutionalGovernor",
     )
     if globals().get(n) is not None
 ]

@@ -69,22 +69,17 @@ class LFMAdapter(BaseAgentAdapter):
 
     # ---- 引擎可用性（如实）----
     def _have_runtime(self) -> bool:
+        # 用 guarded_import（worker 线程导入）而非主线程裸 import：
+        # 避免与 prewarm 后台线程（正向导 litellm 等重依赖）争抢全局 import 锁
+        # 导致主线程在 health_report 中无限阻塞（沙箱 litellm 导入极慢时尤甚）。
+        from ..resilience import guarded_import
+
         if self._backend == "llama_cpp":
-            try:
-                import llama_cpp  # noqa: F401
-                return True
-            except Exception:
-                return False
+            return guarded_import("llama_cpp") is not None
         # transformers 后端
-        try:
-            import transformers  # noqa: F401
+        if guarded_import("transformers") is not None:
             return True
-        except Exception:
-            try:
-                import litellm  # noqa: F401
-                return True
-            except Exception:
-                return False
+        return guarded_import("litellm") is not None
 
     @staticmethod
     def _hf_cache_dir(repo_id: str) -> str | None:

@@ -175,16 +175,17 @@ flowchart TB
 | :--- | :--- | :--- | :--- | :--- |
 | CONST1 物理伤害优先规避 | 宪法 | ✅AOS代码 | `kernel/action_arbiter.py` + `kernel/interact/emergency_brake.py` + `compliance/` | ② |
 | CONST2 感知边界/数据主权 | 宪法 | ✅AOS代码 | `compliance/identity.py` + `kernel/isolation/` + `kernel/body/phy_bus.py` | ② |
-| CONST3 constitutional-agent-governance | 宪法 | 🔁自研等价 | 未引入；等价：`compliance/` + `kernel/spirit/values_market.py`（宪法红线不可覆盖） | ② |
+| CONST3 constitutional-agent-governance | 宪法 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/constitutional_governor.py` `ConstitutionalGovernor`（封装 `constitutional_agent.Constitution` 六闸门+硬约束本地评估，无需外部 LLM）；与 `compliance/` + `kernel/spirit/values_market.py` 红线互补 | ② |
 | L0A 持续融合 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
 | L0B 状态图谱 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
 | L0C 决策锚定 | L0 | ✅AOS代码 | `kernel/life_state.py` + `kernel/spirit/datong.py` | ② |
 | L1A LocalAI v4.7.1 | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/localai_backend.py` OpenAI 兼容客户端（opt-in，需运行 LocalAI 服务端）；与现有 model_gateway 三级路由互补（本地/私有化一档） | ② |
-| L1B CLIProxyAPI | L1 | 🔁自研等价 | 未集成；等价：`router/llm_router.py` + `kernel/layers/model_gateway_layer.py`（三级动态路由） | ② |
+| L1B CLIProxyAPI / LiteLLM | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/litellm_adapter.py` `LiteLLMAdapter`（统一 100+ provider OpenAI 格式路由，已装 1.95.0）；与现有三级动态路由 `model_gateway_layer.py` 互补（轻量库模式 / 代理模式） | ② |
 | L1C Cindy / nanobot | L1 | 🔁自研等价 | 未集成；等价：`web/app.py`（3000+ 行控制台）+ `api/*.py`（REST 全量端点） | ② |
 | L1D openship | L1 | 🔁自研等价 | 未集成；等价：`Dockerfile` + `docker-compose.yml` + `start_all.sh` + `scripts/` | ② |
-| L1E Fish Speech | L1 | 🔁自研等价 | 未集成（权重禁商用）；等价：`voice/tts.py` + `core/fabric/adapters/tts_adapter.py` | ② |
+| L1E Fish Speech | L1 | 🔗纯参考 | **CC-BY-NC-SA 禁商用**，不集成；由 L1E3 Piper（Apache-2.0）真接替代；等价保留 `core/fabric/adapters/tts_adapter.py` | — |
 | L1E2 Vosk | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/vosk_backend.py` + `STTAdapter` 引擎链新增 `vosk`（已装 vosk 0.3.45，离线 STT，流式可用）；无模型时诚实降级 | ② |
+| L1E3 Piper | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/piper_backend.py` `PiperTTS` + `TTSAdapter` 引擎链新增 `piper`（已装 piper-tts 1.6.0，离线 TTS，替代 Fish Speech 禁商用）；无模型时诚实降级（opt-in 下载 huayan ~60MB） | ② |
 | L1F turbo-fieldfare | L1 | 🔗纯参考 | 实验性端侧推理优化，仅标注思想来源，不计入能力 | — |
 | L1G 硬件抽象层 | L1 | ✅AOS代码 | `kernel/body/hal.py` | ② |
 | L1H Phy-Bus 物理适配总线 | L1 | ✅AOS代码 | `kernel/body/phy_bus.py` | ② |
@@ -238,27 +239,27 @@ flowchart TB
 
 | 处置 | 节点 | 说明 |
 | :--- | :--- | :--- |
-| ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** Apache-2.0 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm） |
+| ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft、**L1E3 Piper**、**CONST3 constitutional-agent**、**L1B LiteLLM** | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** Apache-2.0 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm）；**Piper 1.6.0 真装**（Apache-2.0 离线 TTS，接入 TTSAdapter 引擎链替代 Fish Speech 禁商用权重，无模型诚实降级）；**constitutional-agent 0.7.0 真装**（MIT 本地宪法治理，封装 `Constitution` 六闸门+硬约束评估，无需外部 LLM）；**LiteLLM 1.95.0 真装**（MIT 统一 100+ provider OpenAI 路由，`LiteLLMAdapter` 已注册） |
 | ✅ **AOS 已用开源** | L3B Chroma/cognee/mem0 | L3 长期语义层本就复用这三个开源，非自研；KowitoDB/txtai 按「现有够好→复用」不新增 |
 | 🔁 **本环境接不上（诚实降级）** | L3C TriviumDB/Turso | TriviumDB 是 Rust crate（PyPI 无轮子）；Turso 的 `libsql` 仅支持 Py<3.13。本环境 3.13.12 接不上，`import` 即 ImportError，绝不用内存冒充 |
-| 🔗 **许可红线不集成** | L1E Fish Speech（CC-BY-NC-SA 禁商用）、L3E DBX（AGPL-3.0） | 按铁律「不引许可不明/传染」不 import |
-| 🔁 **自研等价/服务框架（铁律：现有够好→复用，不强制）** | CONST3、L1B CLIProxyAPI、L1C Cindy/nanobot、L1D openship、L2I plasma-ai/fractal、L6C Automaton、L7F Conway Terminal | AOS 已有对应适配器/控制台（FabricHub、web/app.py、voice/、billing/）；LocalAI/openship/nanobot 是服务或框架非 drop-in 库；plasma-ai/fractal、Automaton、PhyAgentOS 是架构思想来源 |
-| 🔜 **下一批（服务类/权重类，待主机）** | L1E Fish Speech 替代(Piper)、L7F Conway 类支付 | Piper(语音合成,Apache-2.0) 可作 Fish Speech 禁商用替代；支付网关属服务，主机接 |
+| 🔗 **许可红线不集成** | L1E Fish Speech（CC-BY-NC-SA 禁商用，已由 L1E3 Piper Apache-2.0 真接替代）、L3E DBX（AGPL-3.0） | 按铁律「不引许可不明/传染」不 import |
+| 🔁 **自研等价/服务框架（铁律：现有够好→复用，不强制）** | L1C Cindy/nanobot、L1D openship、L2I plasma-ai/fractal、L6C Automaton、L7F Conway Terminal | AOS 已有对应适配器/控制台（FabricHub、web/app.py、voice/、billing/）；openship/nanobot 是服务或框架非 drop-in 库；plasma-ai/fractal、Automaton、PhyAgentOS 是架构思想来源；CONST3/L1B/L1E3 已真接开源（见上） |
+| 🔜 **下一批（服务类，待主机）** | L7F Conway 类支付 | 支付网关属服务，主机接（AOS 已有 `api/billing_api.py` 等价） |
 
 **诚实边界（不夸大）**：
 - LanceDB 本地模式 **merge 仅支持 remote 表**（0.36 本地报 `NotImplementedError`），故本地「数字家谱」= 分支隔离 + 不可变版本历史 + 时间旅行；跨分支合并需 LanceDB Cloud。
 - Vosk **已真装 0.3.45 + 接入 STTAdapter**，无模型时诚实降级测试通过；**真实语音转写（③）需下载约 40-50MB 模型**（本沙箱大文件 GET 网络不稳，标准 Vosk 用法、API 已对官方文档核实；主机稳定网络可跑，测试已做尽力真跑+失败跳过）。
 - LocalAI / video-shotcraft **已真接代码 + 仓库/运行时检测通过**；真实推理 / 真实渲染（③）分别需主机运行 LocalAI 服务端、安装 Node 后 `pnpm install`+`npx remotion render`，属重 I/O，不在单测内跑。
-- 真接的开源（DuckDB/LanceDB/Vosk/LocalAI/video-shotcraft）已用单测实证（store/recall/版本/分支 / 离线 STT 引擎链 / OpenAI 兼容客户端 / 仓库+node 检测），诚实级仍标 ②（代码+单测）；③ 端到端（真灌多模态数据全链路迁移 / 真语音转写 / 真渲染成片）未做。
+- 真接的开源（DuckDB/LanceDB/Vosk/LocalAI/video-shotcraft/Piper/constitutional-agent/LiteLLM）已用单测实证（store/recall/版本/分支 / 离线 STT 引擎链 / OpenAI 兼容客户端 / 仓库+node 检测 / Piper 引擎链+无模型诚实降级 / Constitution 六闸门本地评估 / 100+ provider 路由）；诚实级仍标 ②（代码+单测）；③ 端到端（真灌多模态数据全链路迁移 / 真语音转写 / 真渲染成片 / 真 Piper 语音合成需下载模型 / 真多 provider 推理需 API key）未做，相关 ③ 用例因网络/密钥在沙箱不稳已诚实 skip。
 - 凡「服务/框架/许可红线」类未接入，均按选型铁律判定，非疏漏。
 
-**诚实统计（58 个节点，本版修正后）**
+**诚实统计（59 个节点，本版修正后）**
 
 | 状态 | 数量 | 占比 | 说明 |
 | :--- | ---: | ---: | :--- |
-| ✅ AOS 已有真实代码 | **43** | 74.1% | 含**真接开源 DuckDB + LanceDB + Vosk + LocalAI + video-shotcraft**；L3 语义层复用开源 Chroma/cognee/mem0 |
-| 🔁 外部未接（含本环境接不上） | **9** | 15.5% | 多为服务/框架/自研等价；TriviumDB/Turso 因 Py3.13/Rust 本环境接不上 |
-| 🔗 纯参考 / 生态对齐 / 许可红线 | **6** | 10.3% | SeekDB(服务端)/DBX(AGPL)/turbo-fieldfare/PhyAgentOS/dg-ai-notes/openKylin |
+| ✅ AOS 已有真实代码 | **46** | 78.0% | 含**真接开源 DuckDB + LanceDB + Vosk + LocalAI + video-shotcraft + Piper + constitutional-agent + LiteLLM**；L3 语义层复用开源 Chroma/cognee/mem0 |
+| 🔁 外部未接（含本环境接不上） | **6** | 10.2% | 多为服务/框架/自研等价；TriviumDB/Turso 因 Py3.13/Rust 本环境接不上 |
+| 🔗 纯参考 / 生态对齐 / 许可红线 | **7** | 11.9% | SeekDB(服务端)/DBX(AGPL)/Fish Speech(CC-BY-NC-SA)/turbo-fieldfare/PhyAgentOS/dg-ai-notes/openKylin |
 | 🚧 无代码空壳 | **0** | 0% | 逐节点核对后为 0（前版误判的 3 个已纠正） |
 
 **② 级实测证据（可复现，无需 pytest）**
