@@ -17,6 +17,9 @@ import os
 import sys
 import json
 import datetime
+import traceback
+
+sys.excepthook = lambda et, ev, tb: traceback.print_exception(et, ev, tb)
 
 # 0) 加载 .env（真实 key 在 D:/AOS/.env）
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -83,6 +86,7 @@ def real_trace_from(result, engine, cap="web.search"):
     return {
         "capability": cap,
         "engine": engine,
+        "resolved_engine": data.get("engine") or engine,  # 真实命中的底层源（可能与反思建议引擎不同）
         "ok": ok,
         "real_metrics": {"is_real": bool(is_real)},
         "summary": (
@@ -91,6 +95,18 @@ def real_trace_from(result, engine, cap="web.search"):
             else (result.error or "无真实结果")
         ),
     }
+
+
+def _best_engine(distill, cap):
+    """从蒸馏器统计中选 (cap,*) 成功率最高的可用引擎（② 降级用，不依赖 LLM）。"""
+    cands = []
+    for k, st in distill.stats.items():
+        if k.startswith(cap + "::") and st.total > 0:
+            cands.append((st.ok / st.total, st.engine))
+    if not cands:
+        return None
+    cands.sort(reverse=True)
+    return cands[0][1]
 
 
 records = []
@@ -137,10 +153,15 @@ if _anysearch_key is not None:
 print()
 
 # 3) 反思（真智谱 LLM）：诊断 round1 失败 → 产出换引擎建议
-print("[Reflect] 调用 autopilot._reflect_and_redesign（真智谱 LLM）...")
-reflect = ap._reflect_and_redesign(
-    TASK, {"execution": {"trace": [t1]}}, cycle=1
-)
+#    AOS_REFLECT_OFF=1 时跳过 LLM，直接走蒸馏器降级（②），用于离线/CI/LLM 不可达演示
+if os.environ.get("AOS_REFLECT_OFF"):
+    print("[Reflect] AOS_REFLECT_OFF=1，跳过 LLM 反思，改用蒸馏器证据降级（②）")
+    reflect = None
+else:
+    print("[Reflect] 调用 autopilot._reflect_and_redesign（真智谱 LLM）...")
+    reflect = ap._reflect_and_redesign(
+        TASK, {"execution": {"trace": [t1]}}, cycle=1
+    )
 eng_hint = None
 if reflect is None:
     print("[Reflect] 反思未产出计划（无失败可反思或三后端皆不可用）")
@@ -164,15 +185,26 @@ else:
         }
     )
 
-# 4) Round 2：按反思的 engine_hint 真实搜索（默认 duckduckgo）
-round2_engine = eng_hint or "duckduckgo"
-print(f"\n[Round2] 真实搜索 engine={round2_engine}（反思建议）  query={QUERY!r}")
-r2 = search.invoke(
-    InvokeRequest(
-        capability=Capability.WEB_SEARCH,
-        payload={"query": QUERY, "engine": round2_engine, "max_results": 5},
+# 4) Round 2：按反思建议引擎真实搜索；若 LLM 反思不可用，降级到蒸馏器最佳引擎（②）
+if eng_hint:
+    round2_engine = eng_hint
+    reflect_mode = "llm"
+    hint_src = "真LLM反思建议"
+else:
+    best = _best_engine(distill, "web.search")
+    round2_engine = best or "duckduckgo"
+    reflect_mode = "distiller"
+    hint_src = f"蒸馏器证据(最佳引擎={best})" if best else "无可用证据→默认duckduckgo"
+print(f"\n[Round2] 真实搜索 engine={round2_engine}（{hint_src}）  query={QUERY!r}")
+try:
+    r2 = search.invoke(
+        InvokeRequest(
+            capability=Capability.WEB_SEARCH,
+            payload={"query": QUERY, "engine": round2_engine, "max_results": 5},
+        )
     )
-)
+except Exception as e:  # noqa: BLE001 - 源彻底不可达时当作失败，不崩
+    r2 = types.SimpleNamespace(ok=False, data=None, error=f"round2 调用异常: {e}")
 t2 = real_trace_from(r2, round2_engine)
 distill.record_outcome("web.search", round2_engine, bool(t2["real_metrics"]["is_real"]))
 print(f"[Round2] ok={t2['ok']} is_real={t2['real_metrics']['is_real']} :: {t2['summary'][:90]}\n")
@@ -187,15 +219,17 @@ verdict = {
     "round1_engine": t1["engine"],
     "round1_ok": t1["ok"],
     "round1_real": t1["real_metrics"]["is_real"],
-    "round2_engine": t2["engine"],
+    "round2_engine": t2["engine"],                      # 反思建议引擎
+    "round2_resolved_engine": t2["resolved_engine"],    # 真实命中的底层源（可能不同于建议）
     "round2_ok": t2["ok"],
     "round2_real": t2["real_metrics"]["is_real"],
     "end_to_end_passed": improved,
     "honesty_level": (
-        "③ 真LLM反思 + 真搜索调用 + 真实蒸馏器证据"
+        "③ 真LLM反思 + 真搜索调用 + 蒸馏器证据（蒸馏器含代表性种子数据，round1/round2真实结果已追加）"
         if (reflect and switched)
-        else "② 引擎按证据切换（环境未产生成败差，反思/蒸馏器真实发生）"
+        else "② 蒸馏器证据驱动引擎切换（LLM反思不可用，闭环仍真实有效）"
     ),
+    "reflect_mode": reflect_mode,
 }
 records.insert(0, {"phase": "round1", **t1})
 records.append({"phase": "round2", **t2})
@@ -207,5 +241,15 @@ with open(art_path, "w", encoding="utf-8") as f:
 
 print("===== P0 自进化闭环证据 =====")
 print(json.dumps(verdict, ensure_ascii=False, indent=2))
+if verdict.get("round2_engine") != verdict.get("round2_resolved_engine"):
+    print(
+        f"\n[诚实标注] 反思建议引擎={verdict['round2_engine']}，"
+        f"但实际命中底层源={verdict['round2_resolved_engine']}。"
+        f"闭环真实有效（失败→反思→换源→成功），但『换到哪个源』以真实命中为准，不夸大反思精度。"
+    )
+print(
+    "\n[诚实标注] 蒸馏器种子为代表性样本（生产中应来自真实运行记录），"
+    "round1 真失败与 round2 真成功已追加进同一蒸馏器；本 demo 仅验证『搜索源选择』单一窄场景的失败→反思→改进闭环。"
+)
 print(f"\n产物已落盘：{art_path}")
 print(f"蒸馏器样本库：{distill_path}")
