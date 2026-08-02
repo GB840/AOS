@@ -52,8 +52,8 @@ flowchart TB
     subgraph L1["⚙️ 第一层：肉体层（硬件 · 语音 · 推理 · 部署 · 协议）"]
         L1A["🔧 多模态推理引擎：LocalAI v4.7.1（Apache-2.0 已真接客户端）[✅AOS已接开源]"]
         L1B["🔧 模型路由网关：LiteLLM（MIT 100+ provider，已真接）[✅AOS已接开源]"]
-        L1C["🔧 跨平台交互客户端：Cindy / nanobot [🔁自研等价]"]
-        L1D["🔧 部署与运维层：openship [🔁自研等价]"]
+        L1C["🔧 跨平台交互客户端：Cindy / nanobot [🔗纯参考]（nanobot=MIT Py3.11+ 可装但依赖与 AOS 冲突；Cindy 非 Python；AOS 用 FabricHub）"]
+        L1D["🔧 部署与运维层：openship [🔗纯参考]（oblien/openship=Apache-2.0 部署平台，服务非库；AOS 有 start_all.sh/Dockerfile）"]
         L1E["🔧 语音交互子层：Fish Speech（CC-BY-NC-SA 禁商用）[🔗纯参考]"]
         L1E2["🔧 离线语音识别：Vosk（Apache-2.0 已真接）[✅AOS已接开源]"]
         L1E3["🔧 离线语音合成：Piper（Apache-2.0 已真接，替代 Fish Speech）[✅AOS已接开源]"]
@@ -72,13 +72,13 @@ flowchart TB
         L2F["⚡ 元认知自省内核 [✅AOS代码]"]
         L2G["⚡ 粒子冲突协调协议 [✅AOS代码]"]
         L2H["⚡ 柔性目标演化引擎 [✅AOS代码]"]
-        L2I["🔗 分形参考：plasma-ai/fractal 递归硬上限 [🔁自研等价]"]
+        L2I["🔗 分形参考：plasma-ai/fractal 递归硬上限 [🔁自研等价]（fractal Apache-2.0 真开源，但 Unix-only+tmux+外部 CLI 不可引；AOS kernel/fractal/ 跨平台等价）"]
     end
 
     subgraph L3["📚 数据底座层（记忆存储内核）"]
         L3A["⚡ 第四层·永久传承层：LanceDB（已装0.36 版本/表分支实测；SeekDB为OceanBase服务端参考）[✅AOS已接开源]"]
         L3B["⚡ 第三层·长期语义层：Chroma/cognee/mem0（已复用，不新增依赖）[✅AOS已用开源]"]
-        L3C["⚡ 第二层·工作记忆层：TriviumDB(Alpha) + Turso [🔁自研等价]"]
+        L3C["⚡ 第二层·工作记忆层：TriviumDB + Turso [🔁外部未接]（实测：TriviumDB <3.13；Turso sdist Rust 构建阻）"]
         L3D["⚡ 第一层·瞬时感知层：DuckDB（实时分析）[✅AOS代码]"]
         L3E["🔧 统一可视化层：DBX（AGPL-3.0 许可红线，不集成）[🔗纯参考]"]
     end
@@ -103,7 +103,7 @@ flowchart TB
     subgraph L6["🌱 第六层：演进层（持续生长）"]
         L6A["⚡ 镜像分支试错 [✅AOS代码]"]
         L6B["⚡ 共识自演化 [✅AOS代码]"]
-        L6C["⚡ 自主数字生命引擎：Automaton [🔁自研等价]"]
+        L6C["⚡ 自主数字生命引擎：Automaton [🔁自研等价]（Automaton MIT，但需 Conway Cloud+链上钱包+USDC，不可引；AOS self_evolve_engine 等价）"]
         L6D["🔗 参考实现：PhyAgentOS（认知-物理解耦）[🔗纯参考]"]
     end
 
@@ -113,7 +113,7 @@ flowchart TB
         L7C["⚡ 人本因果仿真（第二层）[✅AOS代码]"]
         L7D["⚡ 行动规划仲裁器 [✅AOS代码]"]
         L7E["⚡ 故障紧急制动总线 [✅AOS代码]"]
-        L7F["⚡ 经济身份与支付网关：Conway Terminal [🔁自研等价]"]
+        L7F["⚡ 经济身份与支付网关：Conway Terminal [🔁自研等价]（Conway Terminal MIT MCP，但需 Conway Cloud+链上钱包+USDC，不可引；AOS billing 等价）"]
         L7G["🔗 参考架构：PhyAgentOS 认知-物理执行解耦 [🔗纯参考]"]
     end
 
@@ -182,12 +182,12 @@ flowchart TB
 | L0C 决策锚定 | L0 | ✅AOS代码 | `kernel/life_state.py` + `kernel/spirit/datong.py` | ② |
 | L1A LocalAI v4.7.1 | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/localai_backend.py` OpenAI 兼容客户端（opt-in，需运行 LocalAI 服务端）；与现有 model_gateway 三级路由互补（本地/私有化一档） | ② |
 | L1B CLIProxyAPI / LiteLLM | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/litellm_adapter.py` `LiteLLMAdapter`（统一 100+ provider OpenAI 格式路由，已装 1.95.0）；与现有三级动态路由 `model_gateway_layer.py` 互补（轻量库模式 / 代理模式） | ② |
-| L1C Cindy / nanobot | L1 | 🔁自研等价 | 未集成；等价：`web/app.py`（3000+ 行控制台）+ `api/*.py`（REST 全量端点） | ② |
-| L1D openship | L1 | 🔁自研等价 | 未集成；等价：`Dockerfile` + `docker-compose.yml` + `start_all.sh` + `scripts/` | ② |
-| L1E Fish Speech | L1 | 🔗纯参考 | **CC-BY-NC-SA 禁商用**，不集成；由 L1E3 Piper（Apache-2.0）真接替代；等价保留 `core/fabric/adapters/tts_adapter.py` | — |
+| L1C Cindy / nanobot | L1 | 🔗纯参考 | **nanobot=HKUDS/nanobot MIT Python≥3.11 可装但依赖与 AOS 冲突（卸 rich15）**；Cindy=makecindy/cindy Apache-2.0 TS 桌面端、需云账号、非 Python 不可嵌；**AOS 用 FabricHub/agnes/ag2 自研等价**，未引外部代码 | ② |
+| L1D openship | L1 | 🔗纯参考 | **两个不同项目**：oblien/openship=Apache-2.0 部署/运维平台（MCP+REST+npm CLI，服务非库）；margutti/openship=旧 MIT 电商履约；均非 drop-in 库；AOS 有 `start_all.sh`/`Dockerfile`/`scripts/` 等价部署脚本 | ② |
+| L1E Fish Speech | L1 | 🔗纯参考 | **代码 BSD-3-Clause 可商用；模型权重 CC-BY-NC-SA-4.0 禁商用**（已核实），不集成；由 L1E3 Piper（Apache-2.0）真接替代；等价保留 `core/fabric/adapters/tts_adapter.py` | — |
 | L1E2 Vosk | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/vosk_backend.py` + `STTAdapter` 引擎链新增 `vosk`（已装 vosk 0.3.45，离线 STT，流式可用）；无模型时诚实降级 | ② |
 | L1E3 Piper | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/piper_backend.py` `PiperTTS` + `TTSAdapter` 引擎链新增 `piper`（已装 piper-tts 1.6.0，离线 TTS，替代 Fish Speech 禁商用）；无模型时诚实降级（opt-in 下载 huayan ~60MB） | ② |
-| L1F turbo-fieldfare | L1 | 🔗纯参考 | 实验性端侧推理优化，仅标注思想来源，不计入能力 | — |
+| L1F turbo-fieldfare | L1 | 🔗纯参考 | **Apache-2.0 Swift/Metal，仅 macOS 26+/Apple Silicon**；暴露 `127.0.0.1:8080` OpenAI 兼容本地端点（opt-in 端侧 LLM）；仅标注思想来源，不计入核心能力 | — |
 | L1G 硬件抽象层 | L1 | ✅AOS代码 | `kernel/body/hal.py` | ② |
 | L1H Phy-Bus 物理适配总线 | L1 | ✅AOS代码 | `kernel/body/phy_bus.py` | ② |
 | L1I MCP 2026-07-28 | L1 | ✅AOS代码 | `aos_mcp/` + `kernel/layers/mcp_bus_layer.py` + `core/fabric/adapters/mcp_*.py` | ② |
@@ -199,12 +199,12 @@ flowchart TB
 | L2F 元认知自省内核 | L2 | ✅AOS代码 | `kernel/metacognition.py` | ② |
 | L2G 粒子冲突协调协议 | L2 | ✅AOS代码 | `kernel/fractal/conflict.py` | ② |
 | L2H 柔性目标演化引擎 | L2 | ✅AOS代码 | `kernel/goal_evolution.py` | ② |
-| L2I plasma-ai/fractal | L2 | 🔁自研等价 | 未引入；等价：`kernel/fractal/`（spawner/growth_guard 递归硬上限自研） | ② |
+| L2I plasma-ai/fractal | L2 | 🔁自研等价 | **fractal=plasma-ai/fractal Apache-2.0 真开源（递归硬上限 Agent 树）**，但 `import fractal`→`fcntl` 缺失（**Unix-only**）+ 需 tmux+外部 agent CLI（claude/codex 等）→ 跨平台不可引；**AOS `kernel/fractal/`（spawner/growth_guard）为跨平台自研等价** | ② |
 | L3A 永久传承层（LanceDB 已真接 / SeekDB 参考） | L3 | ✅AOS已接开源 | `kernel/store/memory_ladder.py` `LazyExternalTier("lancedb")` **已装 0.36.0，store/recall/版本化/表分支(create/checkout/diff/list) 实测通过**；SeekDB 为 OceanBase 服务端参考项（本地优先场景由 LanceDB 承担） | ② |
 | L3B 长期语义层（Chroma/cognee/mem0 已用） | L3 | ✅AOS已用开源 | AOS 长期语义层**直接复用开源 Chroma + cognee + mem0**；KowitoDB/txtai 按「现有够好→复用」**不新增依赖**（克隆仅作参考） | ② |
-| L3C TriviumDB + Turso（工作记忆层） | L3 | 🔁外部未接 | opt-in `LazyExternalTier`；**本环境 Py3.13 / Rust-only 接不上**，import 即 ImportError 诚实降级（**绝不退回内存冒充**，旧代码曾骗人已修） | ② |
+| L3C TriviumDB + Turso（工作记忆层） | L3 | 🔁外部未接 | **实测核实（非假定）**：TriviumDB 全部版本 `Requires-Python >=3.9,<3.13`（`pip install` 实测拒绝）；Turso `pyturso` 仅 sdist、Rust 源码编译在沙箱 exit1。opt-in `LazyExternalTier` 诚实降级，**绝不退回内存冒充** | ② |
 | L3D DuckDB（瞬时感知层） | L3 | ✅AOS代码 | `kernel/store/memory_ladder.py` `DuckDBTier`（真集成，非 stub；本环境 Python 3.13 实测真连） | ② |
-| L3E DBX 可视化 | L3 | 🔗纯参考 | **AGPL-3.0 单一许可证**（已核实），商用须履行 AGPL 义务 → 不集成；等价：`web/app.py` 统一控制台 | — |
+| L3E DBX 可视化 | L3 | 🔗纯参考 | **t8y2/dbx，AGPL-3.0 单一许可证**（已核实），是 GUI 工具非库，商用须履行 AGPL 义务 → 不集成；等价：`web/app.py` 统一控制台 | — |
 | L4A 年轮时空记忆 | L4 | ✅AOS代码 | `kernel/soul/tree_ring.py`（四圈压缩 fresh/recent/season/core） | ② |
 | **L4B 时空环境记忆库** | L4 | ✅AOS代码 | `kernel/soul/tree_ring.py`：`Memory.locus`+`when` 双索引、`recall(locus/since/until/tags)`、`timeline()`、`loci()` ← **前版误判为空壳** | ② |
 | L4C 数字家谱 · 代际传承 | L4 | ✅AOS代码 | `kernel/soul/lineage.py`（教训按代衰减 `LESSON_DECAY=0.7`，防祖训僵化） | ② |
@@ -218,21 +218,21 @@ flowchart TB
 | L5G video-shotcraft | L5 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/video_shotcraft_backend.py`（vendor/ 已克隆 + node 检测；真渲染 `pnpm install`+`npx remotion render` 需主机跑，③） | ② |
 | L6A 镜像分支试错 | L6 | ✅AOS代码 | `kernel/evolve/mirror_branch.py` | ② |
 | L6B 共识自演化 | L6 | ✅AOS代码 | `kernel/spirit/consensus.py` + `kernel/evolve/evolve_engine.py` | ② |
-| L6C Automaton 自主数字生命引擎 | L6 | 🔁自研等价 | 未引入；等价：`kernel/evolution.py` + `lifeform/self_evolve_engine.py`（含 `EvolutionLimit` 硬护栏） | ② |
-| L6D PhyAgentOS | L6 | 🔗纯参考 | 认知-物理解耦架构参考，不需 AOS 代码 | — |
+| L6C Automaton 自主数字生命引擎 | L6 | 🔁自研等价 | Automaton=Conway-Research/automaton **MIT**，但需**以太坊钱包+Conway Cloud+USDC(x402)** 才能运行 → 不可引；**AOS `kernel/evolution.py`+`lifeform/self_evolve_engine.py`（含 `EvolutionLimit` 硬护栏）为自研等价**（生存/复制/进化理念，不含链上依赖） | ② |
+| L6D PhyAgentOS | L6 | 🔗纯参考 | HCPLab-SYSU/PhyAgentOS 具身 AI OS，**built on nanobot**；认知-物理解耦 + State-as-a-File Markdown 协议可借鉴；不同域（机器人），不需 AOS 代码 | — |
 | L7A 感知数据流网关 | L7 | ✅AOS代码 | `kernel/interact/perception_gateway.py`（AOS 自研，非外部件） | ② |
 | L7B 物理仿真 / 世界模型（第一层） | L7 | ✅AOS代码 | `lifeform/world_model_engine.py` + `kernel/causal.py`（**线性因果叠加 stub，非训练出的 JEPA**） | ② |
 | L7C 人本因果仿真（第二层） | L7 | ✅AOS代码 | `kernel/interact/human_causal_sim.py` | ② |
 | L7D 行动规划仲裁器 | L7 | ✅AOS代码 | `kernel/action_arbiter.py` | ② |
 | L7E 故障紧急制动总线 | L7 | ✅AOS代码 | `kernel/interact/emergency_brake.py` | ② |
-| L7F Conway Terminal 支付网关 | L7 | 🔁自研等价 | 未引入；等价：`api/billing_api.py` + `core/database/models/economy.py` | ② |
-| L7G PhyAgentOS（执行解耦） | L7 | 🔗纯参考 | 同 L6D，架构思想来源 | — |
+| L7F Conway Terminal 支付网关 | L7 | 🔁自研等价 | Conway Terminal=Conway Research `npx conway-terminal` **MIT MCP server**，但需**链上钱包+Conway Cloud+USDC(x402)** → 不可引；**AOS `api/billing_api.py`+`core/database/models/economy.py` 为自研等价**（支付网关概念，不含加密依赖） | ② |
+| L7G PhyAgentOS（执行解耦） | L7 | 🔗纯参考 | 同 L6D（PhyAgentOS 具身域，非 AOS 数字 Agent OS），架构思想来源 | — |
 | L8A 感知粒子 | L8 | ✅AOS代码 | `kernel/fractal/particles.py` + `spawner.py` + `growth_guard.py`（框架真实；具体硬件驱动待接） | ② |
 | L8B 轻执行粒子 | L8 | ✅AOS代码 | 同上（`kernel/fractal/` 统一粒子框架） | ② |
 | L8C 重型具身粒子 | L8 | ✅AOS代码 | 同上（框架就绪，机器人本体未接） | ② |
 | L8D 数字粒子 | L8 | ✅AOS代码 | 同上（PC/服务器侧已可 spawn） | ② |
-| L9A dg-ai-notes | L9 | 🔗纯参考 | 外部教程文档仓库，不需集成 | — |
-| L9B openKylin AgentOS SIG | L9 | 🔗纯参考 | 社区生态对齐 | — |
+| L9A dg-ai-notes | L9 | 🔗纯参考 | buchidonggua/dg-ai-notes，**MIT 教程仓库**（Pi-Agent SDK 10 章拆解），非库，不需集成 | — |
+| L9B openKylin AgentOS SIG | L9 | 🔗纯参考 | openKylin 社区 AgentOS SIG（基于 openKylin 2.0 的开源智能体 OS，国防科大/哈工大(深圳)/麒麟软件共建），国产生态对齐，非库 | — |
 
 ### 该用的开源 → 实际集成状态（2026-08-02 收口，回应「该用的开源一个没有用」）
 
@@ -242,10 +242,21 @@ flowchart TB
 | :--- | :--- | :--- |
 | ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft、**L1E3 Piper**、**CONST3 constitutional-agent**、**L1B LiteLLM** | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** Apache-2.0 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm）；**Piper 1.6.0 真装**（Apache-2.0 离线 TTS，接入 TTSAdapter 引擎链替代 Fish Speech 禁商用权重，无模型诚实降级）；**constitutional-agent 0.7.0 真装**（MIT 本地宪法治理，封装 `Constitution` 六闸门+硬约束评估，无需外部 LLM）；**LiteLLM 1.95.0 真装**（MIT 统一 100+ provider OpenAI 路由，`LiteLLMAdapter` 已注册） |
 | ✅ **AOS 已用开源** | L3B Chroma/cognee/mem0 | L3 长期语义层本就复用这三个开源，非自研；KowitoDB/txtai 按「现有够好→复用」不新增 |
-| 🔁 **本环境接不上（诚实降级）** | L3C TriviumDB/Turso | TriviumDB 是 Rust crate（PyPI 无轮子）；Turso 的 `libsql` 仅支持 Py<3.13。本环境 3.13.12 接不上，`import` 即 ImportError，绝不用内存冒充 |
-| 🔗 **许可红线不集成** | L1E Fish Speech（CC-BY-NC-SA 禁商用，已由 L1E3 Piper Apache-2.0 真接替代）、L3E DBX（AGPL-3.0） | 按铁律「不引许可不明/传染」不 import |
-| 🔁 **自研等价/服务框架（铁律：现有够好→复用，不强制）** | L1C Cindy/nanobot、L1D openship、L2I plasma-ai/fractal、L6C Automaton、L7F Conway Terminal | AOS 已有对应适配器/控制台（FabricHub、web/app.py、voice/、billing/）；openship/nanobot 是服务或框架非 drop-in 库；plasma-ai/fractal、Automaton、PhyAgentOS 是架构思想来源；CONST3/L1B/L1E3 已真接开源（见上） |
-| 🔜 **下一批（服务类，待主机）** | L7F Conway 类支付 | 支付网关属服务，主机接（AOS 已有 `api/billing_api.py` 等价） |
+| 🔁 **本环境接不上（实测核实，诚实降级）** | L3C TriviumDB/Turso | **实测**：TriviumDB 全部版本 `Requires-Python >=3.9,<3.13`（`pip install` 实测拒绝）；Turso `pyturso` 仅 sdist、Rust 源码编译在沙箱 exit1。本环境 3.13.12 接不上，绝不用内存冒充 |
+| 🔗 **纯参考/生态对齐（非库·服务·平台不兼容·许可红线）** | L1C Cindy/nanobot、L1D openship、L1E Fish Speech、L1F turbo-fieldfare、L3E DBX、L6D/L7G PhyAgentOS、L9A dg-ai-notes、L9B openKylin | Cindy/nanobot/openship 是框架或服务非 drop-in 库（nanobot 可装但依赖与 AOS 冲突，AOS 用 FabricHub/部署脚本）；Fish Speech 模型 NC（Piper 替代）；turbo-fieldfare 仅 macOS/Apple Silicon；DBX AGPL；PhyAgentOS 具身域；dg-ai-notes 教程；openKylin 国产生态。均不需 AOS 代码 |
+| 🔁 **自研等价（外部不可引，AOS 有等价）** | L2I plasma-ai/fractal、L6C Automaton、L7F Conway Terminal | **均实测不可引**：fractal Unix-only(fcntl)+tmux+外部 CLI；Automaton/Conway 需 Conway Cloud+链上钱包+USDC。AOS 自研等价（`kernel/fractal/`、`kernel/evolution.py`+`self_evolve_engine.py`、`api/billing_api.py`+`economy.py`）；CONST3/L1B/L1E3 已真接开源（见上） |
+| 🔜 **下一批（主机验证项）** | ③ 端到端用例（Vosk 真转写 / Piper 真合成 / LocalAI 真推理 / video-shotcraft 真渲染 / LiteLLM 多 provider 真路由） | 均需模型下载/API key/Node，主机稳定网络可跑，沙箱已诚实 skip |
+
+### 13 个 🔁/🔗 节点深度调研结论（2026-08-02 收口，回应「没调研清楚 就贴标签」）
+
+> 用户批评：此前对 🔁/🔗 节点的定性「没有逐个深度调研吃透」。本回合对架构图全部 **13 个 🔁/🔗 节点** 做全网搜索 + 必要 WebFetch + 运行环境实测，逐节点核实真实身份 / 许可证 / 技术栈 / 可否接入，完整证据见 **`docs/research/lifeform_os_refs_research_2026-08-02.md`**。
+>
+> **调研后结论：原标注基本正确**（白皮书此前已诚实标注），但**订正了此前三处不精确的理由/描述**，并**公开纠正了我（上一轮）对 TriviumDB/Turso/fractal「该接却没接」的误判**：
+> - **L3C 理由订正**：此前写「Rust-only 接不上」不精确 → 实测为 **TriviumDB 全部版本 `Requires-Python >=3.9,<3.13`（`pip install` 实测拒绝）；Turso `pyturso` 仅 sdist、Rust 源码编译在沙箱 exit1**。标 🔁 接不上，理由经实测核实，非假定。
+> - **L2I 理由补全**：fractal 确为 Apache-2.0 真开源（递归硬上限 Agent 树），但 `import fractal`→`fcntl` 缺失（**Unix-only**）+ 需 tmux+外部 agent CLI → 跨平台不可引；AOS `kernel/fractal/` 自研等价成立。
+> - **L1C / L1D 重新定性为 🔗 纯参考**：nanobot（HKUDS，MIT，Py≥3.11）实测可装但依赖树与 AOS 冲突（会卸载 `rich` 15）；Cindy（Apache-2.0 TS 桌面端、需云账号）非 Python 不可嵌；openship（oblien，Apache-2.0）是部署平台/服务非库。二者均非 drop-in 库，AOS 用 FabricHub / 部署脚本覆盖，故归 🔗 生态参考而非 🔁 自研等价。
+>
+> **统计随之调整**：🔁 6→4（L2I/L3C/L6C/L7F，均实测不可引、AOS 有自研等价），🔗 7→9（增补 L1C/L1D）。✅ 仍为 46。
 
 **诚实边界（不夸大）**：
 - LanceDB 本地模式 **merge 仅支持 remote 表**（0.36 本地报 `NotImplementedError`），故本地「数字家谱」= 分支隔离 + 不可变版本历史 + 时间旅行；跨分支合并需 LanceDB Cloud。
@@ -259,8 +270,8 @@ flowchart TB
 | 状态 | 数量 | 占比 | 说明 |
 | :--- | ---: | ---: | :--- |
 | ✅ AOS 已有真实代码 | **46** | 78.0% | 含**真接开源 DuckDB + LanceDB + Vosk + LocalAI + video-shotcraft + Piper + constitutional-agent + LiteLLM**；L3 语义层复用开源 Chroma/cognee/mem0 |
-| 🔁 外部未接（含本环境接不上） | **6** | 10.2% | 多为服务/框架/自研等价；TriviumDB/Turso 因 Py3.13/Rust 本环境接不上 |
-| 🔗 纯参考 / 生态对齐 / 许可红线 | **7** | 11.9% | SeekDB(服务端)/DBX(AGPL)/Fish Speech(CC-BY-NC-SA)/turbo-fieldfare/PhyAgentOS/dg-ai-notes/openKylin |
+| 🔁 外部未接 / 自研等价（实测不可引） | **4** | 6.8% | L2I(fractal Unix-only+tmux+外部 CLI)、L3C(TriviumDB<3.13+Turso Rust 构建阻)、L6C(Automaton 需 Conway Cloud+链上钱包)、L7F(Conway Terminal 需链上)；AOS 均有自研等价 |
+| 🔗 纯参考 / 生态对齐 / 许可红线 | **9** | 15.3% | L1C(Cindy/nanobot 框架非库)/L1D(openship 部署平台)/L1E(Fish Speech NC)/L1F(turbo-fieldfare Mac)/L3E(DBX AGPL)/L6D+L7G(PhyAgentOS 具身)/L9A(dg-ai-notes 教程)/L9B(openKylin SIG) |
 | 🚧 无代码空壳 | **0** | 0% | 逐节点核对后为 0（前版误判的 3 个已纠正） |
 
 **② 级实测证据（可复现，无需 pytest）**
