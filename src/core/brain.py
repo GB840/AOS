@@ -31,6 +31,8 @@ import os
 import time
 import logging
 import threading
+import shlex
+import ast
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
@@ -117,12 +119,18 @@ class DeerFlowGatewayClient:
         """
         try:
             from utils.config import config as _cfg
-            user = getattr(_cfg, "DEERFLOW_ADMIN_USER", None) or "admin"
+            user = getattr(_cfg, "DEERFLOW_ADMIN_USER", None)
             pwd = getattr(_cfg, "DEERFLOW_ADMIN_PASSWORD", None)
             if not pwd:
                 logger.warning(
                     "DEERFLOW_ADMIN_PASSWORD 未配置，跳过 DeerFlow 网关登录"
                     "（依赖网关鉴权关闭，或将 AOS_DEERFLOW_ADMIN_PASSWORD 设为网关实际口令）。"
+                )
+                return False
+            if not user:
+                logger.warning(
+                    "DEERFLOW_ADMIN_USER 未配置，跳过 DeerFlow 网关登录"
+                    "（请将 AOS_DEERFLOW_ADMIN_USER 设为网关实际用户名）。"
                 )
                 return False
         except Exception as e:
@@ -1281,7 +1289,74 @@ class UnifiedBrain:
     def _integrate_execution_with_deerflow(self):
         """Deep integration of execution layer with DeerFlow gateway."""
         
+        def _validate_python_code(code: str) -> tuple[bool, str]:
+            """验证Python代码是否包含危险操作
+            
+            Returns:
+                (is_safe, error_message)
+            """
+            try:
+                tree = ast.parse(code)
+            except SyntaxError as e:
+                return False, f"语法错误: {e}"
+            
+            # 危险模块和函数黑名单
+            dangerous_imports = {
+                'os', 'subprocess', 'sys', 'shutil', 'pickle', 'marshal',
+                'ctypes', 'socket', 'urllib', 'requests', 'http', 'ftplib',
+                'telnetlib', 'smtplib', 'imaplib', 'poplib', 'nntplib',
+                'ssl', 'hashlib', 'base64', 'uuid', 'secrets', 'random',
+                'tempfile', 'shelve', 'dbm', 'sqlite3', 'mysql', 'psycopg2',
+                'pymongo', 'redis', 'celery', 'multiprocessing', 'threading',
+                'asyncio', 'concurrent', 'queue', 'signal', 'fcntl', 'resource',
+                'pty', 'termios', 'tty', 'pipes', 'select', 'asyncore', 'asynchat'
+            }
+            
+            dangerous_functions = {
+                'eval', 'exec', 'compile', 'open', 'input', 'raw_input',
+                'reload', '__import__', 'exit', 'quit', 'globals', 'locals',
+                'vars', 'dir', 'help', 'type', 'isinstance', 'issubclass',
+                'getattr', 'setattr', 'delattr', 'hasattr', 'property',
+                'super', 'object', 'type', 'metaclass', 'classmethod', 'staticmethod'
+            }
+            
+            for node in ast.walk(tree):
+                # 检测import语句
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module_name = alias.name.split('.')[0]
+                        if module_name in dangerous_imports:
+                            return False, f"禁止导入危险模块: {module_name}"
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        module_name = node.module.split('.')[0]
+                        if module_name in dangerous_imports:
+                            return False, f"禁止从危险模块导入: {module_name}"
+                
+                # 检测函数调用
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name):
+                        if node.func.id in dangerous_functions:
+                            return False, f"禁止调用危险函数: {node.func.id}"
+                    elif isinstance(node.func, ast.Attribute):
+                        if node.func.attr in dangerous_functions:
+                            return False, f"禁止调用危险方法: {node.func.attr}"
+                
+                # 检测exec和eval
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                    if isinstance(node.value.func, ast.Name):
+                        if node.value.func.id in ('exec', 'eval'):
+                            return False, f"禁止使用 {node.value.func.id}"
+            
+            return True, ""
+        
         def execute_sandbox_code(language, code, sandbox_id=None):
+            # 对Python代码进行安全验证
+            if language == "python":
+                is_safe, error_msg = _validate_python_code(code)
+                if not is_safe:
+                    return {"error": error_msg}
+            
             if not sandbox_id:
                 result = self.sandbox.create_sandbox()
                 if not result["success"]:
@@ -1291,6 +1366,12 @@ class UnifiedBrain:
             return self.sandbox.execute_code(sandbox_id, code, language)
         
         def execute_bash(command):
+            # 安全验证：检测命令拼接操作符
+            dangerous_pattern = r'[;&|`$()><\n\t\r]'
+            import re
+            if re.search(dangerous_pattern, command):
+                return {"error": f"命令包含危险操作符: {command}"}
+            
             result = self.sandbox.create_sandbox()
             if not result["success"]:
                 return {"error": result["error"]}
@@ -1298,6 +1379,16 @@ class UnifiedBrain:
             return self.sandbox.execute_code(sandbox_id, command, "bash")
         
         def read_file(file_path):
+            # 路径遍历防护：验证file_path不包含..或绝对路径
+            if not file_path:
+                return {"error": "文件路径不能为空"}
+            if ".." in file_path or file_path.startswith("/") or file_path.startswith("\\"):
+                return {"error": "禁止使用路径遍历或绝对路径"}
+            # 只允许字母数字、下划线、连字符、点和斜杠
+            import re
+            if not re.match(r'^[\w\-./]+$', file_path):
+                return {"error": "文件路径包含非法字符"}
+            
             workspace = self.workspace.list_workspaces()
             if workspace["workspaces"]:
                 workspace_id = workspace["workspaces"][0]["id"]
@@ -1305,6 +1396,16 @@ class UnifiedBrain:
             return {"error": "No workspace found"}
         
         def write_file(file_path, content):
+            # 路径遍历防护：验证file_path不包含..或绝对路径
+            if not file_path:
+                return {"error": "文件路径不能为空"}
+            if ".." in file_path or file_path.startswith("/") or file_path.startswith("\\"):
+                return {"error": "禁止使用路径遍历或绝对路径"}
+            # 只允许字母数字、下划线、连字符、点和斜杠
+            import re
+            if not re.match(r'^[\w\-./]+$', file_path):
+                return {"error": "文件路径包含非法字符"}
+            
             workspace = self.workspace.list_workspaces()
             if not workspace["workspaces"]:
                 result = self.workspace.create_workspace("default")

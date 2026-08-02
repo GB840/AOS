@@ -36,6 +36,59 @@ _LOG = logging.getLogger(__name__)
 # 审计日志 — 不可篡改的追加式记录
 # ═══════════════════════════════════════════════════════════════════
 
+
+def _redact_sensitive_data(data: Any) -> Any:
+    """递归脱敏敏感数据
+    
+    遍历所有嵌套字典和列表，对匹配敏感字段模式的键进行脱敏。
+    
+    Args:
+        data: 要脱敏的数据（可以是字典、列表或其他类型）
+        
+    Returns:
+        脱敏后的数据（深拷贝，不修改原数据）
+    """
+    # 敏感字段模式（正则表达式）
+    sensitive_patterns = [
+        r'phone', r'mobile', r'tel',           # 手机号
+        r'email', r'mail',                      # 邮箱
+        r'id_card', r'idcard', r'identity',     # 身份证
+        r'api_key', r'apikey', r'api-key',      # API密钥
+        r'token', r'jwt', r'session',           # 令牌
+        r'password', r'passwd', r'pwd',         # 密码
+        r'secret', r'private_key', r'privkey',  # 密钥
+        r'ip_address', r'ipaddr', r'ip',        # IP地址
+        r'wechat_id', r'wxid', r'openid',       # 微信ID
+        r'credit_card', r'card',                # 银行卡
+        r'ssn', r'social_security',             # 社保号
+    ]
+    
+    # 编译正则表达式（忽略大小写）
+    sensitive_regex = re.compile('|'.join(sensitive_patterns), re.IGNORECASE)
+    
+    def _is_sensitive_key(key: str) -> bool:
+        """检查键是否匹配敏感字段模式"""
+        return bool(sensitive_regex.search(key))
+    
+    def _redact_value(key: str, value: Any) -> Any:
+        """根据键名脱敏值"""
+        if isinstance(value, dict):
+            return {k: _redact_value(k, v) for k, v in value.items()}
+        elif isinstance(value, (list, tuple)):
+            return [_redact_value(f"{key}[{i}]", item) for i, item in enumerate(value)]
+        elif _is_sensitive_key(key):
+            # 脱敏：保留前3位和后4位，中间用*代替
+            if isinstance(value, str) and len(value) > 7:
+                return f"{value[:3]}{'*' * (len(value) - 7)}{value[-4:]}"
+            elif isinstance(value, str):
+                return "*" * len(value)
+            else:
+                return "***"
+        else:
+            return value
+    
+    return _redact_value("", data)
+
 @dataclass
 class AuditEntry:
     """一条不可篡改的审计记录。
@@ -65,11 +118,7 @@ class AuditEntry:
             self.chain_hash = hashlib.sha256(f"{self.prev_hash}|{self.entry_hash}".encode()).hexdigest()
 
     def __str__(self):
-        detail = self.detail.copy()
-        if "ip_address" in detail:
-            detail["ip_address"] = "x.x.x.x"
-        if "wechat_id" in detail:
-            detail["wechat_id"] = "wxid_xxxxx"
+        detail = _redact_sensitive_data(self.detail)
         return f"AuditEntry(actor={self.actor!r}, action={self.action!r}, resource={self.resource!r}, result={self.result!r}, detail={detail!r}, timestamp={self.timestamp}, event_id={self.event_id!r}, entry_hash={self.entry_hash!r}, chain_hash={self.chain_hash!r})"
 
 

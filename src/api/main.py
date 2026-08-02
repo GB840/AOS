@@ -3,6 +3,7 @@ import os
 import time
 import json
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 sys.dont_write_bytecode = True
@@ -1541,14 +1542,13 @@ def _is_command_allowed(command: str) -> bool:
     """检查命令是否匹配白名单中的某个前缀，并检测命令拼接攻击。"""
     stripped = command.strip()
     
-    # 1. 检测命令拼接操作符
-    dangerous_operators = [";", "|", "&", "&&", "||", ">", ">>", "<", "`", "$(", "$("]
-    for op in dangerous_operators:
-        if op in stripped:
-            logger.warning(
-                "sandbox_exec 拒绝：检测到命令拼接操作符 (operator=%s, command=%.120s)", op, stripped,
-            )
-            return False
+    # 1. 检测命令拼接操作符（使用正则表达式，包含换行符等绕过字符）
+    dangerous_pattern = r'[;&|`$()><\n\t\r]'
+    if re.search(dangerous_pattern, stripped):
+        logger.warning(
+            "sandbox_exec 拒绝：检测到命令拼接操作符 (command=%.120s)", stripped,
+        )
+        return False
     
     # 2. 精确匹配：命令第一个token必须在白名单中
     tokens = stripped.split()

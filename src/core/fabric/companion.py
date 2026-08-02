@@ -491,7 +491,7 @@ _SCENES: dict = {}
 
 def _store_scene(html: str) -> str:
     import hashlib
-    sid = hashlib.sha1(html.encode("utf-8")).hexdigest()[:12]
+    sid = hashlib.sha256(html.encode("utf-8")).hexdigest()[:12]
     _SCENES[sid] = html
     return sid
 

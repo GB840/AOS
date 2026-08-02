@@ -67,7 +67,7 @@ class TaskFingerprint:
     def generate_fingerprint(self, task: str) -> str:
         """生成任务指纹"""
         normalized = self._normalize_task(task)
-        return hashlib.md5(normalized.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
     def _normalize_task(self, task: str) -> str:
         """标准化任务描述"""

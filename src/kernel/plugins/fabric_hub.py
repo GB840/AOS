@@ -18,6 +18,7 @@ import os
 import shutil
 import json
 import time
+import threading
 from pathlib import Path
 from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional
@@ -75,23 +76,30 @@ _SESSIONS: "OrderedDict[str, List[Dict[str, str]]]" = OrderedDict()
 _SESSION_MAX_TURNS = 5
 _SESSION_MAX_COUNT = 1024  # 最多缓存会话数，超出按 LRU 淘汰，防无限增长
 _SESSION_DIR = Path("data/workspaces/fabric/sessions")
+_SESSION_LOCK = threading.Lock()  # 保护_SESSIONS的并发访问
 
 
 def _session_path(session_id: str) -> Path:
+    # 路径遍历防护：验证session_id只包含字母数字、连字符和下划线
+    import re
+    if not re.match(r'^[\w\-]+$', session_id):
+        raise ValueError(f"Invalid session_id: {session_id}")
     return _SESSION_DIR / f"{session_id}.json"
 
 
 def _load_session(session_id: str) -> List[Dict[str, str]]:
     """加载会话历史：先查内存缓存，没有再读磁盘。"""
-    if session_id in _SESSIONS:
-        _SESSIONS.move_to_end(session_id)
-        return _SESSIONS[session_id]
+    with _SESSION_LOCK:
+        if session_id in _SESSIONS:
+            _SESSIONS.move_to_end(session_id)
+            return _SESSIONS[session_id]
     p = _session_path(session_id)
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             if isinstance(data, list):
-                _SESSIONS[session_id] = data
+                with _SESSION_LOCK:
+                    _SESSIONS[session_id] = data
                 return data
         except Exception:  # noqa: BLE001
             pass
@@ -103,11 +111,12 @@ def _save_session(session_id: str, history: List[Dict[str, str]]) -> None:
     # 限制每个会话最多保留最近5轮历史
     if len(history) > _SESSION_MAX_TURNS:
         history = history[-_SESSION_MAX_TURNS:]
-    _SESSIONS[session_id] = history
-    _SESSIONS.move_to_end(session_id)
-    # LRU 淘汰：超出会话数上限时丢弃最久未访问的会话(R-4)
-    while len(_SESSIONS) > _SESSION_MAX_COUNT:
-        _SESSIONS.popitem(last=False)
+    with _SESSION_LOCK:
+        _SESSIONS[session_id] = history
+        _SESSIONS.move_to_end(session_id)
+        # LRU 淘汰：超出会话数上限时丢弃最久未访问的会话(R-4)
+        while len(_SESSIONS) > _SESSION_MAX_COUNT:
+            _SESSIONS.popitem(last=False)
     try:
         _SESSION_DIR.mkdir(parents=True, exist_ok=True)
         _session_path(session_id).write_text(
@@ -747,7 +756,7 @@ class FabricHub:
         if not url:
             return None
         host = url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
-        if host not in ("localhost", "127.0.0.1", "::1", "0.0.0.0") and not host.endswith(".localhost"):
+        if host not in ("localhost", "127.0.0.1", "::1") and not host.endswith(".localhost"):
             _LOG.warning(
                 "IDA_PRO_MCP_URL 非 localhost，拒绝注册（红线：仅连你自己机器上的 IDA）：%s",
                 url,

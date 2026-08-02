@@ -1838,7 +1838,7 @@ def _assemble(task, used_planner, plan_text, steps, exe_res, cycle, start) -> Di
 
 def _new_run_id(task: str) -> str:
     """短稳定 run_id：task 哈希 + 时间戳，避免重名冲突且可读定位。"""
-    h = hashlib.md5((task + str(time.time())).encode("utf-8")).hexdigest()[:12]
+    h = hashlib.sha256((task + str(time.time())).encode("utf-8")).hexdigest()[:12]
     return f"run_{h}"
 
 

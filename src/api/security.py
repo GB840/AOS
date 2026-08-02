@@ -265,6 +265,38 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         # 是否启用统一鉴权：未配置任何凭据时（仅开发环境，生产已在上方 fail-fast）放开。
         self._auth_enabled = bool(config.API_KEY or getattr(config, "API_KEY_HASH", None))
 
+    @staticmethod
+    def _is_trusted_localhost(request: Request) -> bool:
+        """验证请求是否来自可信的本地回环地址
+        
+        防止通过伪造 X-Forwarded-For、X-Real-IP 等代理头部绕过本地回环免鉴权。
+        只有当 request.client.host 是本地回环地址，且没有代理头部时，才认为可信。
+        
+        Args:
+            request: FastAPI 请求对象
+            
+        Returns:
+            bool: 如果请求来自可信的本地回环地址，返回 True；否则返回 False
+        """
+        if not request.client:
+            return False
+        
+        # 检查 client.host 是否为本地回环地址
+        if request.client.host not in ("127.0.0.1", "::1", "localhost"):
+            return False
+        
+        # 检查是否存在代理头部（如果存在，说明请求可能被伪造）
+        proxy_headers = ["X-Forwarded-For", "X-Real-IP", "Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto"]
+        for header in proxy_headers:
+            if header in request.headers:
+                logger.warning(
+                    "检测到代理头部 %s，拒绝本地回环免鉴权（可能伪造）: client.host=%s, %s=%s",
+                    header, request.client.host, header, request.headers[header]
+                )
+                return False
+        
+        return True
+
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
 
@@ -280,7 +312,8 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         # 1.5) 本地回环免鉴权（AGENTS.md §1.5「本地进程 — 全量放行」）：
         #      桌面产品在本机运行，localhost 打开即用；远程入口仍强制 Token。
         #      生产环境（经反向代理暴露）时 client.host 不再是回环地址，豁免自动失效。
-        if request.client and request.client.host in ("127.0.0.1", "::1", "localhost"):
+        #      安全增强：验证代理头部，防止通过伪造 X-Forwarded-For 等头部绕过鉴权。
+        if self._is_trusted_localhost(request):
             return await call_next(request)
 
         # 2) 上游网关子路径：由各自上游鉴权（架构性豁免，非弱鉴权）。
@@ -395,6 +428,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     同时支持 IP 级别和 API Key 级别的限流。
     """
 
+    # 最大容量限制（防止恶意攻击消耗内存）
+    MAX_CLIENTS = 10000
+    MAX_API_KEYS = 5000
+
     def __init__(self, app, max_requests: int = 100, time_window_seconds: int = 60):
         super().__init__(app)
         self.max_requests = max_requests
@@ -407,7 +444,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._api_keys: dict = defaultdict(deque)  # v1.0: API Key 级别限流
         self._lock = threading.Lock()
         self._last_cleanup = datetime.now()
-        self._cleanup_interval = timedelta(minutes=5)
+        self._cleanup_interval = timedelta(minutes=1)  # 缩短清理间隔至1分钟
 
         logger.info("速率限制中间件: IP=%dreq/%ds | API-Key=%dreq/%ds",
                     max_requests, time_window_seconds,
@@ -419,7 +456,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if now - self._last_cleanup < self._cleanup_interval:
             return
         with self._lock:
-            for store in (self._clients, self._api_keys):
+            for store, max_capacity in [(self._clients, self.MAX_CLIENTS), (self._api_keys, self.MAX_API_KEYS)]:
                 expired = []
                 for key, requests in store.items():
                     while requests and now - requests[0] > timedelta(seconds=self.time_window):
@@ -428,6 +465,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                         expired.append(key)
                 for key in expired:
                     del store[key]
+                
+                # 容量限制：如果超过最大容量，删除最旧的条目（LRU）
+                if len(store) > max_capacity:
+                    # 按最后请求时间排序，删除最旧的
+                    sorted_keys = sorted(store.keys(), key=lambda k: store[k][-1] if store[k] else 0)
+                    keys_to_remove = sorted_keys[:len(store) - max_capacity]
+                    for key in keys_to_remove:
+                        del store[key]
+                    logger.warning("限流容量超限: 删除 %d 条最旧记录（当前=%d, 上限=%d）",
+                                len(keys_to_remove), len(store), max_capacity)
+            
             self._last_cleanup = now
             if expired:
                 logger.debug("限流清理: %d 条过期记录", len(expired))

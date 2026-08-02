@@ -457,7 +457,7 @@ class ZvecSkill(Skill):
             import hashlib
             import numpy as np
             
-            hash_val = int(hashlib.md5(text.encode()).hexdigest(), 16)
+            hash_val = int(hashlib.sha256(text.encode()).hexdigest(), 16)
             np.random.seed(hash_val)
             return np.random.rand(384).tolist()
         except Exception:

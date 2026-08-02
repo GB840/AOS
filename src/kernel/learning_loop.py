@@ -172,7 +172,7 @@ def _pattern_similarity(a: set, b: set) -> float:
 def _fingerprint(task: str, failed_step: str, error: str) -> str:
     """生成该失败的唯一标识。"""
     raw = f"{task[:200]}|{failed_step}|{error[:200]}"
-    return hashlib.md5(raw.encode()).hexdigest()[:12]
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
 # ---- 失败分析器 --------------------------------------------------

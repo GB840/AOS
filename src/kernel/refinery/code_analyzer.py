@@ -476,7 +476,7 @@ class CodeAnalyzer:
                     body_stripped = self._normalize_ast(node)
                     if len(body_stripped) < 200:  # 太短不算重复
                         continue
-                    h = hashlib.md5(body_stripped.encode()).hexdigest()[:12]
+                    h = hashlib.sha256(body_stripped.encode()).hexdigest()[:12]
                     if h not in func_hashes:
                         func_hashes[h] = []
                     func_hashes[h].append((rel, node.lineno, node.name))

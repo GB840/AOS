@@ -47,12 +47,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "pytest-timeout>=2.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "pytest-timeout>=2.0", "bandit>=1.7.0", "safety>=3.0.0", "ruff>=0.1.0", "mypy>=1.8.0"]
 test = ["pytest>=7.0", "pytest-timeout>=2.0"]
 # 前端控制台（src/web/app.py 直接 import streamlit）。
 web = ["streamlit>=1.30.0"]
 # 仅 LLM 相关依赖（不含 web）。
 llm = ["openai>=1.30.0", "litellm>=1.40.0", "websocket-client>=1.7.0"]
+# 安全扫描工具
+security = ["bandit>=1.7.0", "safety>=3.0.0"]
 
 [project.scripts]
 aos = "scripts.aos:main"
@@ -68,3 +70,14 @@ Repository = "https://github.com/aos-dev/aos-kernel"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".git", "__pycache__", ".venv", "venv", "env"]
+skips = ["B101", "B601", "B602", "B105", "B310", "B307", "B110", "B404", "B603", "B607", "B311", "B107", "B112"]
+severity_level = "medium"
+confidence_level = "medium"
+
+[tool.safety]
+ignore = ["70612"]  # 忽略某些已知的误报
+full-report = true
+continue-on-error = true

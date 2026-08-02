@@ -211,7 +211,7 @@ class RefineryEvolutionLoop:
 
             # 生成模式 ID（基于 category + 类型特征）
             pattern_key = self._pattern_key(category, title, risk)
-            pattern_id = hashlib.md5(pattern_key.encode()).hexdigest()[:12]
+            pattern_id = hashlib.sha256(pattern_key.encode()).hexdigest()[:12]
 
             if pattern_id not in self._patterns:
                 self._patterns[pattern_id] = DistilledPattern(

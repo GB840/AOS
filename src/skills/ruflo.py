@@ -178,8 +178,9 @@ class RuFloSkill(Skill):
                 },
             }
             
-            temp_file = Path(tempfile.mktemp(suffix=".json"))
-            with open(temp_file, "w", encoding="utf-8") as f:
+            fd, temp_path = tempfile.mkstemp(suffix=".json")
+            temp_file = Path(temp_path)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(task_config, f, ensure_ascii=False)
             
             cmd = ["ruflo", "run", str(temp_file)]

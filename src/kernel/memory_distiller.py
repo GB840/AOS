@@ -138,7 +138,7 @@ class MemoryDistiller:
             key = f"{path}:{st.st_size}:{int(st.st_mtime)}"
         except OSError:
             key = path
-        return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
     def _load_state(self) -> Dict[str, str]:
         try:

@@ -134,7 +134,7 @@ class TTSAdapter(BaseAgentAdapter):
             return InvokeResult(ok=False, error=f"TTS 合成失败({self._engine}): {e}")
 
         # 落盘并返回可访问 URL
-        digest = hashlib.sha1((self._engine + "|" + text).encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha256((self._engine + "|" + text).encode("utf-8")).hexdigest()[:16]
         fname = f"{digest}.{ext}"
         fpath = os.path.join(_audio_dir(), fname)
         with self._lock:

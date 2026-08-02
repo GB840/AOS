@@ -74,7 +74,7 @@ else
   ( "$VENV_PY" -u -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --log-level info > aos_live.log 2>&1 & )
   # 等待健康
   for i in $(seq 1 24); do
-    c=$(curl -s -m 4 -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null)
+    c=$(curl -s -m 4 -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null || echo 000)
     [ "$c" = "200" ] && { echo "[start_all] AOS API 就绪 (${i}x5s)"; break; }
     sleep 5
   done

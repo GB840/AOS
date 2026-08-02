@@ -36,7 +36,7 @@ from core.fabric.capability import Capability
 
 logger = logging.getLogger(__name__)
 _DEFAULT_PROTOCOL = "2025-06-18"
-_LOCALHOST_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+_LOCALHOST_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # D3：写操作需显式 opt-in（payload read_only=False）才放行；调试类 unsafe 工具永远拒绝。
 _WRITE_TOOLS = frozenset({
