@@ -123,7 +123,33 @@ def test_no_phantom_nodes():
     assert tbl.get("L3C") == "🔁", f"L3C 必须为 🔁 外部未接，实际 {tbl.get('L3C')}"
     # L1E Fish Speech 必须非 ✅（模型 NC 禁商用）
     assert tbl.get("L1E") == "🔗", f"L1E 必须为 🔗 纯参考，实际 {tbl.get('L1E')}"
-    # L9B openKylin / L9C openEuler / L9D OpenHarmony 国产 OS 生态参考，必须 🔗 纯参考
-    assert tbl.get("L9B") == "🔗", f"L9B 必须为 🔗 纯参考，实际 {tbl.get('L9B')}"
-    assert tbl.get("L9C") == "🔗", f"L9C 必须为 🔗 纯参考，实际 {tbl.get('L9C')}"
-    assert tbl.get("L9D") == "🔗", f"L9D 必须为 🔗 纯参考，实际 {tbl.get('L9D')}"
+    # L9B openKylin / L9C openEuler / L9D OpenHarmony 国产 OS 生态参考，仍属 🔗 大类
+    # （已升级为「🔗已借鉴优化」，解析只取首个 emoji 故仍为 🔗，详见 test_native_os_borrowed）
+    assert tbl.get("L9B") == "🔗", f"L9B 必须属 🔗 大类，实际 {tbl.get('L9B')}"
+    assert tbl.get("L9C") == "🔗", f"L9C 必须属 🔗 大类，实际 {tbl.get('L9C')}"
+    assert tbl.get("L9D") == "🔗", f"L9D 必须属 🔗 大类，实际 {tbl.get('L9D')}"
+
+
+def test_native_os_borrowed():
+    """L9B/L9C/L9D 国产 OS 生态必须标注『已借鉴优化』（融合对齐，非纯参考）。"""
+    text = _read()
+    # 1) 表格状态列须含「已借鉴优化」
+    for nid in ("L9B", "L9C", "L9D"):
+        line = next((ln for ln in text.splitlines()
+                     if re.match(rf"\|\s*\**\s*{nid}\b", ln)), None)
+        assert line is not None, f"找不到表格行 {nid}"
+        assert "已借鉴优化" in line, f"{nid} 表格行须含『已借鉴优化』，实际：{line}"
+    # 2) mermaid 节点标注须含「已借鉴优化」
+    mermaid_block = re.search(r"```mermaid(.*?)```", text, re.S)
+    assert mermaid_block, "找不到 mermaid 代码块"
+    mb = mermaid_block.group(1)
+    for nid in ("L9B", "L9C", "L9D"):
+        assert re.search(rf"{nid}\[[^\]]*已借鉴优化", mb), f"{nid} mermaid 须含『已借鉴优化』"
+    # 3) 借鉴对齐小节必须存在
+    assert "国产开源 OS 生态借鉴对齐" in text, "白皮书须含『国产开源 OS 生态借鉴对齐』小节"
+    # 4) 两个原型文件须存在（② 级轻量骨架）
+    import os as _os
+    for p in ("src/core/fabric/chiplet_sandbox.py",
+              "src/core/fabric/intent_skill_router.py"):
+        assert _os.path.exists(_os.path.join(_os.path.dirname(__file__), "..", p)), \
+            f"借鉴原型文件缺失：{p}"

@@ -101,3 +101,23 @@ $PY -m pip install nanobot-ai
 - L9B 补实为「openKylin 智能体 OS」；新增 L9C openEuler、L9D OpenHarmony 两个 🔗 节点。
 - 统计再调：🔗 9→11、总数 59→61，✅46/🔁4 不变。
 - 三者构成「端（OpenHarmony）/边服务器（openEuler）/桌面智能体（openKylin）」的国产全栈参照系，均 🔗 纯参考。
+
+---
+
+## 六、借鉴对齐落地映射（2026-08-03 融合，回应「都融合进来」）
+
+用户要求把 openKylin / openEuler / OpenHarmony 三个国产生态「融合进来」。按处置铁律第③类（能商用但技术栈不兼容 → 借鉴优化）：三者为完整 OS/基础设施（C/C++/Rust 系），与 AOS（Python FabricHub 芯粒架构）**技术栈不兼容、代码不可直接引入**，故「融合」= 理念对齐进 AOS 对应层 + 两个轻量原型。诚实分级 ②（理念对齐 + 原型骨架，非端到端）。
+
+### 落地映射总表
+
+| 国产生态 | 借鉴理念 | AOS 对齐落点（已有/新增） | 原型文件 | 诚实状态 |
+| :--- | :--- | :--- | :--- | :--- |
+| **openKylin 智能体 OS**（桌面） | 主干-分支协同；记忆精炼降 token | 自进化引擎（白盒蒸馏 `272` / 抗复合失败 `271`）+ `memory_ladder.py` L1→L4 精炼策略 | —（理念吸收，无新文件） | 🔗已借鉴优化（理念） |
+| **openEuler Agentic Infra**（服务器） | Agent POSIX 原语；三级动态沙箱 Conch（快照冷启/迁移/续跑） | 芯粒故障隔离（`agnes`/`ag2` 子进程 crash boundary）+ `isolate_heavy` | `src/core/fabric/chiplet_sandbox.py` | 🔗已借鉴优化（理念+原型） |
+| **OpenHarmony 小艺 HMAF**（终端） | 系统能力 Skill 化；意图即服务；MCP 兼容 | OPC 五岗位 + `SkillManage` + MCP 连接器 + `FabricHub` 意图路由 | `src/core/fabric/intent_skill_router.py` | 🔗已借鉴优化（理念+原型） |
+
+### 原型诚实边界（必须说清）
+- **chiplet_sandbox.py**：用 pickle 状态序列化模拟「芯粒快照/续跑」，不接真实容器/CRIU；单测 `tests/test_chiplet_sandbox.py` **3 passed** 验证「崩溃前自动留快照 → 从快照续跑完成」控制流。生产化路径：把 `_snapshots` 换容器镜像快照 + CRIU 检查点，即接近 Conch 真实续跑（已在 docstring 注明）。
+- **intent_skill_router.py**：本地前缀匹配「意图即服务」，不接真 LLM 意图理解、不拉真实 MCP；单测 `tests/test_intent_skill_router.py` **4 passed** 验证路由/MCP 清单/dispatch。生产化路径：把前缀匹配换 `FabricHub` 语义路由、接真实 MCP 连接器（已注明）。
+- 二者均为 **② 级轻量骨架**，不等于 openEuler Conch / OpenHarmony HMAF 的 **③ 级端到端**能力；标注仍属 🔗 生态对齐大类（升级为「🔗已借鉴优化」）。
+- 遵循「万物为我所用」：只取与 AOS 现有架构同构的理念（协同/隔离/路由），不另起平行系统。

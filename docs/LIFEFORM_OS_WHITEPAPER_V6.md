@@ -126,9 +126,9 @@ flowchart TB
 
     subgraph L9["📚 第九层：生态层（国产开源 OS 生态参考）"]
         L9A["🔧 dg-ai-notes（Pi-Agent SDK 教程）[🔗纯参考]"]
-        L9B["🔗 openKylin 智能体 OS（国防科大牵头·openKylin 2.0 全栈开源 Agent OS：系统/CUA 智能体+桌面生态+统一推理）[🔗纯参考]"]
-        L9C["🔗 openEuler Agentic Infra（服务器 OS：Agent/Container/Serverless 重定义资源管理·超节点沙箱）[🔗纯参考]"]
-        L9D["🔗 OpenHarmony 小艺 HMAF（海量终端轻量化智能体调度·Skill/MCP/意图框架）[🔗纯参考]"]
+        L9B["🔗 openKylin 智能体 OS（国防科大牵头·openKylin 2.0 全栈开源 Agent OS：系统/CUA 智能体+桌面生态+统一推理）[🔗已借鉴优化]"]
+        L9C["🔗 openEuler Agentic Infra（服务器 OS：Agent/Container/Serverless 重定义资源管理·超节点沙箱）[🔗已借鉴优化]"]
+        L9D["🔗 OpenHarmony 小艺 HMAF（海量终端轻量化智能体调度·Skill/MCP/意图框架）[🔗已借鉴优化]"]
     end
 
     CONST --> L0
@@ -234,9 +234,9 @@ flowchart TB
 | L8C 重型具身粒子 | L8 | ✅AOS代码 | 同上（框架就绪，机器人本体未接） | ② |
 | L8D 数字粒子 | L8 | ✅AOS代码 | 同上（PC/服务器侧已可 spawn） | ② |
 | L9A dg-ai-notes | L9 | 🔗纯参考 | buchidonggua/dg-ai-notes，**MIT 教程仓库**（Pi-Agent SDK 10 章拆解），非库，不需集成 | — |
-| L9B openKylin 智能体 OS | L9 | 🔗纯参考 | **国防科技大学牵头 + 哈工大(深圳) + 麒麟软件共建**，基于 **openKylin 2.0** 发布（2026-06-25）的**全栈开源智能体操作系统**（国内开源社区首个系统级智能体 OS 支撑）；打通**系统智能体 / CUA 智能体 / 桌面应用生态 / 统一模型推理服务**四大模块；统一推理降 75% 模型切换、73.6% 任务等待；"主干-分支"协同架构 PPT 任务 token 降 81.7%、耗时降 38.2%；记忆精炼模型降 24%+ 记忆 token；API+CUA Skill 接入 300+ 系统操作 / 900+ 应用操作 / 30+ 无 API 桌面应用。国产生态对齐，非库、不需 AOS 代码 | — |
-| L9C openEuler Agentic Infra | L9 | 🔗纯参考 | **openEuler（开源欧拉，华为/鲲鹏系）**面向**超节点 Agentic 基础设施**：围绕 **Agent / Container / Serverless** 重定义传统 OS 的资源管理、算力抽象与生态入口；超节点 OS、Conch 沙箱引擎（AI Agent 完整沙箱镜像 + 快照冷启动/迁移/续跑）、Agent Kernel（超节点内核原生调度与安全）+ Agent Service（安全/记忆/沙箱抽象为 Agent POSIX 原语）、Skills&MCP 友好工具生态 + XPU 协同加速。服务器场景 Agentic AI 底层技术，国产生态对齐，非库 | — |
-| L9D OpenHarmony 小艺 HMAF | L9 | 🔗纯参考 | **OpenHarmony + 小艺开放平台（HMAF 2.0 鸿蒙智能体框架）**：系统能力 **Skill 化**（2100+ 系统能力 / 500+ 伙伴精选 Skills / 2000+ 鸿蒙智能体）、**意图即服务**分发、MCP 兼容工具、端云 A2A 对接、端云系统鉴权；海量终端（手机/PC/IoT）轻量化智能体调度。国产生态对齐，非库、不需 AOS 代码 | — |
+| L9B openKylin 智能体 OS | L9 | 🔗已借鉴优化 | **国防科技大学牵头 + 哈工大(深圳) + 麒麟软件共建**，基于 **openKylin 2.0** 发布（2026-06-25）的**全栈开源智能体操作系统**（国内开源社区首个系统级智能体 OS 支撑）；打通**系统智能体 / CUA 智能体 / 桌面应用生态 / 统一模型推理服务**四大模块；统一推理降 75% 模型切换、73.6% 任务等待；"主干-分支"协同架构 PPT 任务 token 降 81.7%、耗时降 38.2%；记忆精炼模型降 24%+ 记忆 token；API+CUA Skill 接入 300+ 系统操作 / 900+ 应用操作 / 30+ 无 API 桌面应用。国产生态对齐，非库、不需 AOS 代码；**AOS 借鉴点**：自进化引擎（白盒蒸馏/抗复合失败 270/271/272）吸收「主干-分支协同 + 记忆精炼降 token」，记忆阶梯 L1→L4 精炼策略对齐 | 已借鉴（理念） |
+| L9C openEuler Agentic Infra | L9 | 🔗已借鉴优化 | **openEuler（开源欧拉，华为/鲲鹏系）**面向**超节点 Agentic 基础设施**：围绕 **Agent / Container / Serverless** 重定义传统 OS 的资源管理、算力抽象与生态入口；超节点 OS、Conch 沙箱引擎（AI Agent 完整沙箱镜像 + 快照冷启动/迁移/续跑）、Agent Kernel（超节点内核原生调度与安全）+ Agent Service（安全/记忆/沙箱抽象为 Agent POSIX 原语）、Skills&MCP 友好工具生态 + XPU 协同加速。服务器场景 Agentic AI 底层技术，国产生态对齐，非库；**AOS 借鉴点**：芯粒故障隔离（agnes/ag2 子进程 crash boundary）+ `isolate_heavy` 对齐 Agent POSIX 原语/三级动态沙箱，可选轻量容器实现芯粒快照续跑（见 `src/core/fabric/chiplet_sandbox.py` 原型） | 已借鉴（理念+原型） |
+| L9D OpenHarmony 小艺 HMAF | L9 | 🔗已借鉴优化 | **OpenHarmony + 小艺开放平台（HMAF 2.0 鸿蒙智能体框架）**：系统能力 **Skill 化**（2100+ 系统能力 / 500+ 伙伴精选 Skills / 2000+ 鸿蒙智能体）、**意图即服务**分发、MCP 兼容工具、端云 A2A 对接、端云系统鉴权；海量终端（手机/PC/IoT）轻量化智能体调度。国产生态对齐，非库、不需 AOS 代码；**AOS 借鉴点**：OPC 五岗位 + SkillManage + MCP 连接器 + 意图路由（FabricHub 统一路由）对齐 Skill 化/意图即服务/MCP 兼容（见 `src/core/fabric/intent_skill_router.py` 原型） | 已借鉴（理念+原型） |
 
 ### 该用的开源 → 实际集成状态（2026-08-02 收口，回应「该用的开源一个没有用」）
 
@@ -277,7 +277,7 @@ flowchart TB
 | :--- | ---: | ---: | :--- |
 | ✅ AOS 已有真实代码 | **46** | 75.4% | 含**真接开源 DuckDB + LanceDB + Vosk + LocalAI + video-shotcraft + Piper + constitutional-agent + LiteLLM**；L3 语义层复用开源 Chroma/cognee/mem0 |
 | 🔁 外部未接 / 自研等价（实测不可引） | **4** | 6.6% | L2I(fractal Unix-only+tmux+外部 CLI)、L3C(TriviumDB<3.13+Turso Rust 构建阻)、L6C(Automaton 需 Conway Cloud+链上钱包)、L7F(Conway Terminal 需链上)；AOS 均有自研等价 |
-| 🔗 纯参考 / 生态对齐 / 许可红线 | **11** | 18.0% | L1C(Cindy/nanobot 框架非库)/L1D(openship 部署平台)/L1E(Fish Speech NC)/L1F(turbo-fieldfare Mac)/L3E(DBX AGPL)/L6D+L7G(PhyAgentOS 具身)/L9A(dg-ai-notes 教程)/L9B(openKylin 智能体 OS)/L9C(openEuler Agentic Infra)/L9D(OpenHarmony 小艺 HMAF) |
+| 🔗 纯参考 / 生态对齐 / 许可红线（含 L9B/L9C/L9D 已借鉴优化） | **11** | 18.0% | L1C(Cindy/nanobot 框架非库)/L1D(openship 部署平台)/L1E(Fish Speech NC)/L1F(turbo-fieldfare Mac)/L3E(DBX AGPL)/L6D+L7G(PhyAgentOS 具身)/L9A(dg-ai-notes 教程)/L9B(openKylin 智能体 OS·已借鉴优化)/L9C(openEuler Agentic Infra·已借鉴优化)/L9D(OpenHarmony 小艺 HMAF·已借鉴优化) |
 | 🚧 无代码空壳 | **0** | 0% | 逐节点核对后为 0（前版误判的 3 个已纠正） |
 
 **② 级实测证据（可复现，无需 pytest）**
@@ -298,6 +298,24 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 2. **但"有代码" ≠ "能用"**：绝大多数是 **② 级机制骨架**——纯函数 + 类骨架 + 单测可跑，未接真 LLM 驱动。典型例子：L7B 世界模型是线性因果叠加，不是训练出的 JEPA；L2 各引擎是基础启发式；L8 粒子框架能 spawn 但没接真实硬件驱动。
 3. **③ 级（真 LLM 端到端闭环）目前只验证过 P0 自进化一个窄场景**（见第九章），不覆盖全架构。这是当前最大的真实缺口，也是下一阶段唯一值得投入的方向。
 
+---
+
+## 一之补、国产开源 OS 生态借鉴对齐（融合，2026-08-03）
+
+用户要求把 openKylin / openEuler / OpenHarmony 三个国产生态「融合进来」。经核验三者均为完整 OS/基础设施（C/C++/Rust 系），与 AOS（Python FabricHub 芯粒架构）**技术栈不兼容、代码不可直接引入**（处置铁律第③类：能商用但技术栈不兼容 → 借鉴优化，不自造轮子）。故「融合」= 把三者**架构理念对齐进 AOS 对应层**，非 git clone 其代码，诚实分级保持 ②（理念对齐 + 轻量原型，非端到端）。
+
+### 三生态 → AOS 借鉴映射
+
+| 国产生态（理念来源） | 核心可借鉴架构理念 | AOS 对齐落点（已有/新增） | 诚实状态 |
+| :--- | :--- | :--- | :--- |
+| **openKylin 智能体 OS**（桌面） | 主干-分支协同架构；记忆精炼降 token | 自进化引擎（白盒蒸馏 `272` / 抗复合失败 `271`）+ 记忆阶梯 `memory_ladder.py` L1→L4 精炼策略 | 🔗已借鉴优化（理念） |
+| **openEuler Agentic Infra**（服务器） | Agent POSIX 原语；三级动态沙箱 Conch（快照冷启/迁移/续跑） | 芯粒故障隔离（`agnes`/`ag2` 子进程 crash boundary）+ `isolate_heavy`；新增 `src/core/fabric/chiplet_sandbox.py` 芯粒快照续跑沙箱原型 | 🔗已借鉴优化（理念+原型） |
+| **OpenHarmony 小艺 HMAF**（终端） | 系统能力 Skill 化；意图即服务；MCP 兼容 | OPC 五岗位 + `SkillManage` + MCP 连接器 + 意图路由（`FabricHub` 统一路由）；新增 `src/core/fabric/intent_skill_router.py` 意图路由原型 | 🔗已借鉴优化（理念+原型） |
+
+### 诚实边界（必须说清）
+- 三者**代码未引入** AOS（技术栈不兼容 + 国产开源 OS 发行非可嵌库）；标注仍为 🔗 生态对齐大类，仅升级为「🔗已借鉴优化」以反映理念已吸收。
+- 两个原型（`chiplet_sandbox.py` / `intent_skill_router.py`）为 **② 级轻量骨架**：纯函数 + 类骨架 + 单测可跑，**未接真 LLM / 真容器 / 真终端**，不等于 ③ 端到端跑通。
+- 借鉴遵循「万物为我所用」：只取与 AOS 现有架构同构的理念（协同/隔离/路由），不另起平行系统。
 
 ## 二、完整白皮书
 
