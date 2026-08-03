@@ -79,6 +79,7 @@ if not RUN_REAL:
         "test_architecture.py",      # 连本地 Ollama（未启动时 HANG）
         "test_autopilot_causal_reflection.py",  # 真连 DuckDuckGo 搜索
         "test_autopilot_causal_reflection_e2e.py",  # 同上 E2E 版本
+        "test_self_evolution_real.py",           # ③级真机自进化闭环（真实本地 ollama LLM）
         "test_content_pipeline_real.py",  # 真实 HTTPS 调用 ima API（urlopen HANG）
 
         # subprocess 真实子进程执行（无 mock 保护，pytest-timeout 在 Windows 上
