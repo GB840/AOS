@@ -157,8 +157,8 @@ def _dispatch(capability: str, payload: Dict[str, Any]) -> Any:
 # ---- 因果反思闭环（D5 决策论层接入 autopilot 反思链路）-----------------
 # 把 autopilot 每步的「真实成败 + 引擎」喂进白盒蒸馏器，反思时经 CausalModel 的
 # counterfactual / best_action 选「换做法」引擎，使反思从「LLM 猜」变为「数据支撑」。
-# 默认零足迹（opt-in）：AOS_AUTOPILOT_DISTILL=1 才喂本地蒸馏器；若已走 FabricHub
-# 路由（AOS_AUTOPILOT_USE_FABRICHUB=1）则直接复用其蒸馏器，不另起炉灶（理念4/8）。
+# 默认 **常驻开启**（不再 opt-in）：优先复用 FabricHub 蒸馏器；FabricHub 不可用时
+# 自动建本地蒸馏器落盘；仅 AOS_AUTOPILOT_DISTILL_OFF=1 才彻底关闭（零足迹调试）。
 _DISTILLER: Optional[EvolutionDistiller] = None
 _DISTILLER_INITED = False
 
@@ -176,26 +176,27 @@ def _get_causal_distiller() -> Optional[EvolutionDistiller]:
     if _DISTILLER_INITED:
         return _DISTILLER
     _DISTILLER_INITED = True
+    # 0) 显式关闭开关：AOS_AUTOPILOT_DISTILL_OFF=1 退回 None（极端调试用）
+    if os.environ.get("AOS_AUTOPILOT_DISTILL_OFF") == "1":
+        return None
     # 1) 优先复用 FabricHub 已在路由热路径喂好的蒸馏器（零额外开销）
-    if os.environ.get("AOS_AUTOPILOT_USE_FABRICHUB") == "1":
-        try:
-            from kernel.plugins.fabric_hub import get_fabric_hub
-            hb = get_fabric_hub()
-            if hb is not None and getattr(hb, "_distiller", None) is not None:
-                _DISTILLER = hb._distiller
-                return _DISTILLER
-        except Exception:
-            logger.warning("获取 FabricHub 蒸馏器失败，退回本地", exc_info=True)
-    # 2) opt-in 本地蒸馏器：仅 AOS_AUTOPILOT_DISTILL=1 才落盘（默认零足迹）
-    if os.environ.get("AOS_AUTOPILOT_DISTILL") == "1":
-        try:
-            store = os.environ.get("AOS_AUTOPILOT_DISTILL_STORE") or os.path.join(
-                os.path.dirname(__file__), "..", "..", "data", "workspaces",
-                "autopilot", "distill.jsonl")
-            _DISTILLER = EvolutionDistiller(store_path=store)
+    try:
+        from kernel.plugins.fabric_hub import get_fabric_hub
+        hb = get_fabric_hub()
+        if hb is not None and getattr(hb, "_distiller", None) is not None:
+            _DISTILLER = hb._distiller
             return _DISTILLER
-        except Exception:
-            logger.warning("创建 autopilot 蒸馏器失败", exc_info=True)
+    except Exception:
+        logger.warning("获取 FabricHub 蒸馏器失败，退回本地", exc_info=True)
+    # 2) 默认本地蒸馏器：FabricHub 不可用时自动落盘（不再要求 opt-in env）
+    try:
+        store = os.environ.get("AOS_AUTOPILOT_DISTILL_STORE") or os.path.join(
+            os.path.dirname(__file__), "..", "..", "data", "workspaces",
+            "autopilot", "distill.jsonl")
+        _DISTILLER = EvolutionDistiller(store_path=store)
+        return _DISTILLER
+    except Exception:
+        logger.warning("创建 autopilot 蒸馏器失败", exc_info=True)
     return None
 
 

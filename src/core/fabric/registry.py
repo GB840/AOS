@@ -444,6 +444,13 @@ class FabricRegistry:
             for eid, a in self._adapters.items()
         }
 
+    def capabilities_of(self, engine_id: str) -> list[str]:
+        """返回某引擎能服务的能力字符串列表（供 ResilienceBus 降级链查找）。"""
+        a = self._adapters.get(engine_id)
+        if a is None:
+            return []
+        return [self._cap_to_str(c) for c in a.advertise_capabilities()]
+
     def get(self, engine_id: str) -> "BaseAgentAdapter | None":
         """按 engine_id 取已注册适配器（进程内）。
 

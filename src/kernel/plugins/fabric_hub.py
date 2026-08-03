@@ -63,6 +63,9 @@ from kernel.isolation.subprocess_iso import IsolatedEngineHost
 from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
 from kernel.evolution_distiller import EvolutionDistiller
+from core.fabric.resilience_bus import (
+    ResilienceBus, get_resilience_bus, set_resilience_bus,
+)
 
 _LOG = logging.getLogger("aos.fabric.hub")
 
@@ -238,12 +241,14 @@ class FabricHub:
         self._failure_monitor: Optional[Any] = None  # MAST 失败监控器，下方 try 链 best-effort 接入
         self._errors: Dict[str, str] = {}
         self._missing_capability_hooks: List[Callable] = []  # 能力缺失时触发的钩子（AutoSkill 等）
-        # 白盒蒸馏路由（opt-in，理念8 闭环消费端）：把 EvolutionDistiller 的
+        # 白盒蒸馏路由（理念8 闭环消费端）：把 EvolutionDistiller 的
         # 沉底建议接入 route()，让不可靠引擎在运行时被排到末尾（有备选才跳过）。
-        # 默认关闭；设 AOS_DISTILLER_ROUTE=1 自动加载蒸馏记忆，清 env 即退回原路由。
+        # 默认 **常驻开启**（不再 opt-in）：凡 FabricHub 启动即加载蒸馏记忆，
+        # 真实流量自动累积「哪个引擎可靠」证据，下次路由越用越准。
+        # 保留 AOS_DISTILLER_OFF=1 作为显式关闭开关（极端调试用）。
         self._distiller = distiller
         self._distill_drop = os.environ.get("AOS_DISTILLER_DROP") == "1"
-        if self._distiller is None and os.environ.get("AOS_DISTILLER_ROUTE") == "1":
+        if self._distiller is None and os.environ.get("AOS_DISTILLER_OFF") != "1":
             try:
                 store = (os.environ.get("AOS_DISTILLER_STORE")
                          or "data/workspaces/fabric/distill.jsonl")
@@ -366,6 +371,42 @@ class FabricHub:
         except Exception as e:  # noqa: BLE001
             _LOG.warning("接入失败监控器失败（非致命）: %s", e)
             self._failure_monitor = None
+        # 自愈闭环总线 ResilienceBus：融合 FailureMonitor + EvolutionDistiller +
+        # CircuitBreaker + SelfHealer 为一条自愈链路，默认常驻（不须 opt-in）。
+        # 把四条各自为战的防御层接成「失败→观测→蒸馏→熔断→自愈→回灌蒸馏」。
+        try:
+            def _resolve_fallback(engine_id: str) -> Optional[str]:
+                """为该熔断引擎找一个同能力的备选 live 引擎（降级链）。"""
+                try:
+                    # 找该 engine 能服务的能力，再 resolve 其他 live 引擎
+                    for cap in self._registry.capabilities_of(engine_id):
+                        alt = self.resolve_engine(cap)
+                        if alt and alt != engine_id:
+                            return alt
+                except Exception:  # noqa: BLE001
+                    pass
+                return None
+
+            def _restart_engine(engine_id: str) -> bool:
+                """尝试重启被熔断引擎的宿主（子进程 respawn / 进程内复探）。"""
+                try:
+                    if engine_id in self._isolated:
+                        self.recover(engine_id)
+                        return True
+                except Exception:  # noqa: BLE001
+                    pass
+                return False
+
+            self._res_bus = ResilienceBus(
+                failure_monitor=self._failure_monitor,
+                distiller=self._distiller,
+                fallback_resolver=_resolve_fallback,
+                restart_engine=_restart_engine,
+            )
+            set_resilience_bus(self._res_bus)
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("ResilienceBus 构建失败（非致命）: %s", e)
+            self._res_bus = None
 
     # ---- 模拟路由层（仅探测用，生产默认关闭） --------------------
     def set_route_sim_us(self, micros: float) -> None:
@@ -460,8 +501,13 @@ class FabricHub:
         last_res: InvokeResult | None = None
         last_eid: str | None = None
         attempts: list[str] = []
+        res_bus = self._res_bus
         for adapter in providers:
             eid = adapter.engine_id
+            # 自愈闭环：被熔断的引擎直接跳过，直走降级链（ResilienceBus 统一裁定）。
+            if res_bus is not None and res_bus.should_skip(eid):
+                attempts.append(f"{eid}: skipped(circuit-open)")
+                continue
             t0 = time.perf_counter()
             try:
                 res = adapter.invoke(req)
@@ -472,12 +518,16 @@ class FabricHub:
                 _LOG.warning("fabric 芯粒 %s invoke 异常已隔离: %s", eid, e)
                 self._registry.record_outcome(cap_str, eid, eff_tier, False, dt, error=repr(e))
                 self._feed_distiller(cap_str, eid, False, repr(e))
+                if res_bus is not None:
+                    res_bus.on_outcome(eid, False, repr(e))
                 attempts.append(f"{eid} raised: {e!r}")
                 continue
             dt = (time.perf_counter() - t0) * 1000.0
             if res.ok:
                 self._registry.record_outcome(cap_str, eid, eff_tier, True, dt)
                 self._feed_distiller(cap_str, eid, True, None)
+                if res_bus is not None:
+                    res_bus.on_outcome(eid, True, None)
                 if fm is not None:
                     try:
                         fm.record_success()
@@ -502,6 +552,8 @@ class FabricHub:
                 error=res.error if not res.ok else None,
             )
             self._feed_distiller(cap_str, eid, False, res.error)
+            if res_bus is not None:
+                res_bus.on_outcome(eid, False, res.error)
             attempts.append(f"{eid}: {res.error}")
             last_res = res
             last_eid = eid
@@ -1138,12 +1190,18 @@ class FabricHub:
         if host is not None:
             ms = host.recover()
             self._recover_ms[eid] = ms
+            # 自愈闭环：子进程 respawn 成功 → 关闭该引擎熔断并回灌成功
+            if self._res_bus is not None:
+                self._res_bus.reset_engine(eid)
             return host.health()
         adapter = self._registry._adapters.get(eid)
         if adapter is None:
             return False
         self._failures.pop(eid, None)
         self._errors.pop(eid, None)
+        # 自愈闭环：进程内复探健康成功 → 关闭该引擎熔断
+        if self._res_bus is not None:
+            self._res_bus.reset_engine(eid)
         return bool(adapter.health())
 
     def last_failure(self, eid: str) -> Optional[float]:
@@ -1229,6 +1287,12 @@ class FabricHub:
             if live:
                 report["live"] += 1
         report["registration_errors"] = dict(self._errors)
+        # 自愈闭环总线健康：熔断状态 / 自愈动作 / 蒸馏器与监控器连接情况
+        if self._res_bus is not None:
+            try:
+                report["resilience_bus"] = self._res_bus.health()
+            except Exception:  # noqa: BLE001
+                pass
         return report
 
     def advertised(self) -> Dict[str, List[str]]:
