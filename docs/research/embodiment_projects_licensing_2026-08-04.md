@@ -120,3 +120,18 @@ Soul AI Lab（Soul App 旗下）2026 年连续开源数字人模型家族，GitH
 - 本文为**许可证与可用性核验 + 处置分类**，不是接入实现。实际接入（subprocess 桥接 / 模型权重下载 / GPU 部署）须另立任务，且须用户在自有 GPU 主机上实操（沙箱无 GPU）。
 - SoulX-LiveAct 团队对商用有「联系确认」礼貌提示，但许可证为 Apache-2.0，依法可自由商用，仅需在产品中标明 Apache-2.0 出处。
 - CL1 的「硅基类脑计算」替代方向（单晶体管模拟神经元、FinalSpark 降耗百万倍）属前沿探索，本文未展开，列入观察项。
+
+---
+
+## 9. Tier 0 方言语音陪伴封装落地（2026-08-04 补）
+
+> 上文 §7 把 Tier 0 列为首选载体；本节记录它已从「散落组件」收口为**正式封装**，不再零敲碎打。
+
+- 新增 `src/voice/companion.py` 的 `CompanionVoice`：本地优先、方言平等、断网可跑的统一语音通道。
+  - **听**：`DialectASR` 方言真路由（funasr 覆盖 7 大方言 / vosk 覆盖普通话）→ 不可用诚实给落地命令、绝不冒充；默认 Vosk 本地 STT；云 API（百度/讯飞）仅 `cloud_asr=True` 时 opt-in 兜底，不挡默认。
+  - **说**：`TTSAdapter` 引擎真探测（piper/kokoro 全离线 > edge_tts 免费需联网 > web_speech 浏览器兜底）；方言音色只映射**已核实**的——粤语→`zh-HK-WanLungNeural`、东北/中原/西南→`zh-CN-liaoning/shaanxi-XiaoniNeural`；吴/闽/客/赣/湘/晋 等 edge_tts 无真方言 voice，诚实退回默认，不冒充。
+  - **诚实**：缺 TTS 模型时 `speak` 降级到 web_speech 兜底，保证「陪伴不中断」；`health()/capabilities()` 如实反映此刻可否断网跑，绝不误报。
+- **修复真实缺陷**：`src/voice/__init__.py` 原硬依赖 `utils.config(pydantic_settings)`，缺依赖时整个 `voice` 包 import 崩溃（违反「一键装可跑」）；现默认只导 `CompanionVoice`，云版 `ASREngine/TTSEngine` 改为 try/except 包裹，不拖垮入口。
+- **接线**：`src/core/fabric/http_server.py` 的 `/api/voice/tts` 与 `/api/voice/info` 已改走 `CompanionVoice`（方言音色 + 降级兜底 + 诚实能力清单生效）；`/api/voice/stt` 方言分支本就走 `dialect_asr`，与 `CompanionVoice.listen` 等价。
+- **诚实分级**：**② 级全真**（代码 + 单测实证，`tests/test_companion_voice_real.py` 9 项全绿，不连外网、不 mock 体征）；沙箱实测 vosk 模型可用、本地链路真实跑通、静音诚实失败。
+- **③ 级未验**：真人在方言下「说→听→想→说」全链路需主机真 LLM + 麦克风实测；沙箱无 GPU/音频设备，仅②级，不谎报。

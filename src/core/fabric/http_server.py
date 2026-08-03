@@ -515,8 +515,10 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         try:
             from core.fabric.adapters.stt_adapter import STTAdapter
             from core.fabric.adapters.tts_adapter import TTSAdapter
+            from voice import CompanionVoice
             stt = STTAdapter()
             tts = TTSAdapter()
+            companion_caps = CompanionVoice().capabilities()
             loop = FabricHubHTTPHandler._wake_state.get("loop")
             wake_info = None
             if loop is not None:
@@ -528,6 +530,7 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 }
             self._send_json({
                 "ok": True,
+                "companion": companion_caps,
                 "stt": {
                     "engine": stt._engine,
                     "live": bool(stt.health()),
@@ -619,16 +622,24 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         if not text:
             return self._send_json({"ok": False, "error": "text required"}, status=400)
         try:
-            from core.fabric.adapters.tts_adapter import TTSAdapter
-            from core.fabric.adapter import InvokeRequest
-            payload = {"text": text}
-            for k in ("voice", "lang", "language", "speaker_wav"):
-                if body.get(k) is not None:
-                    payload[k] = body[k]
-            r = TTSAdapter().invoke(InvokeRequest(capability="voice.tts", payload=payload))
-            if not r.ok:
-                return self._send_json({"ok": False, "error": r.error}, status=422)
-            return self._send_json({"ok": True, **r.data})
+            from voice import CompanionVoice
+            # 走 Tier 0 本地优先封装：方言音色映射 + 缺模型时降级浏览器朗读兜底，
+            # 保证「陪伴不中断」（对齐母纲原则 7 与硬检验①断网检验）。
+            dialect = (body.get("dialect") or "").strip() or None
+            res = CompanionVoice().speak(text, dialect=dialect)
+            if not res["ok"]:
+                return self._send_json({"ok": False, "error": res.get("error")}, status=422)
+            return self._send_json({
+                "ok": True,
+                "text": res["text"],
+                "engine": res["engine"],
+                "audio_path": res.get("audio_path"),
+                "audio_url": res.get("audio_url"),
+                "dialect": res.get("dialect"),
+                "dialect_voice": res.get("dialect_voice"),
+                "local": res.get("local"),
+                "fallback": res.get("fallback"),
+            })
         except Exception as e:  # noqa: BLE001
             logger.exception("voice tts failed")
             return self._send_json({"ok": False, "error": str(e)})
