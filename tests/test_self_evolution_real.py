@@ -41,12 +41,13 @@ def _ollama_model_ready(model: str, base: str = None) -> bool:
     如默认的 minicpm-mem）。这些情况下 ③ 无法 honest 验证 → 测试会 skip。
     """
     tags_url = (base or _OLLAMA_TAGS)
+    _timeout = int(os.environ.get("AOS_OLLAMA_TIMEOUT", "120"))
     try:
         with urllib.request.urlopen(tags_url, timeout=5) as r:
             models = [m["name"] for m in json.loads(r.read().decode())["models"]]
         if model not in models:
             return False
-        # 计划格式探针：要求只输出一行能力前缀步骤
+        # 计划格式探针：要求只输出一行能力前缀步骤（超时与反思调用共用 AOS_OLLAMA_TIMEOUT）
         body = json.dumps({
             "model": model,
             "prompt": "只输出一行：web.search=ok",
@@ -55,7 +56,7 @@ def _ollama_model_ready(model: str, base: str = None) -> bool:
         }).encode()
         req = urllib.request.Request(_OLLAMA_URL, data=body,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=_timeout) as r:
             resp = json.loads(r.read().decode()).get("response", "")
         return any(re.match(r"^\s*[A-Za-z][\w.\-]*\s*=", ln) for ln in resp.splitlines())
     except Exception:
