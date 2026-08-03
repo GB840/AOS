@@ -175,6 +175,25 @@ def test_export_zip_mode(tmp_path):
         assert "MANIFEST.json" in zf.namelist()
 
 
+def test_export_preserves_single_file_extension(tmp_path):
+    """出走检验：单文件源（如 value_ledger.jsonl）导出后必须保留原扩展名，
+    否则「无 AOS 也能直接读」会破功。"""
+    from kernel.sovereignty import export_all
+
+    fake_root = tmp_path / "repo"
+    (fake_root / "data" / "workspaces").mkdir(parents=True)
+    src_file = fake_root / "data" / "workspaces" / "value_ledger.jsonl"
+    src_file.write_text("{\"credited_to\": \"user\"}\n", encoding="utf-8")
+
+    custom = [("value_ledger", "data/workspaces/value_ledger.jsonl", "价值账本")]
+    dest = tmp_path / "out"
+    export_all(str(dest), sources=custom, root=str(fake_root))
+
+    kept = dest / "value_ledger" / "value_ledger.jsonl"
+    assert kept.exists(), "单文件源必须保留 .jsonl 扩展名"
+    assert kept.read_text(encoding="utf-8").strip() == '{"credited_to": "user"}'
+
+
 # ===========================================================================
 # 硬检验 3：付费墙检验 —— 收费只能挡「服务」，绝不能挡「功能」
 # ===========================================================================
@@ -326,3 +345,114 @@ def test_health_counts_real_heal():
     h = bus.health()
     assert h["heal_succeeded"] >= 1, "真成功了要如实报"
     assert h["recent_heals"][-1]["action"] == "restart"
+
+
+# ===========================================================================
+# 母纲原则 6：价值回流·劳动有报 —— 用户创造的价值流回用户口袋
+# ===========================================================================
+
+def test_value_ledger_local_and_user_credited():
+    """价值回流：用户的劳动产物被记账，且永远归用户（不归平台）。"""
+    import tempfile, os
+    from kernel.value_ledger import ValueLedger
+
+    with tempfile.TemporaryDirectory() as d:
+        led = ValueLedger(path=os.path.join(d, "vl.jsonl"))
+        e = led.record("lesson", "search::vosk", "不可靠引擎已沉底")
+        assert e["credited_to"] == "user", "价值必须归用户"
+        assert led.total().get("lesson") == 1
+        led2 = ValueLedger(path=os.path.join(d, "vl.jsonl"))
+        assert led2.all()[0]["credited_to"] == "user"
+
+
+def test_value_ledger_exportable_back_to_user():
+    """价值回流：账本可导出为通用格式，没有 AOS 也能读（回流到用户口袋）。"""
+    import tempfile, os, json
+    from kernel.value_ledger import ValueLedger
+
+    with tempfile.TemporaryDirectory() as d:
+        led = ValueLedger(path=os.path.join(d, "vl.jsonl"))
+        led.record("lesson", "a::b", "note")
+        out = os.path.join(d, "export.jsonl")
+        led.export(out)
+        with open(out, encoding="utf-8") as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+        assert rows and rows[0]["credited_to"] == "user"
+
+
+def test_no_value_siphon():
+    """反虹吸：扫描全仓，证明没有代码把用户价值偷偷发往远端（零泄漏）。"""
+    from kernel.value_ledger import scan_value_siphon
+
+    hits = scan_value_siphon(str(ROOT))
+    assert hits == [], f"发现价值外泄风险: {hits}"
+
+
+def test_distiller_feeds_value_ledger():
+    """劳动有报：蒸馏出经验时，自动记入用户价值账本（真实接线，非死代码）。"""
+    import tempfile, os
+    from kernel.evolution_distiller import EvolutionDistiller
+    from kernel.value_ledger import ValueLedger
+
+    with tempfile.TemporaryDirectory() as d:
+        store = os.path.join(d, "distill.jsonl")
+        led = ValueLedger(path=os.path.join(d, "vl.jsonl"))
+        dist = EvolutionDistiller(store_path=store, value_ledger=led)
+        for _ in range(6):
+            dist.record_outcome("search", "vosk", ok=False, error="boom")
+        recs = dist.distill()
+        assert len(recs) >= 1, "必须蒸馏出沉底建议"
+        assert led.total().get("lesson", 0) >= 1, "蒸馏经验必须记入用户账本"
+
+
+# ===========================================================================
+# 母纲原则 7：中文优先·方言平等 —— 听懂 22 种方言（诚实缺口追踪）
+# ===========================================================================
+
+def test_dialect_coverage_is_honest_not_faked():
+    """方言平等：当前真实支持 0 种方言，追踪器如实报 0，绝不谎称 22/22。"""
+    from kernel.constitution_gaps import dialect_summary, supported_dialects
+
+    assert supported_dialects() == [], "当前没有任何方言模型真实集成"
+    s = dialect_summary()
+    assert s["targets"] == 22, "母纲目标 22 种方言"
+    assert s["supported"] == 0, "真实支持必须为 0，不许造假"
+    assert s["missing"] == 22
+
+
+def test_no_fake_dialect_claim():
+    """反虚假宣称：当前没有任何模块能合法声称已支持方言 ASR。"""
+    from kernel.constitution_gaps import supported_dialects
+
+    assert supported_dialects() == [], "唯一真值源为空，不得谎称已支持方言"
+
+
+# ===========================================================================
+# 母纲原则 10：身体延伸·灵魂唯一 —— 同一个灵魂，在不同设备里
+# ===========================================================================
+
+def test_soul_identity_stable_and_portable():
+    """灵魂唯一：灵魂 ID 本地稳定、跨调用一致、可随身带走（原语就位）。"""
+    import tempfile, os
+    from kernel.constitution_gaps import get_or_create_soul_id, soul_identity
+
+    with tempfile.TemporaryDirectory() as d:
+        os.environ["AOS_SOUL_ID_PATH"] = os.path.join(d, "soul_id.txt")
+        try:
+            a = get_or_create_soul_id()
+            b = get_or_create_soul_id()
+            assert a == b, "同一机器上灵魂 ID 必须稳定"
+            ident = soul_identity()
+            assert ident["soul_id"] == a
+            assert ident["portable"] is True, "灵魂必须可随导出带走"
+        finally:
+            os.environ.pop("AOS_SOUL_ID_PATH", None)
+
+
+def test_soul_sync_protocol_not_faked():
+    """反虚假宣称：实时跨设备同步协议未做，必须诚实标注 NOT_IMPLEMENTED。"""
+    from kernel.constitution_gaps import soul_identity
+
+    ident = soul_identity()
+    assert ident["sync_protocol"] == "NOT_IMPLEMENTED", \
+        "没有真实同步协议，绝不许谎称已支持多设备同步"

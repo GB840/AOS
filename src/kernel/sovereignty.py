@@ -39,6 +39,10 @@ EXPORT_FORMAT_VERSION = "1.0"
 DEFAULT_SOURCES: List[tuple] = [
     ("memory", "data/memory", "长期记忆库（mem0 / chroma 落盘）"),
     ("distill", "data/workspaces/fabric", "白盒进化蒸馏记忆（引擎可靠性统计）"),
+    ("value_ledger", "data/workspaces/value_ledger.jsonl",
+     "本地价值账本（原则6 劳动有报：用户劳动产物归用户所有、可带走）"),
+    ("soul", "data/soul/soul_id.txt",
+     "灵魂 ID（原则10 灵魂唯一原语：跨设备稳定、可导出移植）"),
     ("traces", "src/core/_traces", "执行 Trace（理念8 白盒才可进化的原始数据）"),
     ("workspaces", "data/workspaces", "工作区产物"),
     ("danchuang", "data/danchuang", "租户与用量数据"),
@@ -136,6 +140,9 @@ def export_all(dest: str,
         if sp.is_dir():
             stat = _copy_tree(sp, target, include_secrets)
         else:
+            # 单文件源：在 name 子目录内保留原文件名（含扩展名），
+            # 否则 value_ledger.jsonl 会变成无扩展名的 value_ledger，影响「无 AOS 也能直接读」。
+            target = target / sp.name
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 shutil.copy2(sp, target)

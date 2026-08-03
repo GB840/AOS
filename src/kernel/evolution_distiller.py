@@ -19,6 +19,8 @@ from collections import defaultdict
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, List, Optional
 
+from .value_ledger import ValueLedger  # 原则6 价值回流：蒸馏出的经验记入用户账本
+
 logger = logging.getLogger(__name__)
 
 # 沉底阈值：引擎在 >= MIN_SAMPLES 次出现且失败率 >= SINK_FAIL_RATE 时建议沉底
@@ -49,8 +51,10 @@ class EngineStat:
 class EvolutionDistiller:
     """从执行 Trace 蒸馏引擎可靠性经验，产出沉底建议（白盒进化）。"""
 
-    def __init__(self, store_path: Optional[str] = None):
+    def __init__(self, store_path: Optional[str] = None,
+                 value_ledger: Optional["ValueLedger"] = None):
         self.store_path = store_path
+        self._value_ledger = value_ledger
         self.stats: Dict[str, EngineStat] = {}
         self._last_save = 0.0
         self._load()
@@ -101,7 +105,7 @@ class EvolutionDistiller:
         out: List[Dict[str, Any]] = []
         for key, st in self.stats.items():
             if st.total >= MIN_SAMPLES and st.fail_rate >= SINK_FAIL_RATE:
-                out.append({
+                rec = {
                     "action": "sink",
                     "capability": st.capability,
                     "engine": st.engine,
@@ -109,7 +113,17 @@ class EvolutionDistiller:
                     "fail_rate": round(st.fail_rate, 3),
                     "reason": f"{st.fail}/{st.total} 失败，超沉底阈值 {SINK_FAIL_RATE}",
                     "last_error": st.last_error,
-                })
+                }
+                out.append(rec)
+        # 原则6 价值回流：用户 trace 蒸馏出的经验，记进用户自己的价值账本。
+        # 这是「劳动有报」的真实承接——用户的劳动产物归用户所有、可带走。
+        if self._value_ledger is not None:
+            for rec in out:
+                self._value_ledger.record(
+                    "lesson",
+                    f"{rec['capability']}::{rec['engine']}",
+                    rec.get("reason", ""),
+                )
         return out
 
     def reliable_engines(self) -> List[str]:

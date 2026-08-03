@@ -63,6 +63,7 @@ from kernel.isolation.subprocess_iso import IsolatedEngineHost
 from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
 from kernel.evolution_distiller import EvolutionDistiller
+from kernel.value_ledger import ValueLedger  # 原则6 价值回流：接电蒸馏记账
 from core.fabric.resilience_bus import (
     ResilienceBus, get_resilience_bus, set_resilience_bus,
 )
@@ -252,7 +253,16 @@ class FabricHub:
             try:
                 store = (os.environ.get("AOS_DISTILLER_STORE")
                          or "data/workspaces/fabric/distill.jsonl")
-                self._distiller = EvolutionDistiller(store_path=store)
+                # 原则6 价值回流：默认接电用户价值账本（AOS_VALUE_LEDGER_OFF=1 可关）。
+                # 蒸馏出经验即记入用户账本——劳动有报，凭证归用户、可带走。
+                vl = None
+                if os.environ.get("AOS_VALUE_LEDGER_OFF") != "1":
+                    try:
+                        vl = ValueLedger()
+                    except Exception:  # noqa: BLE001
+                        vl = None
+                self._distiller = EvolutionDistiller(store_path=store,
+                                                     value_ledger=vl)
             except Exception as e:  # noqa: BLE001 - 蒸馏接电失败不拖垮枢纽
                 _LOG.warning("蒸馏路由接电失败(将关闭): %s", e)
                 self._distiller = None
