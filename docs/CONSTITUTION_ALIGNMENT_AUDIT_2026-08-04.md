@@ -104,3 +104,39 @@
 autopilot / live 双路径写入）；"有稳态"原无独立审计条目，现补 `kernel/homeostasis.py` 为
 **L2（已接活，② 级实证）**。原"九大理念全 L2 无 GAP"结论须加注：此前漏审的 `homeostasis` /
 `learning_loop` 两模块，现补为 L2 已接活。
+
+## 六、2026-08-04 补充订正：自进化闭环「写→读」读回接通（此前只写不读）
+
+用户追问「这样的设计合理吗 / 把主线继续」后，进一步诊断出自进化闭环的第二处真实缺口：
+`autopilot.run()` 主路径**只写不读**——失败被记入共享记忆库，但下一轮规划前**从不查回**，
+等于"记了但不用来变好"，自进化 OODA 的 observe→orient→decide 回调断开。
+
+更隐蔽的子缺陷：`_record_failure_memory` 原本 `FailureMemory()` **新建实例**写入，与
+`AdaptiveCore` 持有的记忆库不是同一对象，导致即便想读也读不到同一进程刚写的记录。
+
+本轮接活（诚实 **② 级**：代码 + 单测实证，非 ③ 端到端）：
+
+- `AdaptiveCore` 新增 `record_failure(task, capability, error)`：写入走 `self.memory` **同一实例**
+  （与 `observe` / `StageGuard` 同源同对象），使同一进程内"写→读"即时闭环。
+- `autopilot.run()` 规划前新增 **PREFLIGHT 读回**：`core.fix_hints(task, "action.code_exec")`
+  命中已知修复 → `_inject_fix_hints()` 把历史教训前置进规划输入（与 `LearningLoop._inject_hints`
+  同格式）；guard `if "已知修复方案" not in task` 防止 `LearningLoop` 已注入时重复。
+- `_record_failure_memory` 改为调用 `core.record_failure(...)`（统一写入点，消除双实例漂移）。
+- `adaptive.py` 新增 `set_adaptive_core()` 单例注入入口（离线测试隔离用）。
+
+实证（`tests/test_self_evolution_readback_real.py`，2 项全绿，② 级）：
+- **写→读闭环真通**：run1 失败（超时）→ 记入 `core` 同源记忆；run2 同任务规划前 PREFLIGHT
+  命中 → 规划输入含 `已知修复方案` / `网络超时`，证明历史教训真的改变了下一轮行为输入。
+- 全新任务（无历史）PREFLIGHT 不注入，规划输入保持原样（不误伤）。
+
+**诚实保留的两个真实缺口（不掩盖）**：
+1. **体征仍是"折算"的**：`Homeostasis` 读的是 `success_rate/error_rate`（成败换算），非真实
+   runtime 指标（CPU/内存/真实 token 成本/延迟）；纠偏动作 `reduce_concurrency` 实际改的是
+   `evolution_interval`（进化节奏）而非真实并发——语义有错位，待接真实指标。
+2. **全局单例会破租户隔离**：`get_adaptive_core()` 是进程级单例；对**自用模式**无碍，但对
+   **单创OS 多租户 SaaS**（四层架构第①层即多租户隔离底座），所有租户会共享同一份失败记忆 +
+   同一套稳态。此债待 SaaS 落地前消除（按租户维度持有 `AdaptiveCore` 实例）。
+
+**修正后状态**：自进化闭环从"只写死日志"升级为"写→读→改行为"的真反馈环（② 级实证）；
+"失败即训练 / 白盒才可进化"两条理念新增一条**真接线**证据。③ 级（真 LLM 驱动某环节崩溃并
+验证隔离 + 读回）仍未验，不谎报。

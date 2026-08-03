@@ -2031,15 +2031,18 @@ def _advance_cycle(s: _RunState) -> bool:
 
 
 def _record_failure_memory(task: str, result: Dict[str, Any]) -> None:
-    """任务结束后，把失败步根因写入共享失败记忆库（与 AdaptiveCore/LearningLoop 同源）。
+    """任务结束后，把失败步根因写入共享失败记忆库（与 AdaptiveCore/StageGuard 同源同实例）。
 
-    这是把「失败学习」理念接活进 autopilot 主路径的关键补丁：此前只有 LearningLoop
+    这是把「失败学习」理念接活进 autopilot 主路径的关键：此前只有 LearningLoop
     包装层才记录失败，autopilot.run 主路径零引用失败记忆。现在即便直接调用
-    autopilot.run，失败也会被学习、下次同类任务可直接命中修复。
+    autopilot.run，失败也会被学习、下次同类任务 PREFLIGHT 可直接命中修复。
 
-    设计纪律：
-    - lazy import（learning_loop 在方法内 import autopilot.run，避免模块级循环依赖）；
-    - 任何异常都吞掉，绝不破坏反思重设计主流程。
+    关键修正（自进化闭环「写→读」闭合）：写入走 AdaptiveCore 持有的同一记忆实例
+    （core.record_failure → self.memory.add），而非新建 FailureMemory()。这样下一轮
+    PREFLIGHT（core.fix_hints）读到的就是本轮刚写的记录，同一进程内即时闭环，
+    真正「记了就用」，不再是只写不读的死日志。
+
+    设计纪律：任何异常都吞掉，绝不破坏反思重设计主流程。
     """
     try:
         exe = result.get("execution", {})
@@ -2047,15 +2050,30 @@ def _record_failure_memory(task: str, result: Dict[str, Any]) -> None:
         failed = [t for t in trace if not t.get("ok")]
         if not failed:
             return
-        from kernel.learning_loop import analyze_failure, FailureMemory
-        mem = FailureMemory()
+        core = _get_autopilot_core()
         for fs in failed:
             cap = fs.get("capability") or "action.code_exec"
             err = str((fs.get("summary") or "") + (fs.get("error") or ""))
-            rec = analyze_failure(cap, err, task)
-            mem.add(rec)
+            core.record_failure(task, cap, err)
     except Exception:
         logger.warning("autopilot: 失败记忆写入异常，已跳过", exc_info=True)
+
+
+def _inject_fix_hints(task: str, hints: List[str]) -> str:
+    """把已知修复提示注入任务描述（与 LearningLoop._inject_hints 同格式，统一一处）。
+
+    仅在 PREFLIGHT 命中时调用，把上轮同类失败的已知修复前置进规划输入，
+    使下一轮计划/执行能看到历史教训 —— 自进化闭环的「读回并改变行为」。
+    """
+    if not hints:
+        return task
+    uniq = hints[:3]
+    hint_text = ";\n".join(uniq)
+    return (
+        f"{task}\n\n"
+        f"[系统提示：上次执行失败，已分析根因。已知修复方案：\n{hint_text}\n"
+        f"请使用这些修复方案重试，不要重复之前的错误做法。]"
+    )
 
 
 def _get_autopilot_core() -> "AdaptiveCore":
@@ -2083,8 +2101,16 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
     start = time.time()
     # 环节1：规划（动态——规划死则降级为「空计划」，以结构化结果收尾，不崩整轮）
     core = _get_autopilot_core()
+    # PREFLIGHT（自进化闭环「读回」）：查共享失败记忆库，命中已知修复则注入规划输入，
+    # 使下一轮计划/执行能看到历史教训、不再重复犯错。guard 防 LearningLoop 已注入时重复。
+    plan_task = task
+    if "已知修复方案" not in task:
+        preflight = core.fix_hints(task=task, capability="action.code_exec")
+        if preflight:
+            plan_task = _inject_fix_hints(task, preflight)
+            logger.info("autopilot PREFLIGHT: 命中 %d 条已知修复，已注入规划输入", len(preflight))
     _ok_plan, _plan_pair, _err_plan = StageGuard(core, "plan").run(
-        lambda: _plan(task, planner),
+        lambda: _plan(plan_task, planner),
         severity="dynamic",
         fallback=lambda e: ("", [], None, "heuristic"),
         max_retry=0,

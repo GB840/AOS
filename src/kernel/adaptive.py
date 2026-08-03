@@ -161,6 +161,23 @@ class AdaptiveCore:
         except Exception:
             logger.warning("AdaptiveCore.record_stage_failure: 写入异常，已跳过", exc_info=True)
 
+    def record_failure(self, task: str, capability: str, error: str) -> None:
+        """把一次任务级失败（指定步骤+错误）写入共享失败记忆库。
+
+        与 observe()/StageGuard 同源、同实例 —— 这是自进化闭环「写→读」能闭环的
+        关键：autopilot.run() 主路径通过它写，下一轮 PREFLIGHT 通过 fix_hints() 读，
+        二者指向 self.memory 同一个对象，同一进程内立即可见（无需重载磁盘）。
+        """
+        try:
+            rec = analyze_failure(
+                capability or "action.code_exec",
+                error or "task failed",
+                task,
+            )
+            self.memory.add(rec)
+        except Exception:
+            logger.warning("AdaptiveCore.record_failure: 写入异常，已跳过", exc_info=True)
+
     def stage_health(self) -> Dict[str, Any]:
         """每环节失败率（供「高重度」环节判断是否需要升级处置 / 上层观测）。"""
         out: Dict[str, Any] = {}
@@ -354,4 +371,11 @@ def get_adaptive_core(memory_path: Optional[str] = None) -> "AdaptiveCore":
     return _core_singleton
 
 
-__all__ = ["AdaptiveCore", "StageGuard", "get_adaptive_core"]
+def set_adaptive_core(core: Optional["AdaptiveCore"]) -> None:
+    """替换/清空进程单例（离线测试隔离用；传入 None 即复位，下次调用惰性重建）。"""
+    global _core_singleton
+    with _core_lock:
+        _core_singleton = core
+
+
+__all__ = ["AdaptiveCore", "StageGuard", "get_adaptive_core", "set_adaptive_core"]
