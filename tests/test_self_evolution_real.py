@@ -34,11 +34,20 @@ _OLLAMA_URL = os.environ.get("AOS_OLLAMA_URL", "http://localhost:11434/api/gener
 _OLLAMA_TAGS = os.environ.get("AOS_OLLAMA_URL", "http://localhost:11434").rstrip("/") + "/api/tags"
 
 
-def _ollama_model_ready(model: str, base: str = None) -> bool:
-    """快速就绪探针（≤20s）：模型已拉取 且 能在短 prompt 下产出 AOS 能力前缀步骤。
+# 能力前缀行正则（与 parse_plan_to_steps._split_cap_prefix 同构）：识别真实「格式遵循」
+# 模型输出的 `cap=` / `cap:` 显式前缀步骤。chat 鹦鹉只会复述 prompt、产不出这种行。
+_CAP_PREFIX_RE = re.compile(r"^\s*([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\s*[=:]\s*", re.I)
 
-    返回 False 的情况：ollama 没起 / 模型未拉取 / 模型是 chat 鹦鹉（不产生计划格式，
-    如默认的 minicpm-mem）。这些情况下 ③ 无法 honest 验证 → 测试会 skip。
+
+def _ollama_model_ready(model: str, base: str = None) -> bool:
+    """真实就绪探针：模型已拉取 且 能在「真实计划任务」下产出 AOS 能力前缀步骤。
+
+    早期版本用「只输出一行：web.search=ok」回声式 prompt，chat 鹦鹉会照抄而误报
+    为可用（假阳性）——但它在真实反思 prompt 下只会复述、产不出计划格式。本探针
+    改用真实规划任务，并硬性要求响应里出现显式能力前缀行（cap=），才判定可用。
+
+    返回 False → ③ 无法 honest 验证 → 测试 skip（不假绿）。典型 False：ollama 没起 /
+    模型未拉取 / chat 鹦鹉（minicpm-mem、minicpm5-1b 在真实 prompt 下均不产 cap= 行）。
     """
     tags_url = (base or _OLLAMA_TAGS)
     _timeout = int(os.environ.get("AOS_OLLAMA_TIMEOUT", "120"))
@@ -47,18 +56,32 @@ def _ollama_model_ready(model: str, base: str = None) -> bool:
             models = [m["name"] for m in json.loads(r.read().decode())["models"]]
         if model not in models:
             return False
-        # 计划格式探针：要求只输出一行能力前缀步骤（超时与反思调用共用 AOS_OLLAMA_TIMEOUT）
+        # 真实规划探针：要求模型自己生成（非回声）剩余步骤计划
+        probe_prompt = (
+            "任务：调研并总结本地开源语音识别方案 Vosk。\n"
+            "已知：步骤1[web.search] 已成功；步骤2[action.code_exec] 安装超时失败。\n"
+            "请只输出从失败处继续的剩余步骤计划，每行一个，用 AOS 能力标签前缀"
+            "（如 web.search= / inference.llm= / action.code_exec=）。不要解释，只输出计划。"
+        )
         body = json.dumps({
             "model": model,
-            "prompt": "只输出一行：web.search=ok",
+            "prompt": probe_prompt,
             "stream": False,
-            "options": {"num_predict": 24, "temperature": 0.2},
+            "options": {"num_predict": 120, "temperature": 0.3},
         }).encode()
         req = urllib.request.Request(_OLLAMA_URL, data=body,
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=_timeout) as r:
             resp = json.loads(r.read().decode()).get("response", "")
-        return any(re.match(r"^\s*[A-Za-z][\w.\-]*\s*=", ln) for ln in resp.splitlines())
+        if not resp:
+            return False
+        # 必须出现显式能力前缀行（格式遵循的真信号；鹦鹉产不出）
+        caps = getattr(ap, "_CAPS", [])
+        for ln in resp.splitlines():
+            m = _CAP_PREFIX_RE.match(ln)
+            if m and m.group(1).lower() in caps:
+                return True
+        return False
     except Exception:
         return False
 
