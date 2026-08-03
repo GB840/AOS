@@ -18,7 +18,8 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-from typing import Any, Dict, List, Optional
+import threading
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from kernel.homeostasis import Homeostasis, DEFAULT_ACTIONS
 from kernel.learning_loop import FailureMemory, analyze_failure
@@ -57,6 +58,9 @@ class AdaptiveCore:
         self.ever_unstable: bool = False
         # 已执行的纠偏动作（审计轨迹）
         self._applied_actions: List[str] = []
+        # 环节级状态（环节隔离 + 高重度 用）：每环节观测/失败计数
+        self._stage_seen: Dict[str, int] = {}
+        self._stage_failed: Dict[str, int] = {}
 
     # ---------------------------------------------------------- 观测
     def observe(self,
@@ -117,6 +121,57 @@ class AdaptiveCore:
         if latency_ms > 0:
             r["latency_ms"] = min(1.0, latency_ms / 2000.0)
         return r
+
+    # ---------------------------------------------------------- 环节级观测
+    def observe_stage(self, stage: str, ok: bool, error: str = "") -> None:
+        """环节级观测：把单个环节（规划/执行/评估/反思/进化…）的成败折算进
+        全局稳态 + 写入共享失败记忆库。
+
+        设计：不另建稳态实例（避免状态分裂），而是复用同一套体征读数逻辑，
+        使「单环节高频死亡」会推高 error_rate → 触发稳态纠偏（高重度生效）。
+        同时按 `stage.{name}` 维度记失败记忆，便于后续按环节聚合根因。
+        """
+        self._stage_seen[stage] = self._stage_seen.get(stage, 0) + 1
+        if not ok:
+            self._stage_failed[stage] = self._stage_failed.get(stage, 0) + 1
+        # 折算成一次全局任务读数，触发稳态
+        self._tasks_seen += 1
+        if not ok:
+            self._tasks_failed += 1
+        readings = self._derive_readings(ok, 0.0)
+        self._readings.append(readings)
+        if len(self._readings) > self._history_window:
+            self._readings.pop(0)
+        self._last_corrections = self.homeostasis.tick(readings)
+        if self._last_corrections:
+            self.ever_unstable = True
+        # 环节失败也写失败记忆（与任务级 observe 同源共享库）
+        if not ok and error:
+            try:
+                rec = analyze_failure(f"stage.{stage}", error, f"stage:{stage}")
+                self.memory.add(rec)
+            except Exception:
+                logger.warning("AdaptiveCore.observe_stage: 记忆写入异常，已跳过", exc_info=True)
+
+    def record_stage_failure(self, stage: str, error: str) -> None:
+        """显式把某环节的死亡写入共享失败记忆库（供 StageGuard 重试耗尽后调用）。"""
+        try:
+            rec = analyze_failure(f"stage.{stage}", error, f"stage:{stage}")
+            self.memory.add(rec)
+        except Exception:
+            logger.warning("AdaptiveCore.record_stage_failure: 写入异常，已跳过", exc_info=True)
+
+    def stage_health(self) -> Dict[str, Any]:
+        """每环节失败率（供「高重度」环节判断是否需要升级处置 / 上层观测）。"""
+        out: Dict[str, Any] = {}
+        for stage, seen in self._stage_seen.items():
+            failed = self._stage_failed.get(stage, 0)
+            out[stage] = {
+                "seen": seen,
+                "failed": failed,
+                "fail_rate": (failed / seen) if seen else 0.0,
+            }
+        return out
 
     # ---------------------------------------------------------- 汇总纠偏
     def corrections(self) -> List[Any]:
@@ -217,4 +272,86 @@ class AdaptiveCore:
         return self._tasks_failed
 
 
-__all__ = ["AdaptiveCore"]
+class StageGuard:
+    """环节级隔离 + 重度分级 + 动态恢复。
+
+    把「芯粒隔离≠多Agent」「失败即训练(有生有灭)」两条理念直接落到控制环的
+    **每一个环节**（规划/执行/评估/反思/进化），回应「一次死了后面都挨这死」：
+
+    - 隔离（芯粒 crash boundary）：环节内异常被本地捕获，绝不级联杀整轮；
+    - 高重度（severity="high"）：控制环关键链路死亡记 severity=high、写入共享失败
+      记忆、触发稳态纠偏；重试耗尽后**不静默吞**，返回结构化 (ok=False, None, err)，
+      让调用方以失败优雅收尾（仍跑后续环节、仍写记忆、仍落盘）；
+    - 动态（severity="dynamic"）：单点死亡时调用 fallback 拿降级产出（或跳过带教训），
+      整轮在单点死亡后**继续**跑后续环节，体现「动态」自适应。
+
+    用法：
+        g = StageGuard(core, "execute")
+        ok, val, err = g.run(lambda: _execute(...), severity="high")
+        if not ok:
+            # 高重度：结构化收尾，不崩
+        ok2, r, err2 = StageGuard(core, "reflect").run(
+            lambda: _reflect(...), severity="dynamic", fallback=lambda e: None)
+        # 动态：reflect 死了也用 fallback 继续
+    """
+
+    def __init__(self, core: "AdaptiveCore", stage: str) -> None:
+        self.core = core
+        self.stage = stage
+
+    def run(self,
+            fn: Callable[[], "T"],
+            *,
+            severity: str = "high",
+            fallback: Optional[Callable[[Optional[Exception]], Any]] = None,
+            max_retry: int = 1) -> Tuple[bool, Any, Optional[Exception]]:
+        """执行环节 fn；失败则隔离 + 记记忆 + 按需重试/降级。
+
+        Returns:
+            (ok, value, error)
+            - ok=True：环节成功，value 为其返回值；
+            - ok=False：重试耗尽；value=fallback 产出（severity=dynamic 且给了 fallback）
+              或 None（severity=high 或未给 fallback）；error=最后一个异常。
+        """
+        last_err: Optional[Exception] = None
+        for attempt in range(max_retry + 1):
+            try:
+                val = fn()
+                self.core.observe_stage(self.stage, ok=True)
+                return True, val, None
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                logger.warning("StageGuard[%s] 第%d次尝试失败: %s", self.stage, attempt + 1, e)
+                self.core.observe_stage(self.stage, ok=False, error=str(e))
+        # 重试耗尽 → 记失败记忆（共享库，同源）
+        self.core.record_stage_failure(self.stage, str(last_err))
+        # 动态恢复：给 fallback 就用降级产出，整轮继续
+        if severity == "dynamic" and fallback is not None:
+            try:
+                fb = fallback(last_err)
+                logger.info("StageGuard[%s] 降级恢复(动态): 使用 fallback 产出", self.stage)
+                return False, fb, last_err
+            except Exception as e2:  # noqa: BLE001
+                logger.warning("StageGuard[%s] fallback 也失败: %s", self.stage, e2)
+                return False, None, e2
+        # 高重度：不静默吞，返回结构化失败（调用方优雅收尾，不崩）
+        return False, None, last_err
+
+
+# ---- 模块级单例（与 ResilienceBus / LiveEngine 同模式，供跨循环取用） ----
+_core_singleton: Optional["AdaptiveCore"] = None
+_core_lock = threading.Lock()
+
+
+def get_adaptive_core(memory_path: Optional[str] = None) -> "AdaptiveCore":
+    """返回内核自适应中枢进程单例（autopilot 等顶层循环用它，失败记忆库与
+    LiveEvolutionEngine.adaptive 同文件共享）。无则惰性创建。"""
+    global _core_singleton
+    if _core_singleton is None:
+        with _core_lock:
+            if _core_singleton is None:
+                _core_singleton = AdaptiveCore(memory_path=memory_path)
+    return _core_singleton
+
+
+__all__ = ["AdaptiveCore", "StageGuard", "get_adaptive_core"]

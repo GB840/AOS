@@ -28,7 +28,7 @@ from kernel.types import AgentSpec, Message, Response
 from kernel.evolution import AgentDNA, Gene, FitnessTracker, Breeder
 from kernel.ecology import NaturalSelection, ResourceEconomy
 from kernel.immunity import AnomalyDetector, SelfHealer
-from kernel.adaptive import AdaptiveCore
+from kernel.adaptive import AdaptiveCore, StageGuard, get_adaptive_core
 from kernel.events import Event
 from typing import Protocol, runtime_checkable
 
@@ -290,9 +290,12 @@ class LiveEvolutionEngine:
             tasks.append(task)
             self._tasks_completed += 1
 
-            # === 定期进化 ===
+            # === 定期进化（动态——进化环节死则降级跳过本轮进化，不杀整轮）===
             if self._tasks_completed % self._evolution_interval == 0:
-                self.evolve()
+                StageGuard(self.adaptive, "evolve").run(
+                    self.evolve, severity="dynamic",
+                    fallback=lambda e: {"error": f"evolve 环节失败: {e}"}, max_retry=0,
+                )
                 agent_ids = [a.agent_id for a in self.kernel.list_agents()
                              if a.status.value != "stopped"]
                 if not agent_ids:

@@ -1951,8 +1951,43 @@ def _advance_cycle(s: _RunState) -> bool:
         snap = s.to_dict()
         snap["live"] = prog
         save_checkpoint(s.run_id, snap)
-    exe_res, recorded = _execute(s.task, s.steps, seed_context=seed, parallel_groups=pg, on_step=_live_save)
-    r = _assemble(s.task, s.planner, s.plan_text, s.steps, exe_res, s.cycle, s.start)
+    core = _get_autopilot_core()
+    # 环节2：执行（高重度——核心链路死亡必记录学习，但绝不级联杀整轮）
+    ok_exec, exec_pair, err_exec = StageGuard(core, "execute").run(
+        lambda: _execute(s.task, s.steps, seed_context=seed, parallel_groups=pg, on_step=_live_save),
+        severity="high", max_retry=0,
+    )
+    if not ok_exec or exec_pair is None:
+        # 高重度环节死亡：结构化收尾（不崩、不级联），后续 _record_failure_memory 仍跑、仍落盘
+        logger.error("autopilot: execute 环节死亡(%s)，本轮以结构化失败收尾", err_exec)
+        s.last = {
+            "task": s.task, "planner": s.planner,
+            "error": f"execute 环节失败: {err_exec}",
+            "execution": {"trace": []}, "verdict": {"status": "环节失败"},
+            "confidence": 0.0,
+        }
+        try:
+            _record_failure_memory(s.task, s.last)
+        except Exception:
+            pass
+        return False
+    exe_res, recorded = exec_pair
+
+    # 环节3：评估（动态——assemble 死则降级为最小结构，不阻断后续环节）
+    ok_asm, r, err_asm = StageGuard(core, "assemble").run(
+        lambda: _assemble(s.task, s.planner, s.plan_text, s.steps, exe_res, s.cycle, s.start),
+        severity="dynamic",
+        fallback=lambda e: {
+            "task": s.task, "execution": exe_res or {"trace": []},
+            "verdict": {"status": "部分完成(评估降级)"},
+            "error": f"assemble 环节失败: {e}",
+        },
+        max_retry=0,
+    )
+    if not ok_asm or r is None:
+        r = {"task": s.task, "execution": exe_res or {"trace": []},
+             "verdict": {"status": "部分完成(评估降级)"},
+             "error": f"assemble 环节失败: {err_asm}"}
     s.last = r
     s.all_traces.append({
         "cycle": s.cycle,
@@ -1966,11 +2001,17 @@ def _advance_cycle(s: _RunState) -> bool:
     if not _needs_reflection(r) or s.cycle >= s.max_reflect:
         return False
     # 触发反思：质疑 agent 诊断根因 → 重设计下一步计划
-    refl = _reflect_and_redesign(s.task, r, s.cycle + 1, prior_success=s.prior_success)
-    if not refl or not refl.get("steps"):
+    # 环节4：反思重设计（动态——死则降级为「不重设计」，整轮继续/收尾，不级联）
+    ok_refl, refl, err_refl = StageGuard(core, "reflect").run(
+        lambda: _reflect_and_redesign(s.task, r, s.cycle + 1, prior_success=s.prior_success),
+        severity="dynamic",
+        fallback=lambda e: None,
+        max_retry=0,
+    )
+    if not ok_refl or not refl or not refl.get("steps"):
         s.reflection_log.append({
             "cycle": s.cycle + 1, "action": "no_redesign",
-            "reason": "反思未产出有效修正计划，停止避免空转",
+            "reason": f"反思环节失败/降级: {err_refl}",
         })
         return False
     s.reflection_log.append({
@@ -2017,6 +2058,17 @@ def _record_failure_memory(task: str, result: Dict[str, Any]) -> None:
         logger.warning("autopilot: 失败记忆写入异常，已跳过", exc_info=True)
 
 
+def _get_autopilot_core() -> "AdaptiveCore":
+    """惰性取内核自适应中枢单例（避免模块级循环依赖：adaptive→learning_loop
+    在方法内 import autopilot.run，故这里也惰性 import）。"""
+    from kernel.adaptive import get_adaptive_core, StageGuard
+    return get_adaptive_core()
+
+
+# 让 StageGuard 在本模块可见（供 run()/_advance_cycle 环节隔离使用）
+from kernel.adaptive import StageGuard  # noqa: E402  (置于函数后，惰性确保无环)
+
+
 def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[str, Any]:
     """执行一个自主任务（求是引擎式：规划→执行→质疑→重设计→再执行…）。
 
@@ -2029,11 +2081,19 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
     Returns: 顶层含 reflection 字段（轮次/是否达上限）+ run_id。
     """
     start = time.time()
-    plan_text, steps, parallel_groups, used_planner = _plan(task, planner)
+    # 环节1：规划（动态——规划死则降级为「空计划」，以结构化结果收尾，不崩整轮）
+    core = _get_autopilot_core()
+    _ok_plan, _plan_pair, _err_plan = StageGuard(core, "plan").run(
+        lambda: _plan(task, planner),
+        severity="dynamic",
+        fallback=lambda e: ("", [], None, "heuristic"),
+        max_retry=0,
+    )
+    plan_text, steps, parallel_groups, used_planner = _plan_pair if _plan_pair else ("", [], None, "heuristic")
     if not steps:
         return {
             "task": task, "planner": used_planner,
-            "error": "无法生成任何执行步骤",
+            "error": f"规划环节失败，无法生成任何执行步骤（{_err_plan}）",
             "duration_s": round(time.time() - start, 1),
         }
 

@@ -104,6 +104,8 @@ _LAZY_IMPORTS = {
     "learning_loop": ("kernel.learning_loop", "LearningLoop"),
     # 内核自适应中枢（稳态 + 失败学习接活点）
     "adaptive": ("kernel.adaptive", "AdaptiveCore"),
+    "StageGuard": ("kernel.adaptive", "StageGuard"),
+    "get_adaptive_core": ("kernel.adaptive", "get_adaptive_core"),
     # 桥接
     "v5_bridge": ("kernel.v5_bridge", "ChatBridge"),
     "skills_bridge": ("kernel.skills_bridge", "SkillsBridge"),
