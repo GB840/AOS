@@ -420,7 +420,8 @@ def _run_legacy_stt(engine: str, audio_path: str) -> str:
     from core.fabric.adapter import InvokeRequest
 
     adapter = STTAdapter(engine=engine)
-    result = adapter.invoke(InvokeRequest(payload={"audio_path": audio_path}))
+    result = adapter.invoke(InvokeRequest(
+        capability="voice.stt", payload={"audio_path": audio_path}))
     if not getattr(result, "ok", False):
         raise RuntimeError(getattr(result, "error", "STT 失败"))
     return str((result.data or {}).get("text", ""))

@@ -26,16 +26,40 @@ SMALL_CN = "vosk-model-small-cn-0.22"
 LARGE_CN = "vosk-model-cn-0.22"
 
 # 多源：国内镜像优先，官方兜底。任一成功即止。
+# 实测（2026-08-04，中国大陆）：hf-mirror 41.9MB / 5 秒；
+# 官方 alphacephei.com 12 分钟只下到 4MB。所以镜像必须排前面。
+_HF_MIRROR_REPOS = {
+    # 社区搬运仓（已实测可用）；zip 内顶层目录名为 vosk-model-small-cn
+    SMALL_CN: ("guloooovoooo/vosk-model-small-cn", "vosk-model-small-cn.zip",
+               "vosk-model-small-cn"),
+}
+
+
 def sources_for(name: str) -> list:
-    return [
-        # HF 国内镜像（社区搬运，若无此仓库会 404，自动跳下一个）
+    urls = []
+    hit = _HF_MIRROR_REPOS.get(name)
+    if hit:
+        repo, fname, _ = hit
+        urls.append(f"https://hf-mirror.com/{repo}/resolve/main/{fname}")
+    urls += [
         f"https://hf-mirror.com/csukuangfj/vosk-models/resolve/main/{name}.zip",
         f"https://hf-mirror.com/alphacep/{name}/resolve/main/{name}.zip",
-        # ModelScope 社区搬运
-        f"https://modelscope.cn/models/pengzhendong/vosk/resolve/master/{name}.zip",
-        # 官方源（境外，慢但权威）
+        # 官方源（境外，权威但国内常超时；靠断点续传硬啃）
         f"https://alphacephei.com/vosk/models/{name}.zip",
     ]
+    return urls
+
+
+def expected_dirs(name: str) -> list:
+    """该模型解压后可能的顶层目录名（镜像搬运包名字未必带版本号）。
+
+    诚实纪律：镜像包若无版本佐证，**不给它改名冒充某版本**，按原名认。
+    """
+    dirs = [name]
+    hit = _HF_MIRROR_REPOS.get(name)
+    if hit and hit[2] not in dirs:
+        dirs.append(hit[2])
+    return dirs
 
 
 def default_dir() -> str:
@@ -86,10 +110,12 @@ def _download(url: str, dest_zip: str, timeout: int = 60,
 
 def fetch(name: str, base: str) -> str:
     os.makedirs(base, exist_ok=True)
-    target = os.path.join(base, name)
-    if os.path.isdir(target):
-        print(f"[已存在] {target}")
-        return target
+    wanted = expected_dirs(name)
+    for cand in wanted:
+        p = os.path.join(base, cand)
+        if os.path.isdir(p):
+            print(f"[已存在] {p}")
+            return p
 
     dest_zip = os.path.join(base, name + ".zip.part")
     for url in sources_for(name):
@@ -97,15 +123,20 @@ def fetch(name: str, base: str) -> str:
         if _download(url, dest_zip):
             try:
                 with zipfile.ZipFile(dest_zip) as zf:
-                    zf.extractall(base)
+                    # __MACOSX 是 macOS 压缩残渣，解出来是垃圾，跳过
+                    for n in zf.namelist():
+                        if not n.startswith("__MACOSX"):
+                            zf.extract(n, base)
             except zipfile.BadZipFile:
                 print("  下载内容不是有效 zip（可能是错误页），换下一个源")
                 os.remove(dest_zip)
                 continue
             os.remove(dest_zip)
-            if os.path.isdir(target):
-                print(f"[完成] {target}")
-                return target
+            for cand in wanted:
+                p = os.path.join(base, cand)
+                if os.path.isdir(p):
+                    print(f"[完成] {p}")
+                    return p
             print("  解压后未见预期目录，换下一个源")
     raise SystemExit(
         "所有源都失败。手动方案：浏览器打开 "

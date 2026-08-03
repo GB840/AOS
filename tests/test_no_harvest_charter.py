@@ -491,6 +491,50 @@ def test_dialect_unavailable_rejects_honestly_with_plan():
         assert asr.transcribe(wav, "官话-北京")["engine"] == "vosk"
 
 
+def test_dialect_real_transcription_end_to_end():
+    """③ 级实证：真模型 + 真音频 + 真识别，必须出正确文本。
+
+    这条把「引擎就绪」抬升为「真能听懂」。环境不全（无模型/无 ffmpeg/无网）
+    自动 skip——**但绝不因此改判为通过**，skip 就是 skip，不算数。
+    合成音非真人方言录音，所以只覆盖普通话（官话-北京），方言仍待真人验。
+    """
+    import subprocess
+
+    from kernel.dialect_asr import DialectASR, route
+
+    if route("官话-北京") is None:
+        pytest.skip("无就绪 ASR 引擎（跑 scripts/fetch_vosk_model.py 下模型）")
+    try:
+        import edge_tts  # noqa: F401
+        import imageio_ffmpeg
+    except Exception:
+        pytest.skip("缺 edge-tts / imageio-ffmpeg，无法合成验证音频")
+
+    text = "今天天气很好"
+    with tempfile.TemporaryDirectory() as d:
+        mp3 = os.path.join(d, "s.mp3")
+        wav = os.path.join(d, "s.wav")
+        try:
+            import asyncio
+
+            import edge_tts as _t
+
+            asyncio.run(_t.Communicate(text, "zh-CN-XiaoxiaoNeural").save(mp3))
+        except Exception as exc:  # 合成需联网
+            pytest.skip(f"TTS 合成失败（需联网）: {exc!r}"[:120])
+
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+        subprocess.run([ff, "-y", "-loglevel", "error", "-i", mp3,
+                        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav],
+                       check=True)
+
+        out = DialectASR().transcribe(wav, "官话-北京")
+        assert out.get("ok") is True, f"真识别失败: {out}"
+        got = (out.get("text") or "").replace(" ", "")
+        hits = sum(1 for ch in "今天天气好" if ch in got)
+        assert hits >= 3, f"识别文本偏差过大: 期望≈{text} 实得={got}"
+
+
 def test_dialect_capability_is_wired_not_orphan():
     """反孤儿模块：方言能力必须真接进对外入口，建了没人调等于没建。"""
     src = Path(__file__).resolve().parents[1] / "src" / "core" / "fabric" / \
