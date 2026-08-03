@@ -112,6 +112,8 @@ class LiveStatus:
     system_version: str = "1.0.0"
     uptime_seconds: float = 0.0
     adaptive_snapshot: Dict[str, Any] = field(default_factory=dict)
+    max_concurrency: int = 0        # 当前真实并发上限（会被稳态动态压低/回升）
+    tenant_id: Optional[str] = None  # 多租户隔离标识（None=自用模式）
 
 
 # ─── 活体进化引擎 ────────────────────────────────────────────────
@@ -139,9 +141,11 @@ class LiveEvolutionEngine:
                  max_population: int = 10,
                  keep_top_agents: int = 3,
                  offspring_per_generation: int = 2,
+                 max_concurrency: int = 3,          # 每批投入的活跃 agent 工作集上限
                  system: Optional[AOSSystem] = None,    # 可注入（离线测试用轻量内核）
                  executor: Optional[LLMExecutor] = None, # 可注入（离线测试用 fake LLM）
                  adaptive_memory_path: Optional[str] = None,  # 可注入（离线测试用临时记忆库）
+                 tenant_id: Optional[str] = None,   # 多租户隔离（None=自用模式）
                  ):
         # 依赖注入：默认走真实内核 + 真实 LLM；离线/沙箱可注入 fake 真跑闭环。
         self.system: AOSSystem = system or build_default_system()
@@ -154,6 +158,11 @@ class LiveEvolutionEngine:
         self._max_population = max_population
         self._keep_top = keep_top_agents
         self._offspring_count = offspring_per_generation
+        # 真实并发旋钮：每批任务真正投入的活跃 agent 工作集上限。
+        # 稳态判失稳 → reduce_concurrency → 这个值真降 → 下一批真的少铺开。
+        # 诚实边界：run_tasks 当前为顺序执行，本值语义是「活跃工作集宽度」
+        # （真实裁剪，可从 status() 观测），不是线程并行度。
+        self._max_concurrency = max(1, int(max_concurrency))
 
         # 物种子系统（接入真实内核）
         self.fitness = FitnessTracker()
@@ -172,7 +181,10 @@ class LiveEvolutionEngine:
         )
 
         # 内核自适应中枢：稳态 + 失败学习（理念接活点，零引用死代码已在此接电）
-        self.adaptive = AdaptiveCore(memory_path=adaptive_memory_path)
+        self.tenant_id = tenant_id
+        self.adaptive = AdaptiveCore(memory_path=adaptive_memory_path,
+                                     concurrency_base=self._max_concurrency,
+                                     tenant_id=tenant_id)
 
         # 状态
         self._generation: int = 0
@@ -231,6 +243,8 @@ class LiveEvolutionEngine:
                      if a.status.value != "stopped"]
         if not agent_ids:
             agent_ids = self.initialize_population(self._min_population)
+        # 真实并发裁剪：稳态压下来的 _max_concurrency 真的收窄本批工作集
+        agent_ids = agent_ids[:max(1, self._max_concurrency)]
 
         idx = 0
         for prompt in prompts:
@@ -257,9 +271,13 @@ class LiveEvolutionEngine:
                     task.tokens_used = max(10, len(content) // 3)
                 else:
                     task.error = response.error or "unknown"
+                    # 失败也真烧了 prompt token（请求真的发出去了）——不记的话
+                    # energy 体征会误以为「失败不耗资源」，永远看不到白烧成本。
+                    task.tokens_used = max(1, len(prompt) // 3)
             except Exception as exc:
                 task.latency_seconds = round(time.monotonic() - t0, 3)
                 task.error = str(exc)
+                task.tokens_used = max(1, len(prompt) // 3)
 
             # === 记录真实 Fitness ===
             if task.success:
@@ -281,6 +299,13 @@ class LiveEvolutionEngine:
                     error=task.error,
                     capability=engine,
                     latency_ms=task.latency_seconds * 1000.0,
+                    # 真实运行时指标：体征取自真实延迟/真实 token/真实并发宽度，
+                    # 不再由「成败率」一个数折算出五个体征（见 adaptive._derive_readings）
+                    runtime_metrics={
+                        "latency_ms": task.latency_seconds * 1000.0,
+                        "tokens": float(task.tokens_used),
+                        "concurrency": float(len(agent_ids)),
+                    },
                 )
                 self.adaptive.apply_corrections(self)
             except Exception:
@@ -300,6 +325,8 @@ class LiveEvolutionEngine:
                              if a.status.value != "stopped"]
                 if not agent_ids:
                     agent_ids = self.initialize_population(self._min_population)
+                # 进化换血后重新按当前（可能已被稳态压低的）并发上限裁剪
+                agent_ids = agent_ids[:max(1, self._max_concurrency)]
 
         return tasks
 
@@ -381,6 +408,8 @@ class LiveEvolutionEngine:
             top_fitness=top[0].overall if top else 0.0,
             uptime_seconds=round(time.time() - self._started_at, 1),
             adaptive_snapshot=self.adaptive.snapshot(),
+            max_concurrency=self._max_concurrency,
+            tenant_id=self.tenant_id,
         )
 
     # ── 内部 ──

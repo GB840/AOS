@@ -129,14 +129,29 @@ autopilot / live 双路径写入）；"有稳态"原无独立审计条目，现�
   命中 → 规划输入含 `已知修复方案` / `网络超时`，证明历史教训真的改变了下一轮行为输入。
 - 全新任务（无历史）PREFLIGHT 不注入，规划输入保持原样（不误伤）。
 
-**诚实保留的两个真实缺口（不掩盖）**：
-1. **体征仍是"折算"的**：`Homeostasis` 读的是 `success_rate/error_rate`（成败换算），非真实
-   runtime 指标（CPU/内存/真实 token 成本/延迟）；纠偏动作 `reduce_concurrency` 实际改的是
-   `evolution_interval`（进化节奏）而非真实并发——语义有错位，待接真实指标。
-2. **全局单例会破租户隔离**：`get_adaptive_core()` 是进程级单例；对**自用模式**无碍，但对
-   **单创OS 多租户 SaaS**（四层架构第①层即多租户隔离底座），所有租户会共享同一份失败记忆 +
-   同一套稳态。此债待 SaaS 落地前消除（按租户维度持有 `AdaptiveCore` 实例）。
+**两个真实缺口已闭合（2026-08-04 #531 / #532，诚实 ② 级实证）**：
 
-**修正后状态**：自进化闭环从"只写死日志"升级为"写→读→改行为"的真反馈环（② 级实证）；
-"失败即训练 / 白盒才可进化"两条理念新增一条**真接线**证据。③ 级（真 LLM 驱动某环节崩溃并
-验证隔离 + 读回）仍未验，不谎报。
+- **缺口① 体征折算 → 真实 runtime 指标（#531 已闭合）**：`AdaptiveCore._derive_readings`
+  不再把五个体征当「同一个 err_rate 的五种线性变形」。每个体征各有**独立真实来源**：
+  `error_rate`←真实错误率/滑窗；`latency_ms`←真实延迟中位数（且补注册了原漏注册的
+  `latency_ms` 体征，旧版真实延迟被 tick 静默丢弃）；`energy`←真实 token 预算余量或白烧占比；
+  `focus`←真实延迟抖动变异系数 CV；`mood`←真实近况成功率滑窗；`debt`←记忆库真实未解决失败模式数。
+  `reduce_concurrency` 现在**真降并发上限**（中枢旋钮 + 引擎 `_max_concurrency`），不再错配到
+  `evolution_interval`（那是进化频率）；稳定后 `restore_concurrency` 动态回升（非单向阀）。
+  实证：`tests/test_adaptive_runtime_metrics_real.py`（11 项全绿）。
+- **缺口② 全局单例破租户隔离 → 按租户维度持有（#532 已闭合）**：`get_adaptive_core(tenant_id)`
+  改为**租户字典**而非进程级全局单例；`autopilot.run()` 全链路透传 `tenant_id`，PREFLIGHT
+  读回与失败记忆写入均限定在该租户内。A 租户失败教训绝不串到 B 租户（母纲「主权归你」）。
+  `tenant_id=None` 退化为共享默认实例，自用模式行为零变化。实证：
+  `tests/test_adaptive_tenant_isolation_real.py`（6 项全绿：两租户独立 core/记忆库、磁盘文件
+  分离、PREFLIGHT 跨租户不泄露、autopilot 按租户隔离写入 + 读回）。
+
+**唯一诚实保留项（不掩盖）**：③ 级端到端（真 LLM 驱动某环节崩溃并验证 StageGuard 隔离 +
+失败记忆读回闭环）**仍未真验，只就绪门禁、不谎报**。门禁已补齐：
+`tests/test_self_evolution_stageguard_readback_real.py`（③ 级，无 ollama / chat 鹦鹉则 skip，
+绝不假绿）覆盖「StageGuard 隔离在线 + 失败记忆写→读闭环」；与既有
+`tests/test_self_evolution_real.py`（反思记忆读回那一半）合起来，自进化闭环的**两半**在 ③ 级
+均有门禁。真验需用户主机 `AOS_RUN_REAL_TESTS=1` + 本地 ollama 格式遵循型模型（qwen2.5-coder:7b）。
+
+**修正后状态**：自进化闭环从"只写死日志"升级为"写→读→改行为"的真反馈环（② 级实证全绿）；
+"失败即训练 / 白盒才可进化"两条理念各有**真接线**证据。③ 级门禁就绪、待主机真验。

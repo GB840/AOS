@@ -143,7 +143,7 @@ def test_autopilot_execute_stage_death_does_not_cascade(tmp_path):
     mem = os.path.join(str(tmp_path), "fm.json")
     tmp_core = AdaptiveCore(memory_path=mem)
     orig_get = kad.get_adaptive_core
-    kad.get_adaptive_core = lambda: tmp_core
+    kad.get_adaptive_core = lambda *a, **k: tmp_core   # 兼容 tenant_id 维度签名
 
     before = sum(tmp_core.stage_health().get(s, {}).get("failed", 0)
                  for s in tmp_core.stage_health())

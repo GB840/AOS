@@ -106,6 +106,9 @@ _LAZY_IMPORTS = {
     "adaptive": ("kernel.adaptive", "AdaptiveCore"),
     "StageGuard": ("kernel.adaptive", "StageGuard"),
     "get_adaptive_core": ("kernel.adaptive", "get_adaptive_core"),
+    "set_adaptive_core": ("kernel.adaptive", "set_adaptive_core"),
+    "reset_adaptive_cores": ("kernel.adaptive", "reset_adaptive_cores"),
+    "list_adaptive_tenants": ("kernel.adaptive", "list_adaptive_tenants"),
     # 桥接
     "v5_bridge": ("kernel.v5_bridge", "ChatBridge"),
     "skills_bridge": ("kernel.skills_bridge", "SkillsBridge"),

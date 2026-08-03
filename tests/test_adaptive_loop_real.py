@@ -115,12 +115,16 @@ def test_live_engine_adaptive_wired_real_loop(tmp_path):
     # 稳态真实检测到不稳定
     assert eng.adaptive.ever_unstable is True
 
-    # 纠偏真实作用到引擎参数：reduce_concurrency 拉大了 evolution_interval
+    # 纠偏真实作用到引擎参数：reduce_concurrency 真降**并发上限**（不再错配到
+    # evolution_interval —— 那是进化频率，把它拉大反而会把进化本身关掉）
     applied = eng.adaptive.snapshot()["applied_actions"]
     assert any("reduce_concurrency" in a for a in applied), \
         f"自适应应真实修改引擎参数，实际 applied: {applied}"
-    assert eng._evolution_interval > 5, \
-        f"evolution_interval 应被自适应拉大，实际 {eng._evolution_interval}"
+    assert eng._max_concurrency < 3, \
+        f"并发上限应被自适应真降，实际 {eng._max_concurrency}"
+    assert eng.adaptive.concurrency_limit() is not None and \
+        eng.adaptive.concurrency_limit() < 3, \
+        f"中枢并发旋钮应被真降，实际 {eng.adaptive.concurrency_limit()}"
 
     # status() 真实暴露自适应快照
     st = eng.status()

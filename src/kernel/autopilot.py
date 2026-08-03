@@ -1194,12 +1194,21 @@ def _parallel_enabled() -> bool:
         "1", "true", "yes", "on")
 
 
-def _max_parallel() -> int:
-    """单个并行组的最大并发步数上限（默认 3，防线程/资源打满）。"""
+def _max_parallel(tenant_id: Optional[str] = None) -> int:
+    """单个并行组的最大并发步数上限（默认 3，防线程/资源打满）。
+
+    自适应接管（理念2.5 反思闭环真作用于行为）：env 给的是**上限基线**，
+    内核自适应中枢若因失稳压低了并发（AdaptiveCore.reduce_concurrency），
+    这里取二者较小值 —— 稳态说的「降并发」在这里真的生效，不是记个日志。
+    """
     try:
-        return max(1, int(os.environ.get("AOS_MAX_PARALLEL", "3")))
+        base = max(1, int(os.environ.get("AOS_MAX_PARALLEL", "3")))
     except ValueError:
-        return 3
+        base = 3
+    try:
+        return _get_autopilot_core(tenant_id).effective_concurrency(base)
+    except Exception:
+        return base
 
 
 def _cap_parallel_groups(groups, max_workers: int):
@@ -1219,7 +1228,7 @@ def _cap_parallel_groups(groups, max_workers: int):
     return out
 
 
-def _plan(task: str, planner: str):
+def _plan(task: str, planner: str, tenant_id: Optional[str] = None):
     """规划一次：返回 (plan_text, steps, parallel_groups, used_planner)。
 
     ag2 不可用透明降级 heuristic。parallel_groups 仅在 AOS_AUTOPILOT_PARALLEL 开启
@@ -1315,7 +1324,7 @@ def _plan(task: str, planner: str):
             pass  # 出门检失败不阻塞规划
 
     if parallel_groups:
-        parallel_groups = _cap_parallel_groups(parallel_groups, _max_parallel())
+        parallel_groups = _cap_parallel_groups(parallel_groups, _max_parallel(tenant_id))
         if parallel_groups:
             logger.info("并行规划已激活：%d 组 %s（首轮并发执行）",
                         len(parallel_groups), parallel_groups)
@@ -1869,9 +1878,11 @@ class _RunState:
     """
 
     def __init__(self, task: str, planner: str, plan_text: str, steps, max_reflect: int = None,
-                 per_run_id: str = "", parallel_groups=None):
+                 per_run_id: str = "", parallel_groups=None, tenant_id: Optional[str] = None):
         self.task = task
         self.planner = planner
+        # 多租户隔离标识：随 checkpoint 一起落盘，resume_run 续跑时仍回到本租户中枢
+        self.tenant_id = tenant_id
         self.plan_text = plan_text
         self.steps = steps
         # 首轮并发分组（opt-in）；反思重设计后置 None 保持串行（见 _advance_cycle）
@@ -1902,12 +1913,14 @@ class _RunState:
             "start": self.start,
             "max_reflect": self.max_reflect,
             "per_run_id": self.per_run_id,
+            "tenant_id": self.tenant_id,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "_RunState":
         s = cls(d["task"], d["planner"], d["plan_text"], d["steps"], max_reflect=d.get("max_reflect"),
-                per_run_id=d.get("per_run_id", ""), parallel_groups=d.get("parallel_groups"))
+                per_run_id=d.get("per_run_id", ""), parallel_groups=d.get("parallel_groups"),
+                tenant_id=d.get("tenant_id"))
         s.prior_success = d.get("prior_success", [])
         s.reflection_log = d.get("reflection_log", [])
         s.last = d.get("last", {})
@@ -1951,7 +1964,7 @@ def _advance_cycle(s: _RunState) -> bool:
         snap = s.to_dict()
         snap["live"] = prog
         save_checkpoint(s.run_id, snap)
-    core = _get_autopilot_core()
+    core = _get_autopilot_core(getattr(s, "tenant_id", None))
     # 环节2：执行（高重度——核心链路死亡必记录学习，但绝不级联杀整轮）
     ok_exec, exec_pair, err_exec = StageGuard(core, "execute").run(
         lambda: _execute(s.task, s.steps, seed_context=seed, parallel_groups=pg, on_step=_live_save),
@@ -1967,7 +1980,7 @@ def _advance_cycle(s: _RunState) -> bool:
             "confidence": 0.0,
         }
         try:
-            _record_failure_memory(s.task, s.last)
+            _record_failure_memory(s.task, s.last, getattr(s, "tenant_id", None))
         except Exception:
             pass
         return False
@@ -2030,7 +2043,8 @@ def _advance_cycle(s: _RunState) -> bool:
     return True
 
 
-def _record_failure_memory(task: str, result: Dict[str, Any]) -> None:
+def _record_failure_memory(task: str, result: Dict[str, Any],
+                           tenant_id: Optional[str] = None) -> None:
     """任务结束后，把失败步根因写入共享失败记忆库（与 AdaptiveCore/StageGuard 同源同实例）。
 
     这是把「失败学习」理念接活进 autopilot 主路径的关键：此前只有 LearningLoop
@@ -2050,7 +2064,7 @@ def _record_failure_memory(task: str, result: Dict[str, Any]) -> None:
         failed = [t for t in trace if not t.get("ok")]
         if not failed:
             return
-        core = _get_autopilot_core()
+        core = _get_autopilot_core(tenant_id)
         for fs in failed:
             cap = fs.get("capability") or "action.code_exec"
             err = str((fs.get("summary") or "") + (fs.get("error") or ""))
@@ -2076,18 +2090,23 @@ def _inject_fix_hints(task: str, hints: List[str]) -> str:
     )
 
 
-def _get_autopilot_core() -> "AdaptiveCore":
-    """惰性取内核自适应中枢单例（避免模块级循环依赖：adaptive→learning_loop
-    在方法内 import autopilot.run，故这里也惰性 import）。"""
+def _get_autopilot_core(tenant_id: Optional[str] = None) -> "AdaptiveCore":
+    """惰性取**该租户**的内核自适应中枢（避免模块级循环依赖：adaptive→learning_loop
+    在方法内 import autopilot.run，故这里也惰性 import）。
+
+    tenant_id=None → 共享默认实例（自用模式，行为与之前一致）；
+    非空 → 该租户独占稳态与失败记忆库，教训不跨租户串味（母纲「主权归你」）。
+    """
     from kernel.adaptive import get_adaptive_core, StageGuard
-    return get_adaptive_core()
+    return get_adaptive_core(tenant_id=tenant_id)
 
 
 # 让 StageGuard 在本模块可见（供 run()/_advance_cycle 环节隔离使用）
 from kernel.adaptive import StageGuard  # noqa: E402  (置于函数后，惰性确保无环)
 
 
-def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[str, Any]:
+def run(task: str, planner: str = "ag2", run_id: Optional[str] = None,
+        tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """执行一个自主任务（求是引擎式：规划→执行→质疑→重设计→再执行…）。
 
     Args:
@@ -2095,12 +2114,15 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
         planner: "ag2"（LLM 规划）或 "heuristic"（本地关键词）
         run_id: 显式传入则复用该 run_id（外部指定），否则自动生成。
             每轮结束后写入 sqlite checkpoint，进程崩了可用 resume_run 续跑。
+        tenant_id: 多租户隔离标识。None=自用模式（共享默认中枢，行为不变）；
+            非空则本次运行的稳态、失败记忆、PREFLIGHT 读回全部限定在该租户内，
+            教训不跨租户串味（四层架构第①层 + 母纲「主权归你，永不收割」）。
 
     Returns: 顶层含 reflection 字段（轮次/是否达上限）+ run_id。
     """
     start = time.time()
     # 环节1：规划（动态——规划死则降级为「空计划」，以结构化结果收尾，不崩整轮）
-    core = _get_autopilot_core()
+    core = _get_autopilot_core(tenant_id)
     # PREFLIGHT（自进化闭环「读回」）：查共享失败记忆库，命中已知修复则注入规划输入，
     # 使下一轮计划/执行能看到历史教训、不再重复犯错。guard 防 LearningLoop 已注入时重复。
     plan_task = task
@@ -2110,7 +2132,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
             plan_task = _inject_fix_hints(task, preflight)
             logger.info("autopilot PREFLIGHT: 命中 %d 条已知修复，已注入规划输入", len(preflight))
     _ok_plan, _plan_pair, _err_plan = StageGuard(core, "plan").run(
-        lambda: _plan(plan_task, planner),
+        lambda: _plan(plan_task, planner, tenant_id),
         severity="dynamic",
         fallback=lambda e: ("", [], None, "heuristic"),
         max_retry=0,
@@ -2124,7 +2146,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
         }
 
     s = _RunState(task, used_planner, plan_text, steps, max_reflect=_max_reflect_for(task),
-                  per_run_id=run_id, parallel_groups=parallel_groups)
+                  per_run_id=run_id, parallel_groups=parallel_groups, tenant_id=tenant_id)
     if run_id:
         s.run_id = run_id
     create_run(s.run_id, task, used_planner)
@@ -2137,7 +2159,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
 
     # 失败学习：把失败步根因写入共享记忆库（接活理念，绝不破坏反思主流程）
     try:
-        _record_failure_memory(task, s.last)
+        _record_failure_memory(task, s.last, tenant_id)
     except Exception:
         pass
 
