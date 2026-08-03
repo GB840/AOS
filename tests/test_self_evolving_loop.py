@@ -66,3 +66,20 @@ def test_reflection_memory_bounded_rotation(offline_reflect):
     # 轮转生效：没有无限增长到 250，而是有界保留（删最旧 20% 后接近上限）
     assert len(lines) < 250
     assert ap._REFLECTION_MEMORY_MAX - 40 <= len(lines) <= ap._REFLECTION_MEMORY_MAX + 10
+
+
+def test_default_reflect_model_is_not_chat_parrot():
+    """白盒守卫（②级，不依赖真 LLM）：锁死 ③ 修复，防静默回退。
+
+    默认本地反思模型必须是能产出 AOS 计划格式（能力前缀步骤）的模型。
+    已知 minicpm-mem / minicpm5-1b 等 chat 鹦鹉对反思 prompt 只鹦鹉学舌、
+    零能力前缀步骤输出，会让 ③ 自进化闭环静默降级成 heuristic 假闭环
+    （违反理念8 白盒可进化）。此测试把该回归钉死：默认模型不得是 chat 鹦鹉。
+    """
+    default = ap.DEFAULT_REFLECT_OLLAMA_MODEL
+    assert default and isinstance(default, str), "默认反思模型常量必须存在"
+    # chat 鹦鹉家族（MiniCPM 系列是 QA/chat 模型，不遵循计划格式输出）
+    assert not default.lower().startswith("minicpm"), (
+        f"默认反思模型 {default} 是 chat 鹦鹉，会让 ③ 静默降级 heuristic；"
+        f"应改为格式遵循型模型（如 qwen2.5-coder:7b）"
+    )

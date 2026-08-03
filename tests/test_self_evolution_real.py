@@ -11,8 +11,8 @@
 
 诚实纪律（用户铁律）：
   - 绝不用 mock LLM 伪造「变好了」。反思 LLM 调用 100% 走真实 ollama 本地推理。
-  - 若无可用 ollama / 模型不能产出 AOS 计划格式（如默认 minicpm-mem 会鹦鹉学舌、
-    不产生能力前缀步骤）→ 直接 skip，绝不假绿。
+  - 若无可用 ollama / 模型不能产出 AOS 计划格式（如 minicpm-mem / minicpm5-1b 之类
+    chat 鹦鹉会鹦鹉学舌、不产生能力前缀步骤）→ 直接 skip，绝不假绿。
   - ② 级（offline heuristic）与 ③ 级（真实 LLM）分层清晰，本文件只验证 ③。
 
 运行：需 AOS_RUN_REAL_TESTS=1 且本机 ollama 有「能产出计划格式」的模型
@@ -70,7 +70,7 @@ def test_self_evolution_real_llm_loop(tmp_path, monkeypatch):
     if not _ollama_model_ready(model):
         pytest.skip(
             f"ollama 模型 {model} 不可用或不能产出 AOS 计划格式"
-            f"（③需真实本地 LLM；默认 minicpm-mem 是 chat 鹦鹉、不产生能力前缀步骤→跳过）。"
+            f"（③需真实本地 LLM；若模型是 minicpm-mem 之类 chat 鹦鹉、不产生能力前缀步骤→跳过）。"
         )
 
     # 1) 反思记忆指向 tmp（隔离，不污染仓库 _traces/）

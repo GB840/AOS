@@ -1154,6 +1154,13 @@ MAX_REFLECT_MEDIUM = 4   # 3-6 关键词
 MAX_REFLECT_COMPLEX = 8  # >6 关键词
 MAX_REFLECT = MAX_REFLECT_SIMPLE  # 默认/兼容引用（run() 会按任务复杂度覆盖）
 
+# 默认本地反思 LLM（ollama）模型。
+# 必须「能产出 AOS 计划格式（能力前缀步骤）」——这是 ③ 级自进化真闭环成立的前提。
+# 已知 minicpm-mem:latest / minicpm5-1b 是 chat 鹦鹉：对反思 prompt 只鹦鹉学舌、
+# 零能力前缀步骤输出，会让闭环静默降级成 heuristic 假闭环（违反理念8白盒可进化）。
+# 故选格式遵循型 instruct/coder 模型为默认；可用 AOS_REFLECT_OLLAMA_MODEL 覆盖。
+DEFAULT_REFLECT_OLLAMA_MODEL = "qwen2.5-coder:7b"
+
 # 成本硬停：防止任务无限烧资源（时间 + LLM 调用次数双上限）
 MAX_DURATION_SEC = float(os.environ.get("AOS_AUTOPILOT_MAX_DURATION", "600"))  # 默认 10 分钟
 MAX_LLM_CALLS = int(os.environ.get("AOS_AUTOPILOT_MAX_LLM_CALLS", "20"))  # 默认 20 次
@@ -1679,13 +1686,21 @@ def _reflect_and_redesign(task: str, r: Dict[str, Any], cycle: int, prior_succes
     # 2) 本地 ollama（ag2 dead / 无 key 时的真实 LLM 反思后端）
     try:
         text = _ollama_generate(prompt)
-        steps = parse_plan_to_steps(text, _CAPS) if text else []
-        if steps:
-            _attach_engine_hints(steps, causal_hints)
-            if _is_meaningful_redesign(steps, failed, causal_hints):
-                return _finalize_reflect(task, failed, text.strip(), steps, "ollama",
-                                         causal_hints=causal_hints)
-            logger.warning("ollama 反思产出假重设计，降级 heuristic")
+        if text:
+            steps = parse_plan_to_steps(text, _CAPS)
+            if steps:
+                _attach_engine_hints(steps, causal_hints)
+                if _is_meaningful_redesign(steps, failed, causal_hints):
+                    return _finalize_reflect(task, failed, text.strip(), steps, "ollama",
+                                             causal_hints=causal_hints)
+                logger.warning("ollama 反思产出假重设计（换说法不换做法），降级 heuristic")
+            else:
+                # 白盒守卫：模型返回了文本但解析不出 AOS 计划格式（疑似 chat 鹦鹉），
+                # 明确记录而非静默掉，避免 ③ 假闭环不可见（理念8：白盒才可进化）。
+                logger.warning(
+                    "ollama 反思未产出 AOS 计划格式步骤（模型疑似 chat 鹦鹉），降级 heuristic")
+        else:
+            logger.warning("ollama 反思返回空文本，降级 heuristic")
     except Exception as e:  # noqa: BLE001
         logger.warning("反思 ollama 失败，降级 heuristic 重试: %s", e)
     # 3) heuristic 兜底：重试上轮失败步（不编造新计划，仅重发失败能力）
@@ -1745,12 +1760,15 @@ def _finalize_reflect(task, failed, plan_text, steps, engine,
 def _ollama_generate(prompt: str, model: Optional[str] = None) -> Optional[str]:
     """本地 ollama 文本生成（stdlib only，无第三方依赖）。
 
-    ag2 不可用时的反思降级后端——本机 ollama 已装 minicpm-mem / minicpm5-1b
-    等 1.1B 小模型，推理快、零远程 key。超时 30s 防挂死；失败抛异常交上层降级。
+    反思三后端降级链的真实 LLM 环节（ag2 → zhipu → ollama → heuristic）。
+    默认模型见 DEFAULT_REFLECT_OLLAMA_MODEL：必须是能产出 AOS 计划格式
+    （能力前缀步骤）的模型，否则闭环会静默降级成 heuristic 假闭环。
+    超时 60s 防挂死（兼容 7B 模型冷加载），失败抛异常交上层降级到 heuristic。
     """
     import json as _json
     import urllib.request
-    model = model or os.environ.get("AOS_REFLECT_OLLAMA_MODEL", "minicpm-mem:latest")
+    model = model or os.environ.get("AOS_REFLECT_OLLAMA_MODEL",
+                                     DEFAULT_REFLECT_OLLAMA_MODEL)
     url = os.environ.get("AOS_OLLAMA_URL", "http://localhost:11434/api/generate")
     body = _json.dumps({
         "model": model,
@@ -1760,7 +1778,7 @@ def _ollama_generate(prompt: str, model: Optional[str] = None) -> Optional[str]:
     }).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=25) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         data = _json.loads(resp.read().decode("utf-8"))
     return data.get("response") or None
 
