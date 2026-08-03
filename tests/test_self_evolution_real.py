@@ -140,13 +140,16 @@ def test_self_evolution_real_llm_loop(tmp_path, monkeypatch):
         ollama_calls.append(prompt)
         import json as _json
         m = model_ or model
+        # 传输超时可用 AOS_OLLAMA_TIMEOUT 覆盖（默认 120s）：慢速 CPU 主机给真实
+        # LLM 更多墙钟时间跑反思，不伪造任何东西（仍是真实本地推理）。
+        _timeout = int(os.environ.get("AOS_OLLAMA_TIMEOUT", "120"))
         body = _json.dumps({
             "model": m, "prompt": prompt, "stream": False,
             "options": {"temperature": 0.3, "num_predict": 160},
         }).encode()
         req = urllib.request.Request(_OLLAMA_URL, data=body,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=_timeout) as r:
             return _json.loads(r.read().decode()).get("response")
 
     monkeypatch.setattr(ap, "_ollama_generate", real_ollama)
