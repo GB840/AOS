@@ -221,15 +221,30 @@ class ResilienceBus:
     # ---- 可观测 ----
 
     def health(self) -> Dict[str, Any]:
+        """真实健康快照。
+
+        【理念6 诚实纪律】自愈「尝试」与自愈「生效」必须分开报：
+        action == "none" 表示 restart/fallback/isolate 三招全没成，
+        它是一次**失败的尝试**，绝不能计入 heal_succeeded 充数。
+        旧字段 heal_actions 语义已修正为「真正生效的次数」（原先把失败也算了进去，
+        会让面板上看着像自愈了很多次，属于指标虚高——已拆除）。
+        """
         with self._lock:
             open_breakers = {e: br.state for e, br in self._breakers.items()
                              if br.is_open}
+            attempts = len(self._heal_history)
+            succeeded = sum(1 for h in self._heal_history
+                            if h.get("action") != "none")
             return {
                 "total_failures": self._total_failures,
                 "total_success": self._total_success,
                 "circuit_trips": self._circuit_trips,
                 "open_circuits": open_breakers,
-                "heal_actions": len(self._heal_history),
+                "heal_attempts": attempts,
+                "heal_succeeded": succeeded,
+                "heal_failed": attempts - succeeded,
+                # 兼容旧字段名，但语义已修正为「真正生效」而非「尝试过」
+                "heal_actions": succeeded,
                 "recent_heals": self._heal_history[-5:],
                 "distiller_connected": self._distiller is not None,
                 "failure_monitor_connected": self._fm is not None,

@@ -20,7 +20,43 @@ from .tenant_manager import TenantManager
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_USAGE_DATA_PATH = r"d:\AOS\data\danchuang\usage_data.json"
+def _default_usage_data_path() -> str:
+    """用量数据落盘路径（禁止硬编码绝对路径，对齐理念7 千人千面）。
+
+    优先级：AOS_USAGE_DATA_PATH 环境变量 > 仓库根 data/danchuang/usage_data.json。
+    仓库根按本文件位置回溯推导，任何机器 clone 下来都能跑。
+    """
+    env = os.environ.get("AOS_USAGE_DATA_PATH")
+    if env:
+        return env
+    # src/kernel/danchuang/tenant/saas_manager.py -> 回溯 5 层到仓库根
+    root = Path(__file__).resolve().parents[4]
+    return str(root / "data" / "danchuang" / "usage_data.json")
+
+
+DEFAULT_USAGE_DATA_PATH = _default_usage_data_path()
+
+
+# ---------------------------------------------------------------------------
+# 母纲承接：让 AI 不再收割老百姓（AGENTS.md §0.0，效力高于本文件一切商业逻辑）
+# ---------------------------------------------------------------------------
+# 宪法原则 1「本地优先·数据自持」+ 原则 4「主权归你·永不收割」的**代码承接点**。
+#
+# 判定规则（默认即自由）：
+#   - 默认（未显式开启 SaaS 托管）= 本地自持模式 → **所有配额一律无限**，
+#     一个数字都不卡。用户用自己的机器、自己的算力、自己的数据，凭什么限他。
+#   - 仅当显式设置 AOS_SAAS_MODE=1（运营方托管多租户，消耗的是运营方资源）
+#     才启用套餐配额——此时收的是「托管服务费」，不是「功能准入费」。
+#
+# 硬约束（对齐 §0.0.3 付费墙检验，由 tests/test_no_harvest_charter.py 守门）：
+#   即便在 SaaS 模式下，**任何指标在 free 档都不得为 0**——限量可以，
+#   把功能直接锁死是「卖准入」，属于收割，禁止。
+UNLIMITED = -1
+
+
+def is_local_sovereign_mode() -> bool:
+    """是否本地自持模式（默认 True）。本地模式下所有配额无限。"""
+    return os.environ.get("AOS_SAAS_MODE") != "1"
 
 
 class UsageMetric(str, Enum):
@@ -211,18 +247,22 @@ class UsageRecord:
 
 
 _PLAN_QUOTAS: Dict[PlanTier, PlanQuota] = {
+    # 【母纲约束】free 档任何指标都不得为 0——限量可以，锁死功能不行。
+    # 原 WORKFLOW_COUNT=0 是典型功能墙（付费才能用工作流），已判定为收割并拆除。
+    # 本地自持模式下这张表根本不生效（见 is_local_sovereign_mode，全部无限）；
+    # 这里的数字仅用于运营方托管的 SaaS 试用档，收的是托管资源费。
     PlanTier.FREE: PlanQuota(
         tier=PlanTier.FREE,
         name="免费版",
         price=0.0,
-        description="免费试用，适合个人体验",
+        description="托管试用档（本地自持模式下全部无限，不受此表限制）",
         quotas={
-            UsageMetric.AGENT_CALL_COUNT: 50,
-            UsageMetric.GOAL_SET_COUNT: 3,
-            UsageMetric.DAILY_RUN_COUNT: 5,
-            UsageMetric.WORKFLOW_COUNT: 0,
-            UsageMetric.STORAGE_MB: 100,
-            UsageMetric.API_CALL_COUNT: 100,
+            UsageMetric.AGENT_CALL_COUNT: 200,
+            UsageMetric.GOAL_SET_COUNT: 10,
+            UsageMetric.DAILY_RUN_COUNT: 20,
+            UsageMetric.WORKFLOW_COUNT: 5,
+            UsageMetric.STORAGE_MB: 500,
+            UsageMetric.API_CALL_COUNT: 500,
         },
     ),
     PlanTier.STANDARD: PlanQuota(
@@ -577,6 +617,19 @@ class UsageManager:
                 - remaining: 剩余数量（-1 表示无限）
                 - percentage: 使用百分比（无限配额为 0）
         """
+        # 【母纲短路｜AGENTS.md §0.0 原则1+4】本地自持模式一律无限，不卡任何数字。
+        # 用户跑在自己机器上、烧自己的算力、存自己的数据——没有任何理由限制他。
+        # 只有显式 AOS_SAAS_MODE=1（运营方托管、消耗运营方资源）才往下走配额逻辑。
+        if is_local_sovereign_mode():
+            return {
+                "ok": True,
+                "used": 0,
+                "quota": UNLIMITED,
+                "remaining": UNLIMITED,
+                "percentage": 0,
+                "reason": "local_sovereign_mode",
+            }
+
         if isinstance(metric, str):
             try:
                 metric = UsageMetric(metric)
