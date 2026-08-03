@@ -10,8 +10,11 @@ finishes. Set AOS_RUN_NATIVE_TESTS=1 to opt back in (real hosts / deep runs).
 The unified native probe (tests/_env_probe.py) still exposes PYTEST_SKIP_NATIVE
 for finer-grained skips inside modules that merely *use* the native stack.
 '''
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 import pytest
 from pathlib import Path
 
@@ -44,6 +47,16 @@ for _spawn_env in (
     "DESKTOP_TOUCH_MCP_ENABLED", # Desktop-Touch-MCP stdio
 ):
     os.environ.pop(_spawn_env, None)
+
+# --- 灵魂文件隔离（母纲原则 10）---------------------------------------------
+# 真实缺陷修复：constitution_gaps.get_or_create_soul_id() 默认写
+# <repo>/data/soul/soul_id.txt。测试直接调它会**覆盖用户真实灵魂 ID**，
+# 等于跑一次测试把人家的「灵魂」换了。这违反「主权归你」。
+# 统一把测试期的灵魂文件与同步目录指到临时目录，收集阶段就生效。
+_soul_tmp = tempfile.mkdtemp(prefix="aos_soul_test_")
+os.environ.setdefault("AOS_SOUL_ID_PATH", os.path.join(_soul_tmp, "soul_id.txt"))
+os.environ.setdefault("AOS_SOUL_SYNC_DIR", os.path.join(_soul_tmp, "sync"))
+atexit.register(lambda: shutil.rmtree(_soul_tmp, ignore_errors=True))
 
 # --- L3 stability: ignore native-stack modules that crash the runner by default ---
 RUN_NATIVE = os.environ.get("AOS_RUN_NATIVE_TESTS") == "1"

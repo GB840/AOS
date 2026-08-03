@@ -43,6 +43,9 @@ DEFAULT_SOURCES: List[tuple] = [
      "本地价值账本（原则6 劳动有报：用户劳动产物归用户所有、可带走）"),
     ("soul", "data/soul/soul_id.txt",
      "灵魂 ID（原则10 灵魂唯一原语：跨设备稳定、可导出移植）"),
+    ("soul_sync_state", "data/soul/sync_state.json",
+     "灵魂同步状态（Lamport 版本序）。刻意**不含 device_id**："
+     "换机后必须是新设备身份，否则两台机器同 ID 会互相覆盖同步包"),
     ("traces", "src/core/_traces", "执行 Trace（理念8 白盒才可进化的原始数据）"),
     ("workspaces", "data/workspaces", "工作区产物"),
     ("danchuang", "data/danchuang", "租户与用量数据"),

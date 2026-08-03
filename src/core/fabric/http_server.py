@@ -22,7 +22,9 @@ Endpoints:
   GET  /api/companion         companion identity + state (双域记忆视图)
   POST /api/companion/message {"text"} -> 伙伴编排：感知/记忆/规划/执行/回应
   # 语音芯粒（方案三：语音是内核的一个可替换能力，非独立助手）
-  POST /api/voice/stt         {"transcript"|"audio_path"|"audio_b64"} -> {text, engine}
+  POST /api/voice/stt         {"transcript"|"audio_path"|"audio_b64", "dialect"?} -> {text, engine}
+                              传 dialect（如 "粤语"）走方言路由；不可用时 422 + plan 落地命令
+  GET  /api/charter/status    母纲能力真实度自查（方言真支持数 / 灵魂同步协议），可当场复核
   POST /api/voice/tts         {"text","voice?","lang?"} -> {text, audio_url, engine}
   POST /api/voice/turn        {"transcript"|"audio"*} -> 听→想→说 全链路 {reply, audio_url, mood, state}
   GET  /api/voice/info        STT/TTS 引擎可用性探测（诚实）
@@ -229,6 +231,8 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": str(e)})
         if path == "/api/mcp/info":
             return self._send_json(_MCP.get_server_info())
+        if path == "/api/charter/status":
+            return self._get_charter_status()
         if path == "/api/companion":
             return self._get_companion()
         # 人设配置化：GET /api/companion/{user_id}/persona
@@ -555,6 +559,22 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
             for k in ("transcript", "audio_path", "audio_b64", "audio_suffix"):
                 if body.get(k) is not None:
                     payload[k] = body[k]
+
+            # 母纲原则 7 方言平等：显式指定方言时走方言路由，
+            # 不可用则**诚实报错并附落地命令**，绝不拿普通话模型冒充识别成功。
+            dialect = (body.get("dialect") or "").strip()
+            if dialect and payload.get("audio_path"):
+                from kernel.dialect_asr import get_dialect_asr
+
+                dr = get_dialect_asr().transcribe(payload["audio_path"], dialect)
+                if dr.get("ok"):
+                    return self._send_json({"ok": True, "text": dr["text"],
+                                            "engine": dr["engine"],
+                                            "dialect": dr["dialect"]})
+                return self._send_json({"ok": False, "error": dr.get("error"),
+                                        "dialect": dialect,
+                                        "plan": dr.get("plan")}, status=422)
+
             r = STTAdapter().invoke(InvokeRequest(capability="voice.stt", payload=payload))
             if not r.ok:
                 return self._send_json({"ok": False, "error": r.error}, status=422)
@@ -562,6 +582,37 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             logger.exception("voice stt failed")
             return self._send_json({"ok": False, "error": str(e)})
+
+    def _get_charter_status(self) -> None:
+        """母纲能力真实度自查（原则 7 方言平等 / 原则 10 灵魂唯一）。
+
+        故意把「矩阵上写了」和「此刻真能用」分开报——用户一眼能看出
+        我们有没有吹牛。任何数字都可用本接口当场复核。
+        """
+        out = {"ok": True}
+        try:
+            from kernel.constitution_gaps import (
+                dialect_summary, soul_identity, supported_dialects,
+            )
+
+            out["dialect"] = {**dialect_summary(),
+                              "supported_list": supported_dialects()}
+            out["soul"] = soul_identity()
+        except Exception as e:  # noqa: BLE001
+            out["ok"] = False
+            out["error"] = str(e)
+        try:
+            from kernel import dialect_asr
+
+            out["dialect_detail"] = dialect_asr.coverage_report()
+            out["ffmpeg"] = dialect_asr.ffmpeg_available()
+        except Exception:
+            pass
+        out["honesty_note"] = (
+            "declared_covered = 引擎官方声明可覆盖；really_supported = 本机此刻真能识别。"
+            "两者不等是正常的，装上引擎即可对齐；绝不把前者当后者报。"
+        )
+        return self._send_json(out)
 
     def _post_voice_tts(self, body: dict) -> None:
         text = (body.get("text") or body.get("prompt") or "").strip()

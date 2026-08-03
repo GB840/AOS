@@ -406,25 +406,109 @@ def test_distiller_feeds_value_ledger():
 
 
 # ===========================================================================
-# 母纲原则 7：中文优先·方言平等 —— 听懂 22 种方言（诚实缺口追踪）
+# 母纲原则 7：中文优先·方言平等 —— 听懂 22 种方言（真能力 + 反虚报双守门）
 # ===========================================================================
 
-def test_dialect_coverage_is_honest_not_faked():
-    """方言平等：当前真实支持 0 种方言，追踪器如实报 0，绝不谎称 22/22。"""
-    from kernel.constitution_gaps import dialect_summary, supported_dialects
+def test_dialect_capability_layer_is_real_not_placeholder():
+    """能力层必须真存在：真实路由代码，不是占位符。"""
+    from kernel import dialect_asr
+    from kernel.constitution_gaps import dialect_summary
 
-    assert supported_dialects() == [], "当前没有任何方言模型真实集成"
     s = dialect_summary()
     assert s["targets"] == 22, "母纲目标 22 种方言"
-    assert s["supported"] == 0, "真实支持必须为 0，不许造假"
-    assert s["missing"] == 22
+    assert s["capability_layer"] is True, "方言能力层必须已落地，不许是占位"
+    # 已核实开源引擎（Fun-ASR-Nano，Apache-2.0）官方声明覆盖 18 种
+    assert s["declared_covered"] >= 18, "能力矩阵必须覆盖已核实引擎声明的方言"
+    assert s["no_engine"] == 4, "剩 4 种全球暂无已核实引擎声明支持，是真缺口"
+    # 矩阵里的方言必须全在宪法目标清单内（不许自造方言名充数）
+    for engine, dialects in dialect_asr.ENGINE_COVERAGE.items():
+        for d in dialects:
+            assert d in dialect_asr.all_targets(), f"{engine} 覆盖了非目标方言 {d}"
 
 
-def test_no_fake_dialect_claim():
-    """反虚假宣称：当前没有任何模块能合法声称已支持方言 ASR。"""
+def test_dialect_supported_never_exceeds_really_ready():
+    """反虚报：报出来的「已支持」必须 ⊆ 此刻真就绪引擎的覆盖，一个都不许多报。"""
+    from kernel import dialect_asr
     from kernel.constitution_gaps import supported_dialects
 
-    assert supported_dialects() == [], "唯一真值源为空，不得谎称已支持方言"
+    ready = set(dialect_asr.ready_engines())
+    allowed = {d for e in ready for d in dialect_asr.ENGINE_COVERAGE.get(e, [])}
+    reported = set(supported_dialects())
+    assert reported <= allowed, f"虚报方言支持：{reported - allowed}"
+    if not ready:
+        assert reported == set(), "没有任何引擎就绪时必须报 0，不许造假"
+
+
+def test_dialect_routing_really_dispatches():
+    """真路由：注入后端后，方言必须被真分派到正确引擎（验证路由逻辑本身）。"""
+    from kernel.dialect_asr import DialectASR
+
+    calls = []
+
+    def fake_funasr(path, dialect):
+        calls.append(("funasr", dialect))
+        return "识别结果-方言"
+
+    def fake_vosk(path, dialect):
+        calls.append(("vosk", dialect))
+        return "识别结果-普通话"
+
+    with tempfile.TemporaryDirectory() as d:
+        wav = os.path.join(d, "a.wav")
+        with open(wav, "wb") as f:
+            f.write(b"RIFF0000WAVE")
+
+        asr = DialectASR(backends={"funasr": fake_funasr, "vosk": fake_vosk})
+        r = asr.transcribe(wav, "粤语")
+        assert r["ok"] is True and r["engine"] == "funasr", "粤语必须走 funasr"
+        r2 = asr.transcribe(wav, "官话-北京")
+        assert r2["engine"] == "funasr", "两者都能时按优先级选 funasr"
+        assert calls == [("funasr", "粤语"), ("funasr", "官话-北京")]
+
+
+def test_dialect_unavailable_rejects_honestly_with_plan():
+    """诚实拒绝：只有 vosk 时问粤语，必须明确拒绝并给可照敲命令，
+    绝不静默换普通话模型冒充识别成功（这是收割式糊弄）。"""
+    from kernel.dialect_asr import DialectASR
+
+    def fake_vosk(path, dialect):
+        return "不该被调用"
+
+    with tempfile.TemporaryDirectory() as d:
+        wav = os.path.join(d, "a.wav")
+        with open(wav, "wb") as f:
+            f.write(b"RIFF0000WAVE")
+
+        asr = DialectASR(backends={"vosk": fake_vosk})
+        r = asr.transcribe(wav, "粤语")
+        assert r["ok"] is False, "vosk 不支持粤语，必须诚实失败"
+        assert "engine" not in r or r.get("engine") != "vosk", "绝不许拿普通话模型冒充"
+        plan = r.get("plan") or {}
+        assert plan.get("known_target") is True
+        steps = plan.get("steps") or []
+        assert steps and any(s.get("install") for s in steps), "必须给出可照敲的安装命令"
+        # 同一个 asr 问普通话则应该真走 vosk
+        assert asr.transcribe(wav, "官话-北京")["engine"] == "vosk"
+
+
+def test_dialect_capability_is_wired_not_orphan():
+    """反孤儿模块：方言能力必须真接进对外入口，建了没人调等于没建。"""
+    src = Path(__file__).resolve().parents[1] / "src" / "core" / "fabric" / \
+        "http_server.py"
+    text = src.read_text(encoding="utf-8", errors="ignore")
+    assert "kernel.dialect_asr" in text, "方言路由未接进 HTTP 语音入口"
+    assert "/api/charter/status" in text, "缺少母纲能力自查端点，用户无法当场复核"
+    assert "_get_charter_status" in text
+
+
+def test_dialect_no_engine_gap_not_fabricated():
+    """真缺口不脑补：无引擎声明的方言，install_plan 必须承认没辙，不许编造。"""
+    from kernel.constitution_gaps import dialect_install_plan
+
+    plan = dialect_install_plan("儋州话")
+    assert plan["known_target"] is True
+    assert plan.get("available_now") is False
+    assert not plan.get("engines"), "没有引擎就不许编出引擎来"
 
 
 # ===========================================================================
@@ -449,10 +533,91 @@ def test_soul_identity_stable_and_portable():
             os.environ.pop("AOS_SOUL_ID_PATH", None)
 
 
-def test_soul_sync_protocol_not_faked():
-    """反虚假宣称：实时跨设备同步协议未做，必须诚实标注 NOT_IMPLEMENTED。"""
+def test_soul_sync_protocol_is_real_and_offline_first():
+    """同步协议必须真实存在，且默认路径零联网（§0.0.3 断网检验）。"""
     from kernel.constitution_gaps import soul_identity
 
     ident = soul_identity()
-    assert ident["sync_protocol"] == "NOT_IMPLEMENTED", \
-        "没有真实同步协议，绝不许谎称已支持多设备同步"
+    proto = ident["sync_protocol"]
+    assert proto != "NOT_IMPLEMENTED", "同步协议已落地，追踪器必须回报真实协议名"
+    assert proto.startswith("aospkg/"), f"协议标识异常: {proto}"
+    assert ident["requires_network"] is False, "默认通道必须零联网（U 盘也能同步）"
+    names = {t["name"] for t in ident["transports"]}
+    assert "local_dir" in names, "必须有零网络的本地目录通道"
+    default = [t for t in ident["transports"] if t["default"]]
+    assert default and default[0]["requires_network"] is False, \
+        "默认通道不许要求联网，否则断网就成了收割筹码"
+
+
+def test_soul_sync_cross_device_round_trip_real():
+    """真跨设备：A 推 → B 认领 → B 改 → B 推 → A 拉，灵魂统一且数据不丢。"""
+    from kernel.soul_sync import LocalDirTransport, SoulSync
+
+    with tempfile.TemporaryDirectory() as base:
+        dev_a = Path(base) / "deviceA"
+        dev_b = Path(base) / "deviceB"
+        udisk = Path(base) / "udisk"
+        for p in (dev_a, dev_b, udisk):
+            p.mkdir(parents=True, exist_ok=True)
+
+        # A 设备写入灵魂内容
+        (dev_a / "data" / "soul").mkdir(parents=True, exist_ok=True)
+        (dev_a / "data" / "soul" / "soul_id.txt").write_text(
+            "soulA1234567890", encoding="utf-8")
+        (dev_a / ".workbuddy" / "memory").mkdir(parents=True, exist_ok=True)
+        (dev_a / ".workbuddy" / "memory" / "note.md").write_text(
+            "A设备的记忆", encoding="utf-8")
+
+        a = SoulSync(LocalDirTransport(udisk), root=dev_a)
+        pushed = a.push()
+        assert pushed["ok"] is True, f"推送失败: {pushed}"
+
+        # B 设备（全新）认领同一个灵魂
+        b = SoulSync(LocalDirTransport(udisk), root=dev_b)
+        adopted = b.adopt()
+        assert adopted["ok"] is True, f"认领失败: {adopted}"
+        assert b.soul_id == a.soul_id, "跨设备必须是同一个灵魂"
+        assert (dev_b / ".workbuddy" / "memory" / "note.md").exists(), \
+            "记忆必须真的传过去"
+
+        # B 改内容后推回
+        (dev_b / ".workbuddy" / "memory" / "note.md").write_text(
+            "A设备的记忆\nB设备新增一行", encoding="utf-8")
+        assert b.push()["ok"] is True
+
+        # A 拉取：必须真采纳 B 的更新，且旧版存档不丢
+        pulled = a.pull()
+        assert pulled["ok"] is True, f"拉取失败: {pulled}"
+        text = (dev_a / ".workbuddy" / "memory" / "note.md").read_text(
+            encoding="utf-8")
+        assert "B设备新增一行" in text, "远端更新必须真落地，不许静默丢弃"
+        assert a.status()["requires_network"] is False, "全程零联网"
+
+
+def test_soul_sync_package_encrypted_at_rest():
+    """同步包落盘必须加密（复用 utils.keystore），U 盘丢了也不泄露灵魂。"""
+    from kernel import soul_sync
+    from kernel.soul_sync import LocalDirTransport, SoulSync
+
+    if not soul_sync.encryption_available():
+        pytest.skip("keystore 主密钥不可用，跳过加密断言")
+
+    with tempfile.TemporaryDirectory() as base:
+        root = Path(base) / "dev"
+        (root / "data" / "soul").mkdir(parents=True, exist_ok=True)
+        (root / "data" / "soul" / "soul_id.txt").write_text(
+            "soulENC000000001", encoding="utf-8")
+        (root / ".workbuddy" / "memory").mkdir(parents=True, exist_ok=True)
+        (root / ".workbuddy" / "memory" / "secret.md").write_text(
+            "我的私密日记明文标记XYZ", encoding="utf-8")
+
+        udisk = Path(base) / "udisk"
+        s = SoulSync(LocalDirTransport(udisk), root=root, encrypt=True)
+        res = s.push()
+        assert res["ok"] is True and res.get("encrypted") is True
+
+        blobs = list(udisk.glob("*" + soul_sync.PACKAGE_SUFFIX))
+        assert blobs, "同步包必须真写到通道里"
+        raw = blobs[0].read_bytes()
+        assert soul_sync.is_encrypted(raw), "落盘包必须是加密态"
+        assert b"XYZ" not in raw, "明文内容绝不许出现在落盘包里"
