@@ -62,3 +62,45 @@
 - 最大欠账：**原则5 无中心节点纯口号**（唯一真 GAP）；原则9 自进化闭环：③ 机制已在本机用**真实 ollama 调用**证真（教训真实落盘 reflection_memory.jsonl + 第2轮真读回第1轮教训 = 跨轮 Meta-Trace 读回闭环为真；`_is_meaningful_redesign` 白盒守卫正确拒鹦鹉输出），仅「真实 LLM 产出更好重设计」寸步需**格式遵循且可提速**之模型——本机纯 CPU 无（7B/8B ~0 token/min、1.1B 是复述鹦鹉、minicpm-v 视觉模型挂死；`ollama pull qwen2.5:1.5b` 沙箱到 registry 网络受限拉不到）。该断言在 GPU 主机（qwen2.5-coder:7b）或能拉到 qwen2.5:1.5b/3b 的机器上经 `AOS_RUN_REAL_TESTS=1` 真跑即 PASS（③ 测试已修门禁：非格式遵循模型直接 skip，不会假绿）。
 
 守门测试 `tests/test_no_harvest_charter.py` 实测 **32 项**（与文档声称一致），含多条反向验证（诚实拒绝不冒充 / 密文不含明文 / 指标不虚高）。
+
+---
+
+## 五、2026-08-02 补充订正：内核自适应中枢接活（此前为死代码 GAP）
+
+用户批评「器基本的自适应都没有弄 / 理念没对齐」的真实根因：内核两枚理念模块
+——`src/kernel/homeostasis.py`（稳态 / L2E 负反馈控制器）与 `src/kernel/learning_loop.py`
+（失败学习 / AIDE² 双层嵌套优化）——此前是**零引用的孤立死代码**：
+`homeostasis` 全项目零引用；`learning_loop` 仅被自身 CLI 与 `LearningLoop` 包装层引用，
+`autopilot.run` 主路径完全没有失败学习钩子。本审计把九大理念全标 L2 时，漏审了这两枚
+"有类文件但没接活"的模块，属文档漂移，现补正。
+
+本轮已接活（诚实 **② 级**：代码 + 单测实证，非 ③ 端到端）：
+
+- 新建 `src/kernel/adaptive.py:AdaptiveCore`：统一自适应中枢，持有 `Homeostasis.with_defaults()`
+  + `FailureMemory(可注入临时路径)` + 体征滚动窗口。
+  - `observe(success, task, error, capability, latency_ms)`：任务成败 → 映射体征读数（真稳态评估）
+    + 写入共享失败记忆库（`analyze_failure` 真分析根因）。
+  - `corrections()`：汇总稳态纠偏；`fix_hints()`：取已知修复（PREFLIGHT 命中）；
+    `apply_corrections(engine)`：把纠偏**真作用**到 `LiveEvolutionEngine` 参数
+    （`reduce_concurrency`→拉大 `evolution_interval`、`switch_engine_tier:light`→缩 `max_population`、
+    `pay_debt_first`→停 fitness 最差 agent）。
+- `src/kernel/live.py` 接活：`LiveEvolutionEngine.__init__` 创建 `self.adaptive = AdaptiveCore()`，
+  `run_tasks` 每轮后真 `observe` + `apply_corrections`；`status()` 暴露 `adaptive_snapshot`；
+  新增 `adaptive_memory_path` 注入点（离线不污染生产记忆库）。
+- `src/kernel/autopilot.py` 接活：`run()` 末挂 `_record_failure_memory()`，autopilot **主路径**失败即
+  写入共享失败记忆库（与 AdaptiveCore / LearningLoop 同源），`try/except` 包住绝不破坏反思重设计。
+- `src/kernel/__init__.py` 注册 `adaptive → AdaptiveCore`（惰性导入）。
+
+实证（`tests/test_adaptive_loop_real.py`，4 项全绿，② 级）：
+- AdaptiveCore 单元：失败 → 稳态纠偏非空 + 失败记忆增长 + `fix_hints` 可取回已知修复；
+- 集成：`_FakeLLMExecutor(fail_rate=0.6)` 注入 `LiveEvolutionEngine` 真跑 `run_tasks`：
+  `tasks_seen==8`、`tasks_failed>0`、记忆 `total_patterns>0`、`ever_unstable==True`、
+  纠偏真实改了 `evolution_interval`（5 → 1271）、`status().adaptive_snapshot` 含 `failure_patterns`。
+
+**诚实分级**：上述为 **② 级**（代码 + 单测实证）。**③ 级端到端**（真 LLM + 主机真实失败流驱动
+稳态自调参）仍未验，需在主机 `AOS_RUN_REAL_TESTS=1` 或接真实 LLM 执行流验证。
+
+**修正后状态**：「失败即训练」新增一条**真接线**证据（AdaptiveCore → 共享 FailureMemory，
+autopilot / live 双路径写入）；"有稳态"原无独立审计条目，现补 `kernel/homeostasis.py` 为
+**L2（已接活，② 级实证）**。原"九大理念全 L2 无 GAP"结论须加注：此前漏审的 `homeostasis` /
+`learning_loop` 两模块，现补为 L2 已接活。

@@ -1989,6 +1989,34 @@ def _advance_cycle(s: _RunState) -> bool:
     return True
 
 
+def _record_failure_memory(task: str, result: Dict[str, Any]) -> None:
+    """任务结束后，把失败步根因写入共享失败记忆库（与 AdaptiveCore/LearningLoop 同源）。
+
+    这是把「失败学习」理念接活进 autopilot 主路径的关键补丁：此前只有 LearningLoop
+    包装层才记录失败，autopilot.run 主路径零引用失败记忆。现在即便直接调用
+    autopilot.run，失败也会被学习、下次同类任务可直接命中修复。
+
+    设计纪律：
+    - lazy import（learning_loop 在方法内 import autopilot.run，避免模块级循环依赖）；
+    - 任何异常都吞掉，绝不破坏反思重设计主流程。
+    """
+    try:
+        exe = result.get("execution", {})
+        trace = exe.get("trace", []) or []
+        failed = [t for t in trace if not t.get("ok")]
+        if not failed:
+            return
+        from kernel.learning_loop import analyze_failure, FailureMemory
+        mem = FailureMemory()
+        for fs in failed:
+            cap = fs.get("capability") or "action.code_exec"
+            err = str((fs.get("summary") or "") + (fs.get("error") or ""))
+            rec = analyze_failure(cap, err, task)
+            mem.add(rec)
+    except Exception:
+        logger.warning("autopilot: 失败记忆写入异常，已跳过", exc_info=True)
+
+
 def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[str, Any]:
     """执行一个自主任务（求是引擎式：规划→执行→质疑→重设计→再执行…）。
 
@@ -2020,6 +2048,12 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None) -> Dict[s
         save_checkpoint(s.run_id, s.to_dict())
     save_checkpoint(s.run_id, s.to_dict())  # 末轮最终态也落盘
     mark_done(s.run_id)
+
+    # 失败学习：把失败步根因写入共享记忆库（接活理念，绝不破坏反思主流程）
+    try:
+        _record_failure_memory(task, s.last)
+    except Exception:
+        pass
 
     s.last["reflection"] = {
         "attempts": len(s.reflection_log) + 1,  # 总执行轮次

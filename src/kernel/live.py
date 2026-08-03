@@ -28,6 +28,7 @@ from kernel.types import AgentSpec, Message, Response
 from kernel.evolution import AgentDNA, Gene, FitnessTracker, Breeder
 from kernel.ecology import NaturalSelection, ResourceEconomy
 from kernel.immunity import AnomalyDetector, SelfHealer
+from kernel.adaptive import AdaptiveCore
 from kernel.events import Event
 from typing import Protocol, runtime_checkable
 
@@ -110,6 +111,7 @@ class LiveStatus:
     top_fitness: float = 0.0
     system_version: str = "1.0.0"
     uptime_seconds: float = 0.0
+    adaptive_snapshot: Dict[str, Any] = field(default_factory=dict)
 
 
 # ─── 活体进化引擎 ────────────────────────────────────────────────
@@ -139,6 +141,7 @@ class LiveEvolutionEngine:
                  offspring_per_generation: int = 2,
                  system: Optional[AOSSystem] = None,    # 可注入（离线测试用轻量内核）
                  executor: Optional[LLMExecutor] = None, # 可注入（离线测试用 fake LLM）
+                 adaptive_memory_path: Optional[str] = None,  # 可注入（离线测试用临时记忆库）
                  ):
         # 依赖注入：默认走真实内核 + 真实 LLM；离线/沙箱可注入 fake 真跑闭环。
         self.system: AOSSystem = system or build_default_system()
@@ -167,6 +170,9 @@ class LiveEvolutionEngine:
             fallback_model=lambda m: "zhipu/glm-4-flash",
             isolate_skill=lambda s: True,
         )
+
+        # 内核自适应中枢：稳态 + 失败学习（理念接活点，零引用死代码已在此接电）
+        self.adaptive = AdaptiveCore(memory_path=adaptive_memory_path)
 
         # 状态
         self._generation: int = 0
@@ -267,6 +273,20 @@ class LiveEvolutionEngine:
             # === 资源消费 ===
             self.economy.consume(aid, task.tokens_used)
 
+            # === 自适应中枢：稳态 + 失败学习（每轮任务真观测、真纠偏）===
+            try:
+                self.adaptive.observe(
+                    success=task.success,
+                    task=prompt,
+                    error=task.error,
+                    capability=engine,
+                    latency_ms=task.latency_seconds * 1000.0,
+                )
+                self.adaptive.apply_corrections(self)
+            except Exception:
+                # 自适应失败绝不破坏主进化闭环
+                logger.warning("LiveEvolutionEngine: 自适应中枢异常，已跳过", exc_info=True)
+
             tasks.append(task)
             self._tasks_completed += 1
 
@@ -357,6 +377,7 @@ class LiveEvolutionEngine:
             top_agent=top[0].agent_id if top else "none",
             top_fitness=top[0].overall if top else 0.0,
             uptime_seconds=round(time.time() - self._started_at, 1),
+            adaptive_snapshot=self.adaptive.snapshot(),
         )
 
     # ── 内部 ──

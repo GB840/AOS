@@ -102,6 +102,8 @@ _LAZY_IMPORTS = {
     # 进化
     "evolution_distiller": ("kernel.evolution_distiller", "EvolutionDistiller"),
     "learning_loop": ("kernel.learning_loop", "LearningLoop"),
+    # 内核自适应中枢（稳态 + 失败学习接活点）
+    "adaptive": ("kernel.adaptive", "AdaptiveCore"),
     # 桥接
     "v5_bridge": ("kernel.v5_bridge", "ChatBridge"),
     "skills_bridge": ("kernel.skills_bridge", "SkillsBridge"),
