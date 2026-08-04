@@ -30,7 +30,21 @@ def _conn() -> sqlite3.Connection:
     global _CONN
     if _CONN is None:
         os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-        _CONN = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        _CONN = sqlite3.connect(_DB_PATH, check_same_thread=False, timeout=5.0)
+        # WAL: 读不阻塞写、写不阻塞读。autopilot 边跑边 checkpoint 时，
+        # 看板/CLI 的 list_runs 不会再被写事务卡住（默认 rollback journal 读写互斥）。
+        # 进程内并发仍由 _LOCK 串行化，WAL 解决的是"多进程/多连接同时访问同一个库文件"。
+        for pragma in (
+            "PRAGMA journal_mode=WAL",      # 崩溃安全 + 读写并发
+            "PRAGMA synchronous=NORMAL",    # WAL 下的推荐档位，掉电最多丢最后一批已提交事务
+            "PRAGMA busy_timeout=5000",     # 锁竞争时等 5s 而不是立刻 database is locked
+        ):
+            try:
+                _CONN.execute(pragma)
+            except sqlite3.Error:
+                # 某些文件系统（部分网络盘）不支持 WAL，降级为默认日志模式继续跑，
+                # 不能因为一条 PRAGMA 让整个 checkpoint 能力不可用。
+                pass
         _CONN.execute(
             """CREATE TABLE IF NOT EXISTS runs (
                    run_id  TEXT PRIMARY KEY,

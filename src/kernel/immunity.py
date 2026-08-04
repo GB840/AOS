@@ -27,6 +27,18 @@ _LOG = logging.getLogger(__name__)
 from kernel.events import Event, EventBus, SystemEvent
 
 
+# 明确表示"这一次调用成功走通了"的事件白名单。
+# 只有这些事件才会把连续失败计数归零——用白名单而非"非失败即成功"，
+# 避免 agent.registered / skill.discovered 这类中性事件误清计数。
+_SUCCESS_EVENT_TYPES = frozenset({
+    SystemEvent.MODEL_INVOKED, "model.invoked",
+    SystemEvent.AGENT_STARTED, "agent.started",
+    SystemEvent.AGENT_STOPPED, "agent.stopped",
+    SystemEvent.SKILL_CALLED, "skill.called",
+    SystemEvent.MESSAGE_ROUTED, "message.routed",
+})
+
+
 # ─── 异常检测器 ──────────────────────────────────────────────────
 
 class AnomalyDetector:
@@ -70,21 +82,29 @@ class AnomalyDetector:
         self._record(event)
         if event.event_type in (SystemEvent.MODEL_FAILED, "model.failed"):
             self._check_consecutive(event)
+        else:
+            self._note_success(event)
 
     def _on_agent_event(self, event: Event) -> None:
         self._record(event)
         if event.event_type in (SystemEvent.AGENT_FAILED, "agent.failed"):
             self._check_consecutive(event)
+        else:
+            self._note_success(event)
 
     def _on_skill_event(self, event: Event) -> None:
         self._record(event)
         if event.event_type in (SystemEvent.SKILL_FAILED, "skill.failed"):
             self._check_consecutive(event)
+        else:
+            self._note_success(event)
 
     def _on_message_event(self, event: Event) -> None:
         self._record(event)
         if event.event_type in (SystemEvent.MESSAGE_DENIED, "message.denied"):
             self._check_consecutive(event)
+        else:
+            self._note_success(event)
 
     def _record(self, event: Event) -> None:
         with self._lock:
@@ -107,6 +127,20 @@ class AnomalyDetector:
                             {"last_event": event.event_type,
                              "source": event.source})
 
+    def _note_success(self, event: Event) -> None:
+        """一次成功调用打断失败连击 —— 连续计数归零。
+
+        修复：此前该计数只增不减，"连续失败"实为"自进程启动以来累计失败数"，
+        长时间运行必然误报（把偶发失败堆成告警，触发不必要的重启/隔离）。
+        """
+        if event.event_type not in _SUCCESS_EVENT_TYPES:
+            return
+        with self._lock:
+            if self._consecutive_fail_count:
+                _LOG.debug("AnomalyDetector: streak reset by %s (was %d)",
+                           event.event_type, self._consecutive_fail_count)
+                self._consecutive_fail_count = 0
+
     # ── 检测方法 ──
     def error_rate(self) -> float:
         """窗口内错误率。"""
@@ -125,6 +159,21 @@ class AnomalyDetector:
         with self._lock:
             cf = self._consecutive_fail_count
         return rate < self._error_threshold and cf < self._consecutive_failures
+
+    @property
+    def consecutive_failure_count(self) -> int:
+        """当前连续失败计数（成功事件会将其归零）。
+
+        注意与构造参数 ``consecutive_failures``（告警阈值）区分：
+        这里是"现在连挂了几次"，那个是"连挂几次才告警"。
+        """
+        with self._lock:
+            return self._consecutive_fail_count
+
+    def reset_consecutive(self) -> None:
+        """手动归零连续失败计数（自愈动作完成后由调用方显式重置）。"""
+        with self._lock:
+            self._consecutive_fail_count = 0
 
     def recent_alerts(self, n: int = 10) -> List[Dict[str, Any]]:
         with self._lock:

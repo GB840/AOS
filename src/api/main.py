@@ -16,6 +16,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile, Header
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import StreamingResponse, Response
 import base64
 from pydantic import BaseModel, Field
@@ -187,6 +188,25 @@ app.add_middleware(APISecurityMiddleware)
 
 # 速率限制
 app.add_middleware(RateLimitMiddleware, max_requests=config.MAX_REQUESTS_PER_MINUTE)
+
+# ── Host 头白名单 ──
+# Starlette 的 add_middleware 采用 insert(0)，最后添加的在最外层最先执行。
+# Host 校验是最便宜的一道门，必须排在限流/认证之前，所以放在这里（最后添加）。
+# 缺少它时，攻击者可伪造 Host 头做缓存投毒、密码重置链接劫持、内网跳板探测。
+_allowed_hosts = [h.strip() for h in (config.ALLOWED_HOSTS or "").split(",") if h.strip()]
+if config.APP_ENV == "production":
+    if not _allowed_hosts or "*" in _allowed_hosts:
+        raise ValueError(
+            "生产环境必须配置 AOS_ALLOWED_HOSTS 为真实域名列表（不允许为空或含 '*'）"
+        )
+else:
+    # 开发/测试：兜底本机地址；TestClient 默认 Host 头是 testserver，需放行（生产不放行）
+    if not _allowed_hosts:
+        _allowed_hosts = ["localhost", "127.0.0.1", "[::1]"]
+    if "testserver" not in _allowed_hosts:
+        _allowed_hosts.append("testserver")
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
+logger.info(f"启用 Host 头白名单: {_allowed_hosts}")
 
 # 设置统一异常处理
 setup_exception_handlers(app)

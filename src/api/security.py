@@ -169,24 +169,44 @@ def create_access_token(subject: str, expires_min: Optional[int] = None) -> str:
     private_pem, _public_pem = _get_jwt_keys()
     now = datetime.now()
     exp = now + timedelta(minutes=expires_min or config.AUTH_JWT_EXPIRE_MINUTES)
-    payload = {"sub": subject, "iat": int(now.timestamp()), "exp": int(exp.timestamp())}
+    payload = {
+        "sub": subject,
+        "iat": int(now.timestamp()),
+        "nbf": int(now.timestamp()),          # 生效时间，杜绝"未来令牌"提前使用
+        "exp": int(exp.timestamp()),
+        "iss": config.AUTH_JWT_ISSUER,        # 签发方
+        "aud": config.AUTH_JWT_AUDIENCE,      # 受众：本 API
+    }
     return jwt.encode(payload, private_pem, algorithm=config.AUTH_JWT_ALGORITHM)
 
 
 def decode_access_token(token: str) -> tuple[Optional[str], str]:
-    """校验 JWT，返回 (subject, status)。status: "valid" | "expired" | "invalid" | "error"."""
+    """校验 JWT，返回 (subject, status)。status: "valid" | "expired" | "invalid" | "error".
+
+    除签名与 ``exp`` 外，强制校验 ``iss`` / ``aud`` / ``nbf``：
+    只验 exp 时，任何持有同一把公钥的兄弟服务签发的令牌都能横向复用到本 API。
+    """
     try:
         jwt = _import_jwt()
         _private_pem, public_pem = _get_jwt_keys()
-        payload = jwt.decode(token, public_pem, algorithms=[config.AUTH_JWT_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            public_pem,
+            algorithms=[config.AUTH_JWT_ALGORITHM],
+            issuer=config.AUTH_JWT_ISSUER,
+            audience=config.AUTH_JWT_AUDIENCE,
+            leeway=config.AUTH_JWT_LEEWAY_SECONDS,
+            options={"require": ["exp", "iat", "nbf", "iss", "aud", "sub"]},
+        )
         return payload.get("sub"), "valid"
     except jwt.ExpiredSignatureError:
         # Token过期
         logger.warning("JWT token expired")
         return None, "expired"
-    except jwt.InvalidTokenError:
-        # Token无效（格式错误、签名错误等）
-        logger.warning("JWT token invalid")
+    except jwt.InvalidTokenError as e:
+        # Token无效：签名错误 / 格式错误 / iss 不符 / aud 不符 / nbf 未到 / 必填 claim 缺失。
+        # 只记异常类型不记内容，避免把令牌片段写进日志。
+        logger.warning("JWT token invalid: %s", type(e).__name__)
         return None, "invalid"
     except Exception as e:
         logger.error(f"JWT decode error: {e}")
@@ -297,6 +317,20 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         
         return True
 
+    @staticmethod
+    def _has_explicit_credentials(request: Request) -> bool:
+        """请求是否显式携带了凭据（Bearer token 或 API-Key）。
+
+        携带即视为"我要走鉴权路径"，此时凭据必须有效，本地回环豁免不再适用。
+        空串/纯空白不算携带，避免把 ``Authorization: `` 这种空头当成凭据。
+        """
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth:
+            return True
+        api_key = (request.headers.get(API_KEY_NAME)
+                   or request.query_params.get(API_KEY_NAME) or "").strip()
+        return bool(api_key)
+
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
 
@@ -313,7 +347,11 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         #      桌面产品在本机运行，localhost 打开即用；远程入口仍强制 Token。
         #      生产环境（经反向代理暴露）时 client.host 不再是回环地址，豁免自动失效。
         #      安全增强：验证代理头部，防止通过伪造 X-Forwarded-For 等头部绕过鉴权。
-        if self._is_trusted_localhost(request):
+        #      但：一旦请求"显式携带了凭据"，就必须校验通过（fail-closed）。
+        #      否则本机上的任意进程/浏览器页面拿一个过期或伪造的 Bearer 也能长驱直入，
+        #      且服务端会把"凭据错误"静默当成"没带凭据"，掩盖真实的认证故障。
+        #      不带凭据的本机请求依旧免鉴权 —— 母纲"本地优先、打开即用"不受影响。
+        if self._is_trusted_localhost(request) and not self._has_explicit_credentials(request):
             return await call_next(request)
 
         # 2) 上游网关子路径：由各自上游鉴权（架构性豁免，非弱鉴权）。

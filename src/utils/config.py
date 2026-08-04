@@ -54,6 +54,12 @@ class Config(BaseSettings):
     API_KEY: Optional[str] = Field(default=None, validation_alias="AOS_API_KEY")
     API_KEY_HASH: Optional[str] = Field(default=None, validation_alias="AOS_API_KEY_HASH")  # 强制哈希验证
     ALLOWED_ORIGINS: str = "http://localhost:8501,http://localhost:8000"
+    # Host 头白名单（防 Host 头投毒 / 密码重置链接与缓存投毒）。
+    # 开发期默认本机；生产必须显式配置真实域名，"*" 会在 main.py 被拒绝。
+    ALLOWED_HOSTS: str = Field(
+        default="localhost,127.0.0.1,[::1]",
+        validation_alias=AliasChoices("AOS_ALLOWED_HOSTS", "ALLOWED_HOSTS"),
+    )
     MAX_REQUESTS_PER_MINUTE: int = 100
 
     # ===== 团队级认证 (OAuth2/JWT, RS256 非对称) —— 与 API-Key 并存 =====
@@ -63,6 +69,16 @@ class Config(BaseSettings):
     AUTH_JWT_PUBLIC_KEY: Optional[str] = Field(default=None, validation_alias=AliasChoices("AOS_JWT_PUBLIC_KEY", "AUTH_JWT_PUBLIC_KEY"))
     AUTH_JWT_ALGORITHM: str = "RS256"
     AUTH_JWT_EXPIRE_MINUTES: int = 480  # 8h
+    # 签发方 / 受众：只校验 exp 的令牌可被"另一个也用同一把公钥的服务"签发的
+    # 令牌横向复用。补 iss/aud/nbf 后，跨服务令牌串用会被直接拒绝。
+    AUTH_JWT_ISSUER: str = Field(
+        default="aos", validation_alias=AliasChoices("AOS_JWT_ISSUER", "AUTH_JWT_ISSUER")
+    )
+    AUTH_JWT_AUDIENCE: str = Field(
+        default="aos-api", validation_alias=AliasChoices("AOS_JWT_AUDIENCE", "AUTH_JWT_AUDIENCE")
+    )
+    # 时钟偏移容忍（秒），避免多机部署因 NTP 漂移误判 nbf/exp。
+    AUTH_JWT_LEEWAY_SECONDS: int = 30
     # 安全加固：移除admin用户默认值 
     ADMIN_USERNAME: Optional[str] = Field(default=None, validation_alias="AOS_ADMIN_USERNAME")
     # 不再提供任何默认值；生产环境必须设置，开发环境自动生成强随机口令落盘 .secrets/
