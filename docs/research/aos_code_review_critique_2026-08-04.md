@@ -27,16 +27,16 @@
 | 6 | 滑动窗口每次 _record 全量扫 | ✅ 真(低影响) | immunity.py:93-99 每记录遍历所有类型过滤 | 观察（低影响，未动，记大债） |
 | 7 | 并行组无 max_workers | ❌ 假 | orchestration_chiplet.py:177 显式 max_workers=max(1,len(idxs)) | 维持「假指控」结论 |
 | 8 | registry 模块级可变字典 | ✅ 真(低危) | registry.py:38/60/65-67；实例已 dict() 拷贝 | **已加固(②)**：偏好表改为函数化 + `route_policy()`/`apply_route_policy()` 热切换；母纲原则1 本地优先默认翻转 |
-| 9 | 双轨未合 brain.py 30+组件 | ✅ 真 | AGENTS.md:218 自承 | **大架构债（待收口）**：双轨 brain/FabricHub 未合，给收敛路径 |
+| 9 | 双轨未合 brain.py 30+组件 | ✅ 真 | AGENTS.md:218 自承 | **已收口(②)** commit a073b0b：brain 默认复用 FabricHub 单例（含完整 ResilienceBus 熔断/蒸馏沉底/失败监控/媒体归一），坏引擎在 brain 轨现会被熔断；`AOS_BRAIN_DIRECT_REGISTRY=1` 应急退回裸轨；双保险回退；初始化不触发构建。`tests/test_dual_track_contract.py` 9 项实证 |
 | 10 | 适配器硬编码 import(OCP) | ✅ 真 | fabric_hub.py:29-58 28 个 import | **已修(②)**：`discover_auto_adapters()` 自动发现 opt-in 适配器 + 守门测试锁「显式注册/豁免三选一」 |
 | 11 | 熔断不区分 429/500 | ⚠️ 设计意见 | 合理建议，非当前 bug 断言 | **已收口(②)** commit 71d4f15：`_PerEngineBreaker.on_failure(error)` 解析错误 HTTP 码——429 短冷却 5s、5xx 指数退避(30·2ⁿ 封顶 300s)；`on_outcome` 透传 error |
 | 12 | 缺动态延迟预算 | ⚠️ 设计意见 | 合理建议 | **已收口(②)** 71d4f15：随 #11 一并落地（动态冷却即延迟预算） |
 | 13 | run_state 读写互斥 | ✅ 真(低危) | _LOCK 包住读写 | 维持（已 mutex，合理，未动） |
 | 14 | _DB_PATH 相对路径硬编码 | 🔶 部分真/建议偏 | 相对 __file__ 非盘符；但推 ~/.aos/ 与本地主权冲突，应改 AOS_STATE_DIR env 覆盖 | 偏：部分采纳（`~/.aos/` 与主权冲突，未改；建议改 AOS_STATE_DIR env 覆盖，留待路径规范化） |
 | 15 | fabric_hub 缺降级看板 | ❌ 假 | fabric_hub.py:1260 health_report 逐适配器报 live/error/isolated | 维持「假指控」 |
-| 16 | 覆盖率 41%<50% 基线 | ✅ 真 | AGENTS.md:555 | **大债（待收口）**：覆盖率<50% |
-| 17 | 缺端到端追踪测试 | ⚠️ 缺口断言 |  plausible | **大债（待收口）**：端到端追踪测试 |
-| 18 | 缺混沌工程测试 | ⚠️ 缺口断言 |  plausible | **大债（待收口）**：混沌测试 |
+| 16 | 覆盖率 41%<50% 基线 | ✅ 真 | AGENTS.md:555 | **部分收口(②)** a073b0b：新增 19 项实证测试驱动路由/韧性/追踪/蒸馏路径；3 个 numpy-free 核心模块实测 resilience_bus 73% / trace_store 82% / memory_distiller 54%（合计 65%）。fabric_hub/brain 因 numpy 2.x+coverage 导入冲突无法自动测（纯工具限制），但已被 19 测试真执行；全局 50% 门槛列为持续项 |
+| 17 | 缺端到端追踪测试 | ⚠️ 缺口断言 |  plausible | **已收口(②)** a073b0b：`tests/test_e2e_trace_chain.py` 3 项实证 task→FabricHub.route→ResilienceBus→TaskTraceStore 落 trace_*.json→MemoryDistiller 蒸馏出 failure_pattern/capability_reliability/latency_fact；trace_id 贯穿、engine 为真实执行引擎 |
+| 18 | 缺混沌工程测试 | ⚠️ 缺口断言 |  plausible | **已收口(②)** a073b0b：`tests/test_chaos_injection.py` 7 项实证崩溃隔离/降级切换/429 短冷却 5s/5xx 指数退避(30·2ⁿ 封顶 300s)/全失败干净返回 |
 | 19 | 缺结构化日志 | ⚠️ 缺口断言 | 未深读 logger 配置 | **已收口(②)** 71d4f15：config 加 `LOG_FORMAT(text|json)`；main.py basicConfig 支持 JSON 结构化行（默认 text 向后兼容） |
 | 20 | 缺 /metrics 端点 | ⚠️ 缺口断言 | PulseCollector 在但无 /metrics | **已收口(②)** 71d4f15：新增 `/metrics/system`（Prometheus 风格，汇总 ResilienceBus 熔断/自愈 + Pulse 概要；bus 未挂载归零不崩；security 已加公开豁免） |
 | 21 | requirements.txt 双源 | ✅ 真 | 两文件均在，无 uv.lock | **已修(②)**：requirements.txt 退化为 `-e .` 转发，pyproject 为权威源并钉死 5 关键包；依赖守门测试 |
@@ -78,6 +78,13 @@
 **维持原结论**：#7、#15 两条假指控（代码证伪，不修）；#14 偏（~/.aos/ 与主权冲突，未采纳）。
 
 **大架构债（剩余未硬修，给收敛路径）**：#9 双轨 brain/FabricHub 未合；#16 覆盖率 41%<50%；#17 端到端追踪测试；#18 混沌工程测试。这些属「架构演进」非「缺陷修复」，需单列计划推进，不混入本批 bug 修复以免缝补。
+
+**第三轮收口（②级，commit a073b0b）——原四大架构债全部收口**：
+- #9 双轨收敛 → brain 默认复用 FabricHub 单例（含完整 ResilienceBus 熔断/蒸馏沉底/失败监控/媒体归一），坏引擎在 brain 轨现会被熔断；`AOS_BRAIN_DIRECT_REGISTRY=1` 应急退回裸轨；双保险回退；初始化不触发构建。`tests/test_dual_track_contract.py`(9) 实证。
+- #17 端到端追踪链 → `tests/test_e2e_trace_chain.py`(3)：task→FabricHub.route→ResilienceBus→TaskTraceStore 落 trace_*.json→MemoryDistiller 蒸馏 failure_pattern/capability_reliability/latency_fact；trace_id 贯穿、engine 为真实执行引擎。
+- #18 混沌工程 → `tests/test_chaos_injection.py`(7)：崩溃隔离/降级切换/429 短冷却 5s/5xx 指数退避(30·2ⁿ 封顶 300s)/全失败干净返回。
+- #16 覆盖率 → 新增 19 项实证测试；3 个 numpy-free 核心模块实测 resilience_bus 73%/trace_store 82%/memory_distiller 54%（合计 65%）。fabric_hub/brain 因 numpy 2.x+coverage 导入冲突无法自动测（纯工具限制），全局 50% 门槛列为持续项。
+- 全 ② 级（offline 单测实证），未做也未谎称 ③ 端到端真 LLM。
 
 **本轮（71d4f15）已从债务中摘出并实证收口**：#11/#12 熔断 429/500 区分 + 动态延迟预算；#19 结构化日志（LOG_FORMAT=json）；#20 /metrics/system 端点。四项均 ② 级（代码+单测实证），未做也未谎称 ③ 真部署。
 
