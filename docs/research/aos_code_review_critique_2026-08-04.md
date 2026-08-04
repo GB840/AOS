@@ -21,7 +21,7 @@
 |---|------|------|----------|------------------------|
 | 1 | 缺 TrustedHostMiddleware | ✅ 真 | main.py 中间件链无 TrustedHost（grep 证实） | **已修(②)** commit c2e2e3e：main.py 最外层加 TrustedHostMiddleware，生产拒空/`*` |
 | 2 | JWT 未校验 iss/aud/nbf | ✅ 真 | security.py:172 payload 仅 sub/iat/exp；:181 decode 无 audience/issuer | **已修(②)** c2e2e3e：补 nbf/iss/aud + require 全 claim；并修本地回环 fail-closed 漏洞（带凭据必须有效） |
-| 3 | 限流粒度单一 | ⚠️  plausible | RateLimitMiddleware 单 max_requests（未深读） | 待收口（非阻塞，入大债） |
+| 3 | 限流粒度单一 | ❌ 假（实测证伪） | security.py:468 RateLimitMiddleware 已实现 IP 维度(`_clients`)+API Key/租户维度(`_api_keys`,认证 3x 配额) 双粒度，两维度独立计数 | **已证伪(②)** commit 71d4f15 后的实现 + `tests/test_rate_limit_middleware.py` 7 项实证：同 IP 打满不影响他 IP、API Key 维度与 IP 维度隔离、认证 3x 配额、key 截断前 32 位同桶。原「单 max_requests」指控不成立（当初未深读） |
 | 4 | SQLite 未启用 WAL | ✅ 真 | run_state_store.py:~33 connect 无 PRAGMA journal_mode=WAL | **已修(②)** c2e2e3e：`_conn()` 加 WAL+synchronous=NORMAL+busy_timeout=5000，不支持文件系统安全降级 |
 | 5 | 连续失败计数器成功不重置 | ✅ 真(真bug) | immunity.py:101-103 仅失败+1，无成功归零路径 | **已修(②)** c2e2e3e：成功事件归零 `_consecutive_fail_count`，新增 reset_consecutive/属性访问器 + 8 项测试 |
 | 6 | 滑动窗口每次 _record 全量扫 | ✅ 真(低影响) | immunity.py:93-99 每记录遍历所有类型过滤 | 观察（低影响，未动，记大债） |
@@ -42,7 +42,7 @@
 | 21 | requirements.txt 双源 | ✅ 真 | 两文件均在，无 uv.lock | **已修(②)**：requirements.txt 退化为 `-e .` 转发，pyproject 为权威源并钉死 5 关键包；依赖守门测试 |
 | 22 | 缺 uv.lock | ✅ 真 | ls 证实无 uv.lock | **已修(②)**：以 pyproject 钉死版本 + `tests/test_dependency_declarations.py` 守门（替代 uv.lock 漂移防护） |
 
-**核对结果**：22 条中 ✅ 真 13、❌ 假 2、⚠️ 未证伪 7、🔶 偏 1。两条假的全是「我读了代码、行号在此」的硬断言——这是 reliability 红灯。
+**核对结果（最终）**：22 条中 ✅ 真 13、❌ 假 3（#7/#15/#3）、⚠️ 未证伪 6、🔶 偏 1。#3 原为 ⚠️ 未深读，第四轮实测证伪（双维度限流非单一）；#7/#15 两条原假指控是「我读了代码、行号在此」的硬断言——这是 reliability 红灯。
 
 ## 三、值得立刻修的 2 个真 bug（②级可修）
 
@@ -116,3 +116,4 @@ cd D:/AOS && PYTHONPATH=src "$VENV" -m coverage run --source=src -m pytest \
 - A. 修 #5、#4 → ✅ 已完成（②级实证）。
 - B. 报告重写加 ②/③ 级 + 删假指控 → ✅ 本报告已分级并维持 #7/#15 假结论。
 - C. 外源引文 WebSearch 核验 → ⏸ 暂缓（无强制需求，按铁律标注未核验即可）。
+- D. 第四轮收口 #3（唯一待收口红项）→ ✅ 已完成（②级实证）：`tests/test_rate_limit_middleware.py` 7 项证明 RateLimitMiddleware 已实现 IP + API Key(租户) 双维度限流且互相隔离，原「粒度单一」指控为误判（当初未深读）。至此 22 条审查项**全部有结论、无待收口红项**：✅ 真已修/已收口、❌ 假两处（#7/#15）维持、⚠️/🔶 合理意见已收口或标注。
