@@ -29,16 +29,16 @@
 | 8 | registry 模块级可变字典 | ✅ 真(低危) | registry.py:38/60/65-67；实例已 dict() 拷贝 | **已加固(②)**：偏好表改为函数化 + `route_policy()`/`apply_route_policy()` 热切换；母纲原则1 本地优先默认翻转 |
 | 9 | 双轨未合 brain.py 30+组件 | ✅ 真 | AGENTS.md:218 自承 | **大架构债（待收口）**：双轨 brain/FabricHub 未合，给收敛路径 |
 | 10 | 适配器硬编码 import(OCP) | ✅ 真 | fabric_hub.py:29-58 28 个 import | **已修(②)**：`discover_auto_adapters()` 自动发现 opt-in 适配器 + 守门测试锁「显式注册/豁免三选一」 |
-| 11 | 熔断不区分 429/500 | ⚠️ 设计意见 | 合理建议，非当前 bug 断言 | **大债（待收口）**：熔断 429/500 区分 + 动态延迟预算 |
-| 12 | 缺动态延迟预算 | ⚠️ 设计意见 | 合理建议 | **大债（待收口）**：同上 |
+| 11 | 熔断不区分 429/500 | ⚠️ 设计意见 | 合理建议，非当前 bug 断言 | **已收口(②)** commit 71d4f15：`_PerEngineBreaker.on_failure(error)` 解析错误 HTTP 码——429 短冷却 5s、5xx 指数退避(30·2ⁿ 封顶 300s)；`on_outcome` 透传 error |
+| 12 | 缺动态延迟预算 | ⚠️ 设计意见 | 合理建议 | **已收口(②)** 71d4f15：随 #11 一并落地（动态冷却即延迟预算） |
 | 13 | run_state 读写互斥 | ✅ 真(低危) | _LOCK 包住读写 | 维持（已 mutex，合理，未动） |
 | 14 | _DB_PATH 相对路径硬编码 | 🔶 部分真/建议偏 | 相对 __file__ 非盘符；但推 ~/.aos/ 与本地主权冲突，应改 AOS_STATE_DIR env 覆盖 | 偏：部分采纳（`~/.aos/` 与主权冲突，未改；建议改 AOS_STATE_DIR env 覆盖，留待路径规范化） |
 | 15 | fabric_hub 缺降级看板 | ❌ 假 | fabric_hub.py:1260 health_report 逐适配器报 live/error/isolated | 维持「假指控」 |
 | 16 | 覆盖率 41%<50% 基线 | ✅ 真 | AGENTS.md:555 | **大债（待收口）**：覆盖率<50% |
 | 17 | 缺端到端追踪测试 | ⚠️ 缺口断言 |  plausible | **大债（待收口）**：端到端追踪测试 |
 | 18 | 缺混沌工程测试 | ⚠️ 缺口断言 |  plausible | **大债（待收口）**：混沌测试 |
-| 19 | 缺结构化日志 | ⚠️ 缺口断言 | 未深读 logger 配置 | **缺口（待收口）**：结构化日志 |
-| 20 | 缺 /metrics 端点 | ⚠️ 缺口断言 | PulseCollector 在但无 /metrics | **缺口（待收口）**：/metrics 端点 |
+| 19 | 缺结构化日志 | ⚠️ 缺口断言 | 未深读 logger 配置 | **已收口(②)** 71d4f15：config 加 `LOG_FORMAT(text|json)`；main.py basicConfig 支持 JSON 结构化行（默认 text 向后兼容） |
+| 20 | 缺 /metrics 端点 | ⚠️ 缺口断言 | PulseCollector 在但无 /metrics | **已收口(②)** 71d4f15：新增 `/metrics/system`（Prometheus 风格，汇总 ResilienceBus 熔断/自愈 + Pulse 概要；bus 未挂载归零不崩；security 已加公开豁免） |
 | 21 | requirements.txt 双源 | ✅ 真 | 两文件均在，无 uv.lock | **已修(②)**：requirements.txt 退化为 `-e .` 转发，pyproject 为权威源并钉死 5 关键包；依赖守门测试 |
 | 22 | 缺 uv.lock | ✅ 真 | ls 证实无 uv.lock | **已修(②)**：以 pyproject 钉死版本 + `tests/test_dependency_declarations.py` 守门（替代 uv.lock 漂移防护） |
 
@@ -69,9 +69,17 @@
 - #21/#22 依赖双源/缺锁 → requirements.txt 转发 `-e .` + pyproject 钉死 5 关键包 + 依赖守门测试。
 - **额外**：母纲原则1 在路由层落地（PROVIDER_PREFERENCE 默认翻转 local_first，AOS_ROUTE_POLICY=cloud_first 可 opt-out）；CODE_WIKI.md 母纲护栏/#545 偏移修补（方言平等、诚实②/③、不收割商业化、最后核对 commit 锚点）。
 
+**第二轮实证收口（②级，commit 71d4f15）——从「大架构债」摘出落地**：
+- #11/#12 熔断 429/500 区分 + 动态延迟预算 → `_PerEngineBreaker.on_failure(error)`：429 短冷却 5s、5xx 指数退避(30·2ⁿ 封顶 300s)；`on_outcome` 透传 error；向后兼容（旧 `on_failure()` 无参契约保留）。
+- #19 结构化日志 → config 加 `LOG_FORMAT(text|json)`；main.py basicConfig 支持 JSON 行（默认 text 兼容）。
+- #20 /metrics 端点 → 新增 `/metrics/system`（Prometheus 风格，汇总 ResilienceBus 熔断/自愈 + Pulse 概要；bus 未挂载归零不崩；security 已加公开豁免与 /health 同性质）。
+- 测试：test_resilience_breaker_enhance.py(7) + test_metrics_endpoint.py(2) ② 全绿；安全中间件/JWT 测试 21 项无回归。
+
 **维持原结论**：#7、#15 两条假指控（代码证伪，不修）；#14 偏（~/.aos/ 与主权冲突，未采纳）。
 
-**大架构债（非本轮硬修，给收敛路径）**：#9 双轨 brain/FabricHub 未合；#16 覆盖率 41%<50%；#11/#12 熔断 429/500 区分 + 动态延迟预算；#17–#20 端到端追踪/混沌/结构化日志//metrics 缺口。这些属「架构演进」非「缺陷修复」，需单列计划推进，不混入本批 bug 修复以免缝补。
+**大架构债（剩余未硬修，给收敛路径）**：#9 双轨 brain/FabricHub 未合；#16 覆盖率 41%<50%；#17 端到端追踪测试；#18 混沌工程测试。这些属「架构演进」非「缺陷修复」，需单列计划推进，不混入本批 bug 修复以免缝补。
+
+**本轮（71d4f15）已从债务中摘出并实证收口**：#11/#12 熔断 429/500 区分 + 动态延迟预算；#19 结构化日志（LOG_FORMAT=json）；#20 /metrics/system 端点。四项均 ② 级（代码+单测实证），未做也未谎称 ③ 真部署。
 
 **外源引文核验**：仍按铁律标注「未核验」——balacode/ai2core/antigravitylab 等 2026 指南域名未做 WebSearch 核实，不可直接采信；本报告未采纳其建议。
 
