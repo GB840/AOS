@@ -11,6 +11,18 @@ from kernel.plugins.fabric_hub import FabricHub
 from core.fabric.adapter import InvokeResult
 
 
+@pytest.fixture(autouse=True)
+def _isolate_real_llm():
+    """chat() 真实逻辑优先走真实 LLM 直连(zhipu/ollama)，本测试只验证 chat
+    对 FabricHub.route 返回的处理，必须隔离真实网络调用，强制落到 mock 的
+    self.route。否则真实 LLM 回复(沙箱偶发可用)会绕过 mock、断言失真。
+    """
+    with patch("kernel.plugins.fabric_hub.zhipu_chat", return_value=None), \
+         patch("kernel.plugins.fabric_hub.ollama_chat", return_value=None), \
+         patch("kernel.plugins.fabric_hub.ollama_available", return_value=False):
+        yield
+
+
 @pytest.fixture(scope="module")
 def hub():
     """模块级 fixture：所有测试复用一个空适配器 FabricHub。"""

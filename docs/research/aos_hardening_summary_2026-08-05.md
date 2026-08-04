@@ -55,7 +55,14 @@
   - `tests/test_fabric_hub_chat.py`：**8 failed**（7 AssertionError + 1 TypeError）——chat 返回格式契约不符，可能是代码契约变更后测试未跟上，或 chat API 真 bug。
   - `tests/test_bidding_agent.py`：**5 errors**（4 SystemExit/AssertionError in fixture + 1 AssertionError）——setup/fixture 级，可能 fixture 断言或 import 问题。
   - `tests/test_crawl4ai_adapter.py`：**3 failed**（2 非 real 真失败 + 1 `_real` 应 skip）。
-- **诚实边界**：这些是分散在不同模块的测试套件健康问题，非单一全局切面，按「反缝补」纪律**不在此分头打补丁**；建议立项「测试套件健康度专项」系统性修（或在本机/CI 干净跑全量拿基线后批量判）。全局 src 全量覆盖率留待本机/CI（沙箱单例污染+缺真环境，硬测失真）。
+- **诚实边界**：这些是分散在不同模块的测试套件健康问题，非单一全局切面。已立项「测试套件健康度专项」系统修复（见下）。
+
+### 测试套件红项已系统修复（2026-08-05 续，A 项完成）
+用户授权「全部执行」，已系统修复上述 3 个红项（②级实证，**只改测试文件、不动生产代码**——三处生产行为均合理，改测试才是诚实做法，不构成缝补）：
+- `test_fabric_hub_chat.py`（**11 passed**）：`chat()` 真实逻辑优先走真实 LLM 直连（zhipu/ollama），`self.route` 仅兜底；原测试假设 chat 只走 mock route，致真实 LLM 回复绕过断言失真。加 autouse fixture 隔离 `zhipu_chat`/`ollama_chat`/`ollama_available`，强制落 mock route，验证 chat 对 route 返回的处理（正是测试本意）。
+- `test_crawl4ai_adapter.py`（**5 passed + 1 skipped**）：venv 存在「`import crawl4ai` 成功但 `from crawl4ai import AsyncWebCrawler` 失败」的残缺包；测试用宽松 `import crawl4ai` 误判可用，与 adapter 严格检测（`_available=False`）错位。改 `_try_import` 与 adapter 同源（严格检测 `AsyncWebCrawler`），health/路由断言自洽、real_crawl 正确 skip。
+- `test_bidding_agent.py`（**12 passed**）：demo PDF 依赖 reportlab（生成）+ pymupdf（解析），缺则报错级联。装齐两依赖（reportlab 5.0.0 / pymupdf 1.28.0）+ fixture 加双依赖检测（缺失 skip 不红）后全过。
+- 沙箱/本机实测修复后全绿；全局 src 全量覆盖率仍留待本机/CI（沙箱单例污染+缺真环境，硬测失真）——已交付 `scripts/run_full_coverage.sh` 一键脚本。
 
 ## 提交链（feature/infra-setup，已全部推送）
 - `a073b0b` fix(fabric,brain): 收口 #9/#16/#17/#18

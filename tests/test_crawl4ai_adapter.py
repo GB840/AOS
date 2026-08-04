@@ -18,12 +18,18 @@ from core.fabric.adapters import crawl4ai_adapter as m
 
 
 def _crawl4ai_installed() -> bool:
-    return "crawl4ai" in sys.modules or _try_import()
+    # 不用 "crawl4ai" in sys.modules 短路：sys.modules 可能因别的导入残留
+    # 半成品模块而误判为可用，与 adapter 构造时 _import_crawl4ai 的真实探测错位，
+    # 导致 skipif 失效、health/路由断言失真。直接走与 adapter 同源的 try-import。
+    return _try_import()
 
 
 def _try_import() -> bool:
+    # 严格检测：与 adapter._import_crawl4ai 同源（from crawl4ai import AsyncWebCrawler）。
+    # 环境里可能存在「import crawl4ai 成功但 AsyncWebCrawler 导入失败」的残缺包，
+    # 宽松检测会误判为可用，导致 health/路由/skipif 断言错位。
     try:
-        import crawl4ai  # noqa: F401
+        from crawl4ai import AsyncWebCrawler  # type: ignore  # noqa: F401
         return True
     except Exception:  # noqa: BLE001
         return False
