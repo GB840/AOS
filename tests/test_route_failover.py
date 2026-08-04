@@ -1,14 +1,18 @@
-"""锚定「端云合作 / 云端用不了就本地」是路由层的真实机制，而非口号。
+"""锚定「端云合作 / 本地用不了就云端兜底」是路由层的真实机制，而非口号。
 
 验证了三件事：
 1. 某供给方 ok=False 时，route 自动故障转移到下一个 live 供给方；
-2. 供给方按偏好排序（云端优先→本地兜底），transfer 顺序可解释；
+2. 供给方按偏好排序（默认本地优先→云端兜底），transfer 顺序可解释；
 3. 全部失败时返回合并错误，且明确指出每个失败供给方。
+4. AOS_ROUTE_POLICY=cloud_first 可显式翻回云端优先（母纲原则1 的 opt-out）。
 """
 from __future__ import annotations
 
+import os
+
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from core.fabric.capability import Capability
+from core.fabric import registry as _reg
 from core.fabric.registry import FabricRegistry, PROVIDER_PREFERENCE
 
 
@@ -49,12 +53,24 @@ def test_failover_cloud_to_local():
     reg = FabricRegistry()
     reg.register(_Fake("agnes", [Capability.LLM_GATEWAY], InvokeResult(ok=False, error="cloud 503")))
     reg.register(_Fake("litellm", [Capability.LLM_GATEWAY], _ok("litellm")))  # 本地兜底
-    # 偏好：agnes=10 优先，litellm=20 兜底
-    assert PROVIDER_PREFERENCE.get("agnes", 50) < PROVIDER_PREFERENCE.get("litellm", 50)
+    # 默认本地优先：litellm（本地）排在 agnes（云端）之前
+    assert PROVIDER_PREFERENCE.get("litellm", 50) < PROVIDER_PREFERENCE.get("agnes", 50)
 
     res = reg.route(InvokeRequest(capability=Capability.LLM_GATEWAY, payload={}))
     assert res.ok is True
     assert res.data["served_by"] == "litellm"
+
+
+def test_route_policy_cloud_first_flips_preference():
+    """AOS_ROUTE_POLICY=cloud_first 时偏好翻回云端优先（母纲原则1 的 opt-out）。"""
+    save = _reg.route_policy()
+    os.environ["AOS_ROUTE_POLICY"] = "cloud_first"
+    try:
+        _reg.apply_route_policy()
+        assert _reg.PROVIDER_PREFERENCE.get("agnes", 50) < _reg.PROVIDER_PREFERENCE.get("litellm", 50)
+    finally:
+        os.environ.pop("AOS_ROUTE_POLICY", None)
+        _reg.apply_route_policy(save)
 
 
 def test_failover_skips_raise_then_succeeds():

@@ -92,6 +92,16 @@ class ContextManager:
         self._lock = threading.Lock()
         self._created_at = time.strftime("%Y-%m-%dT%H:%M:%S")
 
+    def __len__(self) -> int:
+        """当前上下文条目数（公开接口，替代直接访问 _entries）。"""
+        with self._lock:
+            return len(self._entries)
+
+    @property
+    def step_count(self) -> int:
+        """当前已记录的步骤数（与 __len__ 等价，语义更明确）。"""
+        return len(self)
+
     # ── 添加 ──
 
     def add_step(self, step_result: Dict[str, Any]) -> ContextEntry:

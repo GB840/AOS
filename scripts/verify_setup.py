@@ -110,9 +110,10 @@ def main():
     # ---- Check critical files ----
     print("📄 Critical files:")
     files_ok = True
-    files_ok &= check_path(str(PROJECT_ROOT / "pyproject.toml"), "pyproject.toml")
+    # pyproject.toml 是依赖的唯一真相源；requirements.txt 已退化为 "-e ." 转发，
+    # 缺失也不影响安装（pip install -e . 即可），因此不再作为强制项。
+    files_ok &= check_path(str(PROJECT_ROOT / "pyproject.toml"), "pyproject.toml (依赖真相源)")
     files_ok &= check_path(str(PROJECT_ROOT / ".env.example"), ".env.example")
-    files_ok &= check_path(str(PROJECT_ROOT / "requirements.txt"), "requirements.txt")
     files_ok &= check_path(str(PROJECT_ROOT / "config.yaml"), "config.yaml")
     files_ok &= check_path(str(PROJECT_ROOT / "src" / "api" / "main.py"), "src/api/main.py")
     files_ok &= check_path(str(PROJECT_ROOT / "src" / "core" / "brain.py"), "src/core/brain.py")

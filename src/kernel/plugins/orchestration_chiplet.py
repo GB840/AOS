@@ -336,7 +336,7 @@ class OrchestrationChiplet(BaseAgentAdapter):
         if cm is not None:
             try:
                 cm.add_step({
-                    "step_index": len(cm._entries),
+                    "step_index": len(cm),
                     "step_name": "orchestration_summary",
                     "capability": "orchestration",
                     "output": {"ok_steps": state.ok_steps, "failed_steps": state.failed_steps},

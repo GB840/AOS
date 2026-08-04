@@ -303,8 +303,18 @@ class SelfHealer:
         self._skill_fail_count: Dict[str, int] = defaultdict(int)
 
         # 订阅AnomalyDetector的异常事件
+        # 不覆盖 detector 原有的 _on_alert 回调，而是链式调用：
+        # 先执行原回调（如果有），再执行自愈逻辑，避免静默吞掉调用方注册的回调。
         if detector:
-            detector._on_alert = self._on_anomaly
+            _prev_alert = detector._on_alert
+            def _chained_alert(rule, message, detail):
+                if _prev_alert:
+                    try:
+                        _prev_alert(rule, message, detail)
+                    except Exception as e:  # noqa: BLE001
+                        _LOG.warning("AnomalyDetector 原 on_alert 回调异常: %s", e)
+                self._on_anomaly(rule, message, detail)
+            detector._on_alert = _chained_alert
 
         self._bus.subscribe("agent.*", self._on_agent_event)
         self._bus.subscribe("model.failed", self._on_model_failed)

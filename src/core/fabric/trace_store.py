@@ -37,6 +37,11 @@ def _traces_dir() -> Path:
     return Path(src_dir) / "_traces"
 
 
+# 理念8「限最大存储条数防磁盘打满」：trace 文件数硬上限，超出按 mtime 删最旧。
+# 与 autopilot._REFLECTION_MEMORY_MAX 同源纪律（单文件追加轮转 vs 多文件轮转）。
+_MAX_TRACE_FILES = 500
+
+
 class TaskTraceStore:
     """一个 task 的逐步 trace 累加器，finish 时 flush 成 trace_<id>.json。"""
 
@@ -93,10 +98,28 @@ class TaskTraceStore:
             path = self._dir / f"trace_{trace_id}.json"
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(buf, f, ensure_ascii=False, indent=2)
+            self._enforce_rotation()  # 理念8：防磁盘打满
             return str(path)
         except Exception as e:  # noqa: BLE001 - 落盘失败不致命
             logger.warning("trace flush failed %s: %s", trace_id, e)
             return None
+
+    def _enforce_rotation(self) -> None:
+        """理念8：trace 文件数超 _MAX_TRACE_FILES 时按 mtime 删最旧的。
+
+        best-effort：删除失败只记日志，不影响主流程（与 finish「绝不抛」一致）。
+        """
+        try:
+            files = sorted(self._dir.glob("trace_*.json"),
+                           key=lambda p: p.stat().st_mtime)
+            excess = len(files) - _MAX_TRACE_FILES
+            for p in files[:max(0, excess)]:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+        except Exception as e:  # noqa: BLE001
+            logger.debug("trace rotation failed: %s", e)
 
 
 class TracedRoute:

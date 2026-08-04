@@ -79,7 +79,10 @@ _LOG = logging.getLogger("aos.fabric.hub")
 _SESSIONS: "OrderedDict[str, List[Dict[str, str]]]" = OrderedDict()
 _SESSION_MAX_TURNS = 5
 _SESSION_MAX_COUNT = 1024  # 最多缓存会话数，超出按 LRU 淘汰，防无限增长
-_SESSION_DIR = Path("data/workspaces/fabric/sessions")
+# 绝对路径：基于 __file__ 上溯到仓库根，不依赖进程 CWD。
+# 遵循宪法第1条「本地优先·数据自持」——数据在仓库内，不上云。
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SESSION_DIR = _REPO_ROOT / "data" / "workspaces" / "fabric" / "sessions"
 _SESSION_LOCK = threading.Lock()  # 保护_SESSIONS的并发访问
 
 
@@ -142,10 +145,11 @@ def _busy_wait(seconds: float) -> None:
     while time.perf_counter() < deadline:
         pass
 
-# 顺序即注册顺序；新增引擎只需在此追加一行 + 在 core.fabric.adapters 落适配器。
+# 顺序即注册顺序，且顺序有语义（靠前的在能力匹配时优先命中），所以显式列表保留 —— 
+# 这一段不能交给字典序自动生成。
 # 过滤 None：core.fabric.adapters 包对导入失败的适配器置 None，这里剔除，
 # 避免 __init__ 里 `cls()` 对 None 抛 TypeError（单适配器故障不拖垮枢纽）。
-_ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
+_EXPLICIT_ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
     a
     for a in (
         OpenClawAdapter,
@@ -178,6 +182,54 @@ _ADAPTERS: tuple[type[BaseAgentAdapter], ...] = tuple(
     )
     if a is not None
 )
+
+
+def discover_auto_adapters(
+    exclude: tuple[type[BaseAgentAdapter], ...] = (),
+) -> tuple[type[BaseAgentAdapter], ...]:
+    """扫描 core.fabric.adapters 包，收集声明了 ``AUTO_REGISTER = True`` 的适配器。
+
+    解决的问题（开闭原则）：此前新增一个引擎必须同时改动本文件的 import 段和
+    ``_EXPLICIT_ADAPTERS`` 列表 —— 枢纽对扩展不开放、对修改不封闭。
+    现在适配器只要在类上写一行 ``AUTO_REGISTER = True`` 并被包的 ``__init__``
+    导出，就会被自动收录，无需再碰枢纽代码。
+
+    为什么是 opt-in 而不是"全都自动注册"：包里还住着 EchoAdapter（测试桩）、
+    MCPClientAdapter / MCPStdioAdapter（须先 register_mcp_server 配好服务器
+    地址才有意义）这类**不该默认上线**的适配器。无脑全注册会让测试桩参与真实
+    路由竞争。所以由适配器自己表态，枢纽不替它做主。
+
+    返回结果按类名排序，保证多次启动的注册顺序稳定可复现。
+    """
+    excluded = set(exclude)
+    try:
+        import core.fabric.adapters as _adapters_pkg
+    except Exception as e:  # pragma: no cover - 包整体导入失败时不拖垮枢纽
+        _LOG.warning("适配器自动发现跳过（包导入失败）: %s", e)
+        return ()
+
+    names = getattr(_adapters_pkg, "__all__", None) or dir(_adapters_pkg)
+    found: list[type[BaseAgentAdapter]] = []
+    for name in names:
+        obj = getattr(_adapters_pkg, name, None)
+        if not isinstance(obj, type) or not issubclass(obj, BaseAgentAdapter):
+            continue
+        if obj is BaseAgentAdapter or obj in excluded or obj in found:
+            continue
+        if getattr(obj, "AUTO_REGISTER", False) is True:
+            found.append(obj)
+    found.sort(key=lambda c: c.__name__)
+    if found:
+        _LOG.info("适配器自动发现: %s", ", ".join(c.__name__ for c in found))
+    return tuple(found)
+
+
+# 最终注册表 = 有序显式列表（优先级敏感）+ 自动发现的 opt-in 适配器（追加在后）
+_ADAPTERS: tuple[type[BaseAgentAdapter], ...] = (
+    _EXPLICIT_ADAPTERS + discover_auto_adapters(exclude=_EXPLICIT_ADAPTERS)
+)
+
+
 class IsolatedAdapterProxy(BaseAgentAdapter):
     """进程内代理：让被隔离到子进程的引擎仍能参与枢纽的能力路由/自检。
 
@@ -1345,7 +1397,19 @@ class FabricHub:
     # autopilot 经 _save_semantic_memory 写入，hub 经 memory_recall 召回，
     # 形成「写→召回」闭环，且不依赖 mem0/ollama 是否通电。
     # 单一路径真源（与 autopilot._SEMANTIC_MEMORY_PATH 同一文件，经 kernel.semantic_state）
-    from kernel.semantic_state import SEMANTIC_MEMORY_PATH as _SEMANTIC_JSONL
+    # 延迟导入：避免类体级 import 失败拖垮整个 FabricHub 类定义（理念3 单点故障不蔓延）。
+    _SEMANTIC_JSONL: str = ""  # 首次访问时由 _semantic_jsonl() 填充
+
+    @classmethod
+    def _semantic_jsonl(cls) -> str:
+        """延迟加载 SEMANTIC_MEMORY_PATH，导入失败时返回空串（诚实降级）。"""
+        if not cls._SEMANTIC_JSONL:
+            try:
+                from kernel.semantic_state import SEMANTIC_MEMORY_PATH
+                cls._SEMANTIC_JSONL = SEMANTIC_MEMORY_PATH
+            except Exception as e:  # noqa: BLE001
+                _LOG.warning("semantic_state 导入失败，离线语义记忆回退不可用: %s", e)
+        return cls._SEMANTIC_JSONL
 
     def memory_recall(self, query: str, user_id: str = "default",
                       **opts) -> list:
@@ -1385,7 +1449,7 @@ class FabricHub:
         无文件 / 解析失败 → 空列表（不抛）。
         """
         import re
-        path = self._SEMANTIC_JSONL
+        path = self._semantic_jsonl()
         if not os.path.exists(path):
             return []
         # 轻量分词：拉丁/数字词 + 中文字符（逐字），让中文部分也能做子串/字符级匹配
@@ -1459,7 +1523,7 @@ class FabricHub:
         """
         import datetime
         import hashlib
-        path = self._SEMANTIC_JSONL
+        path = self._semantic_jsonl()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             content = (text or "").strip()

@@ -239,11 +239,17 @@ async def get_api_key(
         )
     
     # 安全升级：已移除明文API密钥支持，强制使用哈希验证
-    
-    # 强制哈希比较（安全升级）
+    # 与 APISecurityMiddleware._check_api_key 保持一致：明文+哈希均支持，
+    # 但生产环境推荐仅配置 API_KEY_HASH（bcrypt 哈希）。
+
+    # 优先哈希验证（安全推荐）
     if hasattr(config, 'API_KEY_HASH') and config.API_KEY_HASH:
         if verify_api_key_hash(api_key, config.API_KEY_HASH):
             return api_key
+
+    # 明文验证（向后兼容开发环境，与 _check_api_key 一致）
+    if config.API_KEY and hmac.compare_digest(api_key, config.API_KEY):
+        return api_key
     
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

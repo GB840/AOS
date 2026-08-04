@@ -1,24 +1,17 @@
 # =============================================================================
-# 已废弃 —— 依赖真相见 pyproject.toml [project].dependencies
-# 本文件仅作向后兼容保留（verify_setup.py / 旧文档仍引用它）。
-# 新环境请用:  uv pip install -e ".[dev,test]"
+# 依赖唯一真相源是 pyproject.toml [project].dependencies —— 本文件不再手工维护。
+#
+# 历史问题（2026-08-04 收口）：本文件曾手抄 9 个包，而 pyproject 里有 19 个，
+# 照它装环境会缺 openai/litellm/httpx/psutil 等 10 个依赖，服务起不来。
+# 双份清单必然漂移，所以这里退化成一行转发，从结构上杜绝再次分叉。
+#
+# 用法：
+#   pip install -r requirements.txt          # 等价于 pip install -e .
+#   pip install -e ".[dev,test]"             # 开发 + 测试
+#   pip install -e ".[web,llm]"              # 前端控制台 + LLM 平面
+#   uv pip install -e ".[dev,test]"          # 推荐（更快）
+#
+# 需要可复现的精确锁定版本时：
+#   uv pip compile pyproject.toml -o requirements.lock
 # =============================================================================
-# 单创OS核心依赖
-fastapi>=0.100.0
-uvicorn>=0.20.0
-pydantic>=2.0.0
-
-# AI 编排引擎（真正开源库）
-langgraph>=1.0.0
-langchain-core>=1.0.0
-crewai>=1.0.0
-
-# 本地大模型（可选，根据硬件配置安装）
-# transformers>=4.30.0
-# torch>=2.0.0
-# llama-cpp-python>=0.2.0
-
-# 数据与工具
-numpy>=1.24.0
-PyYAML>=6.0
-requests>=2.30.0
+-e .

@@ -30,25 +30,71 @@ from .route_outcome_store import RouteOutcomeStore, _MIN_SAMPLES
 from .route_predictor import RoutePredictor
 
 
-# 供给方偏好（同档内的二级排序键，越小越优先）。默认「云端优先、本地兜底」，
-# 把 AOS 的「万物为我所用 / 端云合作 / 云端用不了就本地」从口号变成路由层
-# 运行时节点击穿：档位相同时，云端供给方先试（质量/速度），失败自动降级本地。
-# 想调顺序（如默认本地优先）改这里即可，不动任何适配器代码——这就是「不绑定」。
+# 供给方偏好（同档内的二级排序键，越小越优先）。
+# 母纲原则1「本地优先·数据自持」：默认「本地优先、云端兜底」——
+# 本地供给方(mem0/code-exec/file-io/ollama)最先试，零数据出走、零带宽成本；
+# 仅在本地不可达时才级联云端(openclaw/agnes)作兜底。这把「本地优先」从口号
+# 落到路由运行时节点，且不挡任何功能（档位级联照常向下兜底）。
+# 想回云端优先: export AOS_ROUTE_POLICY=cloud_first（不推荐，违反母纲原则1）。
 # 注意：偏好只是「同档内」的次级排序；档位(tier)才是第一维度（见 ROUTE_TIER）。
-PROVIDER_PREFERENCE: dict[str, int] = {
-    "openclaw": 10,    # 网关背后云 LLM，优先
-    "agnes": 10,       # 云端多模态平面
-    "ag2": 20,         # 规划/推理（可走云或本地）
-    "litellm": 20,     # 推理网关（云模型优先）
-    "search": 30,      # 搜索（含 anysearch 云 + 国内 HTML 兜底）
-    "web-fetch": 30,   # URL 内容抓取（与搜索同层级）
-    "browseruse": 40,
-    "code-exec": 40,   # 本地代码执行（subprocess 隔离，零依赖）
-    "file-io": 40,     # 文件读写（workspace 内）
-    "langfuse": 50,
-    "mem0": 90,        # 记忆默认本地零成本兜底（AOS_MEM0_LOCAL=1）
-}
+def _local_first_preference() -> dict[str, int]:
+    return {
+        "mem0": 5,          # 记忆默认本地零成本优先（AOS_MEM0_LOCAL=1）
+        "code-exec": 5,     # 本地代码执行（subprocess 隔离，零依赖）
+        "file-io": 5,       # 文件读写（workspace 内）
+        "ollama": 5,        # 本地推理
+        "ag2": 20,          # 规划/推理（默认本地）
+        "litellm": 25,      # 推理网关（优先本地模型）
+        "search": 30,       # 搜索（anysearch 云 + 国内 HTML 兜底）
+        "web-fetch": 30,    # URL 内容抓取
+        "browseruse": 40,
+        "langfuse": 80,
+        "openclaw": 70,     # 网关背后云 LLM，兜底
+        "agnes": 70,        # 云端多模态平面，兜底
+    }
+
+
+# 云端优先（旧默认，保留作可选档位；违反母纲原则1，仅 AOS_ROUTE_POLICY=cloud_first 时生效）
+def _cloud_first_preference() -> dict[str, int]:
+    return {
+        "openclaw": 10,
+        "agnes": 10,
+        "ag2": 20,
+        "litellm": 20,
+        "search": 30,
+        "web-fetch": 30,
+        "browseruse": 40,
+        "code-exec": 40,
+        "file-io": 40,
+        "langfuse": 50,
+        "mem0": 90,
+    }
+
+
 _DEFAULT_PREF = 50
+
+
+def route_policy() -> str:
+    """母纲原则1 落地：返回当前路由偏好策略，默认 local_first。"""
+    return os.environ.get("AOS_ROUTE_POLICY", "local_first").strip().lower()
+
+
+def preference_table(policy: str | None = None) -> dict[str, int]:
+    """按策略返回供给方偏好表。policy 省略时读运行环境变量。"""
+    policy = policy or route_policy()
+    if policy == "cloud_first":
+        return _cloud_first_preference()
+    return _local_first_preference()
+
+
+def apply_route_policy(policy: str | None = None) -> None:
+    """热切换路由偏好（运行时可调用；缺省读环境变量）。"""
+    global PROVIDER_PREFERENCE
+    PROVIDER_PREFERENCE = preference_table(policy)
+
+
+# 默认生效表：母纲原则1「本地优先·数据自持」
+PROVIDER_PREFERENCE: dict[str, int] = preference_table()
 
 # 全局默认档位策略：动态路由的第一维度。
 # - auto(默认)：运行时从最高档向低档级联（高→中→低），即「云端用不了就本地 /
@@ -57,7 +103,7 @@ _DEFAULT_PREF = 50
 ROUTE_TIER = TIER_AUTO
 
 # 路由策略（档位内的二级排序）：把 Auriko 的成本套利内核原生借进 AOS。
-# - preference：默认，按 PROVIDER_PREFERENCE 排序（同档内云端优先→本地兜底）。
+# - preference：默认，按 PROVIDER_PREFERENCE 排序（同档内本地优先→云端兜底，见 PROVIDER_PREFERENCE）。
 # - cost：成本优先（provider_cost 越小越先，单位相对分）。
 # - latency：延迟优先（provider_latency 越小越先）。
 # - quality：质量优先（provider_quality 越大越先）。
@@ -430,12 +476,12 @@ class FabricRegistry:
             return InvokeResult(
                 ok=False,
                 data=last_res.data,
-                error=f"all providers failed [{req.capability.value}] "
+                error=f"all providers failed [{self._cap_to_str(req.capability)}] "
                       f"after {len(attempts)} attempt(s): " + " | ".join(attempts),
             )
         return InvokeResult(
             ok=False,
-            error=f"all providers raised [{req.capability.value}]: " + " | ".join(attempts),
+            error=f"all providers raised [{self._cap_to_str(req.capability)}]: " + " | ".join(attempts),
         )
 
     def snapshot(self) -> dict[str, list[str]]:

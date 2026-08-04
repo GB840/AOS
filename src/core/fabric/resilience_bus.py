@@ -141,26 +141,36 @@ class ResilienceBus:
 
     def on_outcome(self, engine_id: str, ok: bool,
                    error: Optional[str] = None) -> None:
-        """route() 在某个引擎尝试后调用：更新熔断状态 + 蒸馏器 + 失败监控。"""
+        """route() 在某个引擎尝试后调用：更新熔断状态 + 蒸馏器 + 失败监控。
+
+        计数器更新与 _tripped check-then-act 全部在 self._lock 内完成，
+        避免并发 on_outcome 同一 engine_id 时重复触发自愈或计数丢更新。
+        _trigger_heal 在锁外调用（best-effort，不应持锁执行耗时操作）。
+        """
         try:
+            trigger_heal = False
             with self._lock:
                 br = self._breakers.get(engine_id)
                 if br is None:
                     br = _PerEngineBreaker(engine_id)
                     self._breakers[engine_id] = br
+                if ok:
+                    br.on_success()
+                    self._total_success += 1
+                else:
+                    br.on_failure()
+                    self._total_failures += 1
+                    # 新熔断触发 → 标记待自愈（锁外执行）
+                    if br.is_open and engine_id not in self._tripped:
+                        self._tripped[engine_id] = time.time()
+                        self._circuit_trips += 1
+                        trigger_heal = True
+            # 锁外 best-effort：蒸馏回灌 + 自愈触发
             if ok:
-                br.on_success()
-                self._total_success += 1
-                # 成功回灌蒸馏器：强化「该引擎可靠」证据
                 self._feed_distiller(engine_id, True, None)
             else:
-                br.on_failure()
-                self._total_failures += 1
                 self._feed_distiller(engine_id, False, error)
-                # 新熔断触发 → 启动自愈
-                if br.is_open and engine_id not in self._tripped:
-                    self._tripped[engine_id] = time.time()
-                    self._circuit_trips += 1
+                if trigger_heal:
                     self._trigger_heal(engine_id, error)
         except Exception as e:  # noqa: BLE001
             logger.warning("ResilienceBus.on_outcome 异常(已忽略): %s", e)
