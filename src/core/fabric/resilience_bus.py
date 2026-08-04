@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -30,6 +31,11 @@ _DEFAULT_CB_FAILURE_THRESHOLD = 3
 _DEFAULT_CB_COOLDOWN = 30.0
 # 半开后连续成功达到该次数 → 关闭熔断（恢复服务）
 _DEFAULT_CB_SUCCESS_THRESHOLD = 2
+# 429（限流）专用短冷却：被上游限流时不应长时间放弃，稍后即可重试
+_CB_RATELIMIT_COOLDOWN = 5.0
+# 5xx（上游故障）指数退避：base * 2**n，封顶 max，避免无限拉长
+_CB_5XX_BACKOFF_BASE = 30.0
+_CB_5XX_BACKOFF_MAX = 300.0
 
 
 class _PerEngineBreaker:
@@ -49,7 +55,20 @@ class _PerEngineBreaker:
         self._successes = 0
         self._last_failure = 0.0
         self._state = "closed"  # closed | open | half_open
+        # 5xx 连续退避计数：每触发一次 5xx 熔断 +1，恢复后清零
+        self._consecutive_5xx_trips = 0
         self._lock = threading.RLock()
+
+    @staticmethod
+    def _parse_status(error: Optional[str]) -> Optional[int]:
+        """从 error 文本里抠出 HTTP 状态码（429 限流 / 5xx 上游故障）。
+
+        匹配形如 'HTTP 503' / 'status_code=429' / '(502)' 的片段；无则 None。
+        """
+        if not error:
+            return None
+        m = re.search(r"\b(429|5\d{2})\b", str(error))
+        return int(m.group(1)) if m else None
 
     @property
     def state(self) -> str:
@@ -65,13 +84,24 @@ class _PerEngineBreaker:
     def is_open(self) -> bool:
         return self.state == "open"
 
-    def on_failure(self) -> None:
+    def on_failure(self, error: Optional[str] = None) -> None:
         with self._lock:
             self._failures += 1
             self._last_failure = time.time()
             self._successes = 0
             if self._failures >= self._fail_threshold:
                 self._state = "open"
+                # 动态冷却：按错误类型区分 429 / 5xx / 其他（#11/#12 熔断区分）
+                status = self._parse_status(error)
+                if status == 429:
+                    self._cooldown = _CB_RATELIMIT_COOLDOWN
+                elif status is not None and 500 <= status <= 599:
+                    self._consecutive_5xx_trips += 1
+                    self._cooldown = min(
+                        _CB_5XX_BACKOFF_BASE * (2 ** (self._consecutive_5xx_trips - 1)),
+                        _CB_5XX_BACKOFF_MAX,
+                    )
+                # 其他错误：维持构造期默认冷却，不动态调整
 
     def on_success(self) -> None:
         with self._lock:
@@ -81,9 +111,11 @@ class _PerEngineBreaker:
                     self._state = "closed"
                     self._failures = 0
                     self._successes = 0
+                    self._consecutive_5xx_trips = 0  # 恢复 → 退避计数清零
             else:
                 self._state = "closed"
                 self._failures = 0
+                self._consecutive_5xx_trips = 0
 
 
 class ResilienceBus:
@@ -158,7 +190,7 @@ class ResilienceBus:
                     br.on_success()
                     self._total_success += 1
                 else:
-                    br.on_failure()
+                    br.on_failure(error)
                     self._total_failures += 1
                     # 新熔断触发 → 标记待自愈（锁外执行）
                     if br.is_open and engine_id not in self._tripped:
@@ -266,6 +298,7 @@ class ResilienceBus:
             br = self._breakers.get(engine_id)
             if br is not None:
                 br.on_success()
+                br._consecutive_5xx_trips = 0
             self._tripped.pop(engine_id, None)
         self._feed_distiller(engine_id, True, None)
 

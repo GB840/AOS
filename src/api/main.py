@@ -17,7 +17,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile, Header
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, PlainTextResponse
 import base64
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -89,10 +89,38 @@ def _resolve_byok_override(x_api_key: Optional[str]):
         return None
 
 
+class _JsonLogFormatter(logging.Formatter):
+    """结构化 JSON 日志行（理念6 白盒：可被采集系统直接解析）。
+
+    旧默认 text 行仍保留（LOG_FORMAT 未设为 json 时不启用），向后兼容。
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, self.datefmt or "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+# 旧默认 text 行仍保留（LOG_FORMAT 未设为 json 时不启用），向后兼容。
+_log_format = getattr(config, "LOG_FORMAT", "text")
+if _log_format not in ("text", "json"):
+    _log_format = "text"
+
 logging.basicConfig(
     level=logging.INFO if config.DEBUG else logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+# basicConfig 不支持直接传 formatter；在已建 root handler 上挂自定义 formatter。
+_root_logger = logging.getLogger()
+for _h in _root_logger.handlers:
+    if _log_format == "json":
+        _h.setFormatter(_JsonLogFormatter())
 logger = logging.getLogger(__name__)
 
 
@@ -715,6 +743,67 @@ async def health_check():
     事件循环仍能瞬间应答, 不会被误杀。深度组件状态见 /health/deep。
     """
     return {"status": "alive", "service": "aos", "ts": time.time()}
+
+
+@app.get("/metrics/system", response_class=PlainTextResponse)
+async def metrics_system():
+    """系统级 Prometheus 风格指标汇总（与工作流级 /metrics 互不冲突）。
+
+    汇总 ResilienceBus 熔断/自愈计数 + PulseCollector 概要。
+    任一组件未挂载/异常时归零或留空，绝不抛 500（理念6 白盒诚实）。
+    """
+    from core.fabric.resilience_bus import get_resilience_bus
+    from kernel.pulse.pulse_collector import get_pulse_collector
+
+    lines: list = []
+    bus = get_resilience_bus()
+    if bus is not None:
+        h = bus.health()
+        lines += [
+            "# HELP aos_resilience_circuit_trips Total circuit breaker trips",
+            "# TYPE aos_resilience_circuit_trips counter",
+            f"aos_resilience_circuit_trips {h.get('circuit_trips', 0)}",
+            "# HELP aos_resilience_open_circuits Current open circuits",
+            "# TYPE aos_resilience_open_circuits gauge",
+            f"aos_resilience_open_circuits {len(h.get('open_circuits', {}))}",
+            "# HELP aos_resilience_total_failures Total failures observed by bus",
+            "# TYPE aos_resilience_total_failures counter",
+            f"aos_resilience_total_failures {h.get('total_failures', 0)}",
+            "# HELP aos_resilience_total_success Total successes observed by bus",
+            "# TYPE aos_resilience_total_success counter",
+            f"aos_resilience_total_success {h.get('total_success', 0)}",
+            "# HELP aos_resilience_heal_attempts Self-heal attempts",
+            "# TYPE aos_resilience_heal_attempts counter",
+            f"aos_resilience_heal_attempts {h.get('heal_attempts', 0)}",
+            "# HELP aos_resilience_heal_succeeded Self-heal succeeded (action != none)",
+            "# TYPE aos_resilience_heal_succeeded counter",
+            f"aos_resilience_heal_succeeded {h.get('heal_succeeded', 0)}",
+        ]
+    else:
+        lines += [
+            "# HELP aos_resilience_circuit_trips Total circuit breaker trips",
+            "# TYPE aos_resilience_circuit_trips counter",
+            "aos_resilience_circuit_trips 0",
+            "# HELP aos_resilience_open_circuits Current open circuits",
+            "# TYPE aos_resilience_open_circuits gauge",
+            "aos_resilience_open_circuits 0",
+        ]
+
+    # Pulse 概要（best-effort，失败降级为 0）
+    try:
+        pc = get_pulse_collector()
+        metrics = pc.get_all_metrics(limit=1000)
+        lines += [
+            "# HELP aos_pulse_workflows_total Workflows tracked by Pulse",
+            "# TYPE aos_pulse_workflows_total gauge",
+            f"aos_pulse_workflows_total {len(metrics)}",
+        ]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Pulse 指标汇总失败(降级为 0): %s", e)
+        lines.append("aos_pulse_workflows_total 0")
+
+    body = "\n".join(lines) + "\n"
+    return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
 
 @app.get("/api/status")

@@ -346,6 +346,7 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         _PUBLIC_PREFIXES = ("/studio", "/bidding")
         if (path == "/" or path.endswith("/health") or path.endswith("/health/deep")
                 or path == "/api/auth/token"
+                or path == "/metrics/system"  # 系统级运营遥测，与 /health 同性质公开
                 or any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)):
             return await call_next(request)
 

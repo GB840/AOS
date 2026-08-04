@@ -62,6 +62,16 @@ class Config(BaseSettings):
     )
     MAX_REQUESTS_PER_MINUTE: int = 100
 
+    # 日志格式：text（默认，向后兼容）或 json（结构化，便于采集/检索）。
+    LOG_FORMAT: str = Field(default="text", validation_alias="AOS_LOG_FORMAT")
+
+    @field_validator("LOG_FORMAT")
+    @classmethod
+    def _validate_log_format(cls, v: str) -> str:
+        if v not in ("text", "json"):
+            raise ValueError("LOG_FORMAT 必须是 'text' 或 'json'")
+        return v
+
     # ===== 团队级认证 (OAuth2/JWT, RS256 非对称) —— 与 API-Key 并存 =====
     # 私钥签名 / 公钥验签；密钥经 utils.keystore 解析 (env -> .secrets/jwt -> 开发期自动生成)。
     # 不再使用 HS256 对称密钥（已知密钥可离线伪造令牌）。
