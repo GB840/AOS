@@ -34,7 +34,7 @@
 | 13 | run_state 读写互斥 | ✅ 真(低危) | _LOCK 包住读写 | 维持（已 mutex，合理，未动） |
 | 14 | _DB_PATH 相对路径硬编码 | 🔶 部分真/建议偏 | 相对 __file__ 非盘符；但推 ~/.aos/ 与本地主权冲突，应改 AOS_STATE_DIR env 覆盖 | 偏：部分采纳（`~/.aos/` 与主权冲突，未改；建议改 AOS_STATE_DIR env 覆盖，留待路径规范化） |
 | 15 | fabric_hub 缺降级看板 | ❌ 假 | fabric_hub.py:1260 health_report 逐适配器报 live/error/isolated | 维持「假指控」 |
-| 16 | 覆盖率 41%<50% 基线 | ✅ 真 | AGENTS.md:555 | **部分收口(②)** a073b0b：新增 19 项实证测试驱动路由/韧性/追踪/蒸馏路径；3 个 numpy-free 核心模块实测 resilience_bus 73% / trace_store 82% / memory_distiller 54%（合计 65%）。fabric_hub/brain 因 numpy 2.x+coverage 导入冲突无法自动测（纯工具限制），但已被 19 测试真执行；全局 50% 门槛列为持续项 |
+| 16 | 覆盖率 41%<50% 基线 | ✅ 真 | AGENTS.md:555 | **部分收口(②) / 持续项** | 实测工具已就位（coverage 7.15.3 + numpy 2.5.1：numpy 2.0 早期『cannot load module more than once』冲突在 2.5.1 已修复，fabric_hub/brain 现已可测，前序『numpy 冲突无法测』为误判）。纳入本仓核心测试（路由/韧性/追踪/蒸馏 27 项 + 自适应 7 文件 + brain 专属 2 文件）后真实覆盖率：**adaptive 89% / trace_store 84% / evolution_distiller 77% / resilience_bus 75% / memory_distiller 55% / fabric_hub 46% / brain 24%，核心 7 模块合计 46%**（非前序误报的 65%——那次排除了 fabric_hub/brain 两个最大模块，属统计假象；adaptive 前序报 0% 也是漏跑其专属测试所致）。brain 是主要拖油瓶（1242 行、集成密集：子进程引擎/MCP/语音/DeerFlow），离线单测难覆盖。**真正项目总覆盖率需跑全量 1755 测试**（沙箱长运行易被杀，列为持续项），全局 50% 门槛未达。 |
 | 17 | 缺端到端追踪测试 | ⚠️ 缺口断言 |  plausible | **已收口(②)** a073b0b：`tests/test_e2e_trace_chain.py` 3 项实证 task→FabricHub.route→ResilienceBus→TaskTraceStore 落 trace_*.json→MemoryDistiller 蒸馏出 failure_pattern/capability_reliability/latency_fact；trace_id 贯穿、engine 为真实执行引擎 |
 | 18 | 缺混沌工程测试 | ⚠️ 缺口断言 |  plausible | **已收口(②)** a073b0b：`tests/test_chaos_injection.py` 7 项实证崩溃隔离/降级切换/429 短冷却 5s/5xx 指数退避(30·2ⁿ 封顶 300s)/全失败干净返回 |
 | 19 | 缺结构化日志 | ⚠️ 缺口断言 | 未深读 logger 配置 | **已收口(②)** 71d4f15：config 加 `LOG_FORMAT(text|json)`；main.py basicConfig 支持 JSON 结构化行（默认 text 向后兼容） |
@@ -83,7 +83,7 @@
 - #9 双轨收敛 → brain 默认复用 FabricHub 单例（含完整 ResilienceBus 熔断/蒸馏沉底/失败监控/媒体归一），坏引擎在 brain 轨现会被熔断；`AOS_BRAIN_DIRECT_REGISTRY=1` 应急退回裸轨；双保险回退；初始化不触发构建。`tests/test_dual_track_contract.py`(9) 实证。
 - #17 端到端追踪链 → `tests/test_e2e_trace_chain.py`(3)：task→FabricHub.route→ResilienceBus→TaskTraceStore 落 trace_*.json→MemoryDistiller 蒸馏 failure_pattern/capability_reliability/latency_fact；trace_id 贯穿、engine 为真实执行引擎。
 - #18 混沌工程 → `tests/test_chaos_injection.py`(7)：崩溃隔离/降级切换/429 短冷却 5s/5xx 指数退避(30·2ⁿ 封顶 300s)/全失败干净返回。
-- #16 覆盖率 → 新增 19 项实证测试；3 个 numpy-free 核心模块实测 resilience_bus 73%/trace_store 82%/memory_distiller 54%（合计 65%）。fabric_hub/brain 因 numpy 2.x+coverage 导入冲突无法自动测（纯工具限制），全局 50% 门槛列为持续项。
+- #16 覆盖率 → 前序「numpy 冲突无法测 fabric_hub/brain、3 模块合计 65%」**已证伪**：装上 coverage 7.15.3 + numpy 2.5.1 后两模块均可测（46%/24%），且 2.5.1 已修复 numpy 2.0 早期冲突；真实核心 7 模块合计 **46%**（adaptive 89% / trace_store 84% / evolution_distiller 77% / resilience_bus 75% / memory_distiller 55% / fabric_hub 46% / brain 24%）。adaptive 此前报 0% 是漏跑其专属 `_real` 测试所致。#16 仍为**持续项**：brain 集成密集难离线单测，且全量项目覆盖率需跑 1755 测试（沙箱限制列为待办），全局 50% 门槛未达。
 - 全 ② 级（offline 单测实证），未做也未谎称 ③ 端到端真 LLM。
 
 **收尾补刀（2026-08-05, commit be80a10）**：清理 HEAD 既有 stale 测试 `test_distiller_opt_in_disabled_by_default`——它断言旧「蒸馏路由默认关闭(opt-in)」行为，但 `fabric_hub.py` L299-301 注释已明示改为「默认常驻开启（不再 opt-in）」，属设计有意变更、测试未跟上。已将其改写为对齐新契约的 `test_distiller_on_by_default_opt_out_via_env`：默认自动接电 `EvolutionDistiller`；仅 `AOS_DISTILLER_OFF=1` 显式关闭。相关模块测试套件（双轨9 + 端到端3 + 混沌7 + 覆盖率探针4 + 蒸馏路由4）现 **27/27 全绿，无残留红项**。
@@ -91,6 +91,25 @@
 **本轮（71d4f15）已从债务中摘出并实证收口**：#11/#12 熔断 429/500 区分 + 动态延迟预算；#19 结构化日志（LOG_FORMAT=json）；#20 /metrics/system 端点。四项均 ② 级（代码+单测实证），未做也未谎称 ③ 真部署。
 
 **外源引文核验**：仍按铁律标注「未核验」——balacode/ai2core/antigravitylab 等 2026 指南域名未做 WebSearch 核实，不可直接采信；本报告未采纳其建议。
+
+**覆盖率复测命令（可复现，2026-08-05 验证）**：前序「numpy 冲突无法测 fabric_hub/brain」是误判，以下命令在 managed venv（numpy 2.5.1 + coverage 7.15.3）实测可用：
+```bash
+# 1) 安装工具（仅首次）：managed venv 路径 C:/Users/Administrator/.workbuddy/binaries/python/envs/aos/Scripts/python.exe
+VENV=C:/Users/Administrator/.workbuddy/binaries/python/envs/aos/Scripts/python.exe
+"$VENV" -m pip install coverage pytest-cov
+# 2) 跑核心测试集并采集覆盖率（FabricHub 构造慢，单测须 timeout>=540000ms）
+cd D:/AOS && PYTHONPATH=src "$VENV" -m coverage run --source=src -m pytest \
+  tests/test_dual_track_contract.py tests/test_e2e_trace_chain.py tests/test_chaos_injection.py \
+  tests/test_coverage_probe.py tests/test_distiller_routing.py \
+  tests/test_adaptive_loop_real.py tests/test_adaptive_runtime_metrics_real.py \
+  tests/test_adaptive_tenant_isolation_real.py tests/test_self_evolution_readback_real.py \
+  tests/test_self_evolution_real.py tests/test_self_evolution_stageguard_readback_real.py \
+  tests/test_stage_guard_real.py \
+  && "$VENV" -m coverage run --source=src --append -m pytest tests/test_brain_smoke.py tests/test_brain_tasks_eviction.py
+# 3) 看核心模块
+"$VENV" -m coverage report --include="*/kernel/plugins/fabric_hub.py,*/core/fabric/resilience_bus.py,*/core/fabric/trace_store.py,*/kernel/evolution_distiller.py,*/kernel/memory_distiller.py,*/kernel/adaptive.py,*/core/brain.py"
+```
+注：14 文件一次合跑会出现单例/环境变量污染导致个别测试失败，故 brain 两个测试须 `--append` 分开跑。真正项目总覆盖率需跑全量 1755 测试（沙箱长运行易被杀，列为持续项）。
 
 ## 六、原「建议下一步」对照
 
