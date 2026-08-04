@@ -86,6 +86,8 @@
 - #16 覆盖率 → 新增 19 项实证测试；3 个 numpy-free 核心模块实测 resilience_bus 73%/trace_store 82%/memory_distiller 54%（合计 65%）。fabric_hub/brain 因 numpy 2.x+coverage 导入冲突无法自动测（纯工具限制），全局 50% 门槛列为持续项。
 - 全 ② 级（offline 单测实证），未做也未谎称 ③ 端到端真 LLM。
 
+**收尾补刀（2026-08-05, commit be80a10）**：清理 HEAD 既有 stale 测试 `test_distiller_opt_in_disabled_by_default`——它断言旧「蒸馏路由默认关闭(opt-in)」行为，但 `fabric_hub.py` L299-301 注释已明示改为「默认常驻开启（不再 opt-in）」，属设计有意变更、测试未跟上。已将其改写为对齐新契约的 `test_distiller_on_by_default_opt_out_via_env`：默认自动接电 `EvolutionDistiller`；仅 `AOS_DISTILLER_OFF=1` 显式关闭。相关模块测试套件（双轨9 + 端到端3 + 混沌7 + 覆盖率探针4 + 蒸馏路由4）现 **27/27 全绿，无残留红项**。
+
 **本轮（71d4f15）已从债务中摘出并实证收口**：#11/#12 熔断 429/500 区分 + 动态延迟预算；#19 结构化日志（LOG_FORMAT=json）；#20 /metrics/system 端点。四项均 ② 级（代码+单测实证），未做也未谎称 ③ 真部署。
 
 **外源引文核验**：仍按铁律标注「未核验」——balacode/ai2core/antigravitylab 等 2026 指南域名未做 WebSearch 核实，不可直接采信；本报告未采纳其建议。
