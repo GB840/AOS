@@ -89,7 +89,15 @@ def test_distiller_keeps_unreliable_as_fallback_when_only_one(tmp_path):
     assert only.invoked is True  # 无备选，沉底引擎仍作兜底尝试（诚实不丢能力）
 
 
-def test_distiller_opt_in_disabled_by_default(tmp_path):
-    # 默认未开 AOS_DISTILLER_ROUTE，构造未传 distiller → 关闭，route 不受影响。
+def test_distiller_on_by_default_opt_out_via_env():
+    # 设计变更（fabric_hub.py L299-301）：蒸馏路由默认常驻开启（不再 opt-in），
+    # FabricHub 启动即自动接电 EvolutionDistiller；仅 AOS_DISTILLER_OFF=1 显式关闭。
     hub = FabricHub(adapters=())
-    assert hub._distiller is None
+    assert hub._distiller is not None
+
+    os.environ["AOS_DISTILLER_OFF"] = "1"
+    try:
+        hub_off = FabricHub(adapters=())
+        assert hub_off._distiller is None
+    finally:
+        os.environ.pop("AOS_DISTILLER_OFF", None)
