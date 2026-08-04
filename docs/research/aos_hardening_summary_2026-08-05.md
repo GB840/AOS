@@ -48,10 +48,14 @@
 ### #3 限流
 当前 `RateLimitMiddleware`（`src/api/security.py:468`）已实现 **IP 维度（`_clients`）+ API Key/租户维度（`_api_keys`，认证用户 3x 配额）** 双粒度，滑动窗口 + LRU 容量上限防泄漏。AOS 租户由 API Key 解析，故 API Key 级限流本质即租户级限流 —— 原"粒度单一"指控不成立。
 
-## 全局覆盖率基线（持续项）
-- 架构债相关核心 7 模块：**57%（已越 50% 门槛，权威收口口径）**。
-- 全局 src 全量：此前仅跑 ~132 离线测试显示 23%。**完整全量基线（231 测试文件 / ~1820 测试函数）正在后台分批 `coverage run --append` 测量中**（沙箱前台 9 分钟超时，改后台分批累积规避；部分需网络/GPU/ollama 的测试自动 skip，按诚实覆盖率口径计入分母）。
-- 沙箱限制：单次长运行 ~9 分钟前台会被杀，后台任务不受此限（实测已跑 30 分钟仍活）。全量数字出来后回填本段。
+## 全局覆盖率全量基线（沙箱不可靠，已停）
+- **核心 7 模块 57%（已越 50% 门槛，权威收口口径，用干净核心套件测得，可靠）**。
+- **全量 campaign 实测失败（2026-08-05）**：后台分批 `coverage run --append` 跑 231 测试文件，到 BATCH 6（40 分钟）发现根本缺陷——（1）单例污染使 failed/error 数随运行顺序飘移（test_fabric_hub_chat 合跑仅 1 failed、隔离复跑 8 failed）；（2）沙箱缺真环境使 _real/subprocess/GPU 测试本应 skip。已 kill 后台、erase 失真 `.coverage`。
+- **隔离复跑确认的真实测试套件红项（非环境污染、非偶发）**：
+  - `tests/test_fabric_hub_chat.py`：**8 failed**（7 AssertionError + 1 TypeError）——chat 返回格式契约不符，可能是代码契约变更后测试未跟上，或 chat API 真 bug。
+  - `tests/test_bidding_agent.py`：**5 errors**（4 SystemExit/AssertionError in fixture + 1 AssertionError）——setup/fixture 级，可能 fixture 断言或 import 问题。
+  - `tests/test_crawl4ai_adapter.py`：**3 failed**（2 非 real 真失败 + 1 `_real` 应 skip）。
+- **诚实边界**：这些是分散在不同模块的测试套件健康问题，非单一全局切面，按「反缝补」纪律**不在此分头打补丁**；建议立项「测试套件健康度专项」系统性修（或在本机/CI 干净跑全量拿基线后批量判）。全局 src 全量覆盖率留待本机/CI（沙箱单例污染+缺真环境，硬测失真）。
 
 ## 提交链（feature/infra-setup，已全部推送）
 - `a073b0b` fix(fabric,brain): 收口 #9/#16/#17/#18
