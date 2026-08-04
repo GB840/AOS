@@ -1901,6 +1901,16 @@ def get_fabric_hub() -> FabricHub:
     return _hub_instance
 
 
+def peek_fabric_hub() -> Optional[FabricHub]:
+    """窥视 FabricHub 单例：**已装配则返回，未装配返回 None（绝不触发构建）**。
+
+    与 get_fabric_hub() 的区别：后者在单例为空时会调用 build_fabric_hub()，
+    那是重型动作（会拉起隔离引擎子进程）。调用方若只是想"能复用就复用、
+    不想为此付出装配代价"（如 brain 初始化期接线），应当用本函数。
+    """
+    return _hub_instance
+
+
 def set_fabric_hub(hub: "FabricHub") -> None:
     """注入/替换 FabricHub 单例（内核装配或测试时调用）。
 

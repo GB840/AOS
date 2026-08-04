@@ -945,12 +945,15 @@ class UnifiedBrain:
         self.router = LLMRouter()
         logger.info("Router ready")
 
-    def _init_fabric(self):
-        """步骤17: 开放 Agent Fabric 薄缝 —— 新能力可选经 fabric 路由到真实引擎。
+    # 应急 opt-out：置 1 退回历史「brain 自持裸 FabricRegistry」双轨行为。
+    FABRIC_DIRECT_ENV = "AOS_BRAIN_DIRECT_REGISTRY"
 
-        双轨共存: 不取代现有装配, 仅作为'更优薄缝'供新能力按需委派。
+    def _build_direct_registry(self):
+        """构造 brain 自持的裸 FabricRegistry（历史双轨行为 / 应急兜底）。
+
         所有适配器均懒加载重依赖, 缺包时 health()=False, registry 自动绕开,
         故注册过程永不崩; 任一适配器导入失败都被单独吞掉, 不影响其余。
+        失败返回 None。
         """
         try:
             from core.fabric import FabricRegistry
@@ -960,8 +963,7 @@ class UnifiedBrain:
             )
         except Exception as e:
             logger.warning("fabric 不可用(跳过): %s", e)
-            self.fabric = None
-            return
+            return None
 
         try:
             reg = FabricRegistry()
@@ -976,20 +978,100 @@ class UnifiedBrain:
                                    getattr(ad_cls, "__name__", "?"), e)
         except Exception as e:
             logger.warning("fabric 注册表构造失败(跳过): %s", e)
-            self.fabric = None
-            return
+            return None
+        return reg
+
+    def _init_fabric(self):
+        """步骤17: 能力路由薄缝 —— **默认收敛到内核 FabricHub 单基座**。
+
+        为什么改（债 #9 双轨收敛）：此前这里构造 brain 自己的裸 FabricRegistry，
+        route_via_fabric 直接调 ``registry.route()``。而 FabricRegistry.route 只有
+        朴素 failover——**完全绕过** FabricHub.route 里的 ResilienceBus 熔断
+        (should_skip / on_outcome)、EvolutionDistiller 沉底、FailureMonitor 记账、
+        媒体契约归一。后果是真的：坏引擎在 brain 这一轨永远不会被熔断，同一进程
+        里「谁负责这个能力」有两个互相不知情的答案，违背 FabricHub 单基座。
+
+        现在：默认复用内核 FabricHub 单例（同一实例、同一套韧性闭环）。
+        置 ``AOS_BRAIN_DIRECT_REGISTRY=1`` 可退回历史裸 registry 行为（应急开关）。
+
+        轻量性：这里**不强行构建**枢纽（build_fabric_hub 会拉起隔离引擎子进程）。
+        内核已装配好就直接复用；没装配则留待首次 route 时懒加载，brain 初始化
+        期不为此付代价。
+        """
+        self._fabric_direct = os.environ.get(self.FABRIC_DIRECT_ENV) == "1"
+        if not self._fabric_direct:
+            try:
+                from kernel.plugins.fabric_hub import peek_fabric_hub
+                hub = peek_fabric_hub()
+            except Exception as e:  # noqa: BLE001 - 枢纽不可用则退回裸 registry 轨
+                logger.warning("FabricHub 单基座不可用, 回退裸 registry 轨: %s", e)
+                self._fabric_direct = True
+            else:
+                self.fabric = hub
+                if hub is not None:
+                    n = len(getattr(getattr(hub, "_registry", None), "_adapters", {}))
+                    logger.info("Fabric 单基座就绪(复用内核 FabricHub 单例, %d 引擎, "
+                                "含熔断/蒸馏/媒体归一)", n)
+                else:
+                    logger.info("Fabric 单基座待懒加载(首次 route 时装配 FabricHub 单例)")
+                return
+
+        reg = self._build_direct_registry()
         self.fabric = reg
+        if reg is None:
+            return
         live = [eid for eid, a in reg._adapters.items() if a.health()]
-        logger.info("Fabric 薄缝就绪: 注册 %d 适配器, 当前 live %d (%s)",
-                    len(reg._adapters), len(live), ", ".join(live) or "无")
+        logger.warning("Fabric 直连 registry 轨(%s=1, 无熔断/蒸馏): 注册 %d 适配器, "
+                       "当前 live %d (%s)", self.FABRIC_DIRECT_ENV,
+                       len(reg._adapters), len(live), ", ".join(live) or "无")
+
+    def _fabric_hub(self):
+        """取 FabricHub 单基座（单基座模式下懒加载并缓存到 self.fabric）。
+
+        direct 模式（AOS_BRAIN_DIRECT_REGISTRY=1）返回 None——调用方据此走裸轨。
+        """
+        if getattr(self, "_fabric_direct", False):
+            return None
+        fab = getattr(self, "fabric", None)
+        if fab is not None and hasattr(fab, "_registry"):
+            return fab            # 已是 FabricHub
+        try:
+            from kernel.plugins.fabric_hub import get_fabric_hub
+            hub = get_fabric_hub()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("FabricHub 懒加载失败, 回退裸 registry 轨: %s", e)
+            self._fabric_direct = True
+            return None
+        self.fabric = hub
+        return hub
+
+    def _fabric_registry(self):
+        """返回底层 FabricRegistry —— 无论 self.fabric 是 FabricHub 还是裸 registry。
+
+        供 introspection（resolve_engine / health_check）用，屏蔽两种形态差异。
+        """
+        fab = getattr(self, "fabric", None)
+        if fab is None:
+            return None
+        return getattr(fab, "_registry", fab)
 
     def route_via_fabric(self, capability, payload, trace_id=None):
-        """经 fabric 薄缝路由一项能力(双轨: 新能力优先走 fabric)。
+        """经 fabric 路由一项能力 —— 默认委托内核 FabricHub 单基座。
 
-        返回 InvokeResult; 若 fabric 不可用或无 live provider, 返回 None,
+        返回 InvokeResult; 若不可用或无 live provider, 返回 None,
         调用方据此回退到现有装配(brain 内部路由), 绝不阻断服务。
+
+        双保险：枢纽委托抛异常时自动降级到裸 registry 轨，绝不因收敛而变脆。
         """
-        reg = getattr(self, "fabric", None)
+        hub = self._fabric_hub()
+        if hub is not None:
+            try:
+                res = hub.route(capability, payload, trace_id=trace_id)
+                return res if getattr(res, "ok", False) else None
+            except Exception as e:  # noqa: BLE001 - 枢纽异常 → 降级裸轨，不阻断
+                logger.warning("FabricHub 路由异常, 降级裸 registry 轨: %s", e)
+
+        reg = self._fabric_registry()
         if reg is None:
             return None
         try:
@@ -1015,7 +1097,7 @@ class UnifiedBrain:
         若 fabric 不可用或无 live provider, 返回 None。供 introspection/日志使用,
         让「哪个引擎负责哪个能力」只有这一个答案, 不再双轨并存。
         """
-        reg = getattr(self, "fabric", None)
+        reg = self._fabric_registry()
         if reg is None:
             return None
         try:
@@ -1028,6 +1110,25 @@ class UnifiedBrain:
             logger.debug("Fabric adapter lookup for '%s' failed: %s", capability, exc)
             return None
         return None
+
+    def _fabric_stats(self, probe_health: bool = True) -> Dict[str, Any]:
+        """fabric 现状快照（诚实标注走的是单基座还是裸轨）。"""
+        mode = "direct-registry" if getattr(self, "_fabric_direct", False) else "hub"
+        reg = self._fabric_registry()
+        if reg is None:
+            return {"status": "lazy" if mode == "hub" else "disabled", "mode": mode}
+        adapters = getattr(reg, "_adapters", {})
+        out: Dict[str, Any] = {"mode": mode, "adapters": len(adapters)}
+        if probe_health:
+            live = []
+            for eid, ad in adapters.items():
+                try:
+                    if ad.health():
+                        live.append(eid)
+                except Exception:  # noqa: BLE001 - 单个探活崩溃不拖垮体检
+                    pass
+            out["live"] = live
+        return out
 
     def _init_meta_orchestrator(self):
         """步骤: 元调度引擎 (L3.5 顶层调度/策略/信任)。
@@ -2008,7 +2109,6 @@ class UnifiedBrain:
         identity = getattr(self, "identity", None)
         hermes = getattr(self, "hermes", None)
         deerflow = getattr(self, "deerflow", None)
-        fabric = getattr(self, "fabric", None)
 
         components = {
             "hermes": (
@@ -2026,11 +2126,8 @@ class UnifiedBrain:
             "skills": {"count": len(getattr(getattr(self, "skill_registry", None), "_skills", {}))},
             "subagents": _safe(getattr(self, "subagents", None), method="get_stats"),
             "mcp": {"status": "ok" if getattr(self, "mcp", None) else "disabled"},
-            "fabric": (
-                {"adapters": len(getattr(fabric, "_adapters", {})),
-                 "live": [e for e, a in getattr(fabric, "_adapters", {}).items() if a.health()]}
-                if fabric is not None else {"status": "disabled"}
-            ),
+            # 单基座口径：无论 self.fabric 是 FabricHub 还是裸 registry 都能如实统计
+            "fabric": self._fabric_stats(),
             "compliance": {
                 "audit": _safe(getattr(self, "audit", None), method="get_stats"),
                 "identity": _safe(getattr(self, "aid_gen", None), method="get_stats"),
@@ -2104,10 +2201,7 @@ class UnifiedBrain:
                 "tracing": _stats(getattr(self, "tracer", None)),
             },
             "persistence": _stats(getattr(self, "persistence", None)),
-            "fabric": (
-                {"adapters": len(getattr(getattr(self, "fabric", None), "_adapters", {}))}
-                if getattr(self, "fabric", None) else {"status": "disabled"}
-            ),
+            "fabric": self._fabric_stats(probe_health=False),
         }
 
         # DeerFlow deep (仅当真实 DeerFlow 网关且带 deep 属性时)

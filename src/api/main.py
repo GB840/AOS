@@ -974,10 +974,14 @@ async def fabric_status():
         except Exception as e:  # noqa: BLE001
             logger.warning("kernel FabricHub 状态获取失败，回退 brain.fabric: %s", e)
         # 2) 回退：brain 层 fabric（legacy 双轨）
-        if not getattr(brain, "fabric", None):
+        _fab = getattr(brain, "fabric", None)
+        # brain.fabric 现默认就是 FabricHub 单基座（债 #9 收敛）；此处统一解包到
+        # 底层 registry，兼容「裸 registry」应急轨（AOS_BRAIN_DIRECT_REGISTRY=1）。
+        _reg = getattr(_fab, "_registry", _fab)
+        if _reg is None or not getattr(_reg, "_adapters", None):
             return {"fabric": "unavailable", "engines": []}
         engines = []
-        for eid, ad in brain.fabric._adapters.items():
+        for eid, ad in _reg._adapters.items():
             try:
                 engines.append({
                     "engine_id": eid,
