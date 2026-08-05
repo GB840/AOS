@@ -14,16 +14,34 @@ State is a JSON-serializable dict produced by ``autopilot._RunState.to_dict``:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 import time
+
+_LOG = logging.getLogger("run_state_store")
 
 _DB_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "_traces", "aos_runs.db"
 )
 _LOCK = threading.Lock()
 _CONN: sqlite3.Connection | None = None
+
+# MEA 对齐（2026-08-05）：可选「只读审计关卡」。写入持久状态前若已注册 auditor，
+# 则由 auditor 基于环境事实独立验证；未通过则拒绝覆盖旧快照（错误前提不污染状态）。
+# 默认 None = 向后兼容（行为与旧版一致，任何调用方都不必改动）。
+#   auditor 契约：callable(state: dict, run_id: str) -> bool
+#     - True / truthy  → 放行写入
+#     - False / falsy  → 拒绝写入（保留上一已验证快照）
+#     - 抛异常          → 降级放行 + 告警（绝不因审计器故障阻塞 run）
+_AUDITOR = None
+
+
+def set_auditor(fn):
+    """注册只读审计器（MEA AuditorGate）。传 None 关闭。"""
+    global _AUDITOR
+    _AUDITOR = fn
 
 
 def _conn() -> sqlite3.Connection:
@@ -68,18 +86,42 @@ def create_run(run_id: str, task: str, planner: str) -> None:
         )
 
 
-def save_checkpoint(run_id: str, state: dict) -> None:
+def save_checkpoint(run_id: str, state: dict) -> bool:
     """Persist a full run-state snapshot. Called after every cycle.
 
     ``default=str`` guards against any stray non-serializable leaf so a
     checkpoint never fails to write (a failed checkpoint must not crash the run).
+
+    MEA AuditorGate：若已注册 ``_AUDITOR``，写盘前由其基于环境事实独立验证。
+    验证未通过则**不覆盖**旧快照（错误前提不污染持久状态），返回 False；
+    auditor 自身抛异常时降级放行并告警，绝不阻塞 run。
+    无 auditor 时行为与原版完全一致。
     """
+    if _AUDITOR is not None:
+        try:
+            verdict = _AUDITOR(state, run_id)
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("AuditorGate 异常，降级放行: %s", e)
+            verdict = True
+        if not verdict:
+            _LOG.warning(
+                "AuditorGate 拒绝写入 run=%s verdict=%r（保留上一已验证快照）",
+                run_id, verdict,
+            )
+            # 仅刷新 updated 时间戳，state 保持旧值，避免错误前提污染。
+            with _LOCK, _conn() as c:
+                c.execute(
+                    "UPDATE runs SET updated=? WHERE run_id=?",
+                    (time.time(), run_id),
+                )
+            return False
     blob = json.dumps(state, ensure_ascii=False, default=str)
     with _LOCK, _conn() as c:
         c.execute(
             "UPDATE runs SET state=?, updated=?, status='running' WHERE run_id=?",
             (blob, time.time(), run_id),
         )
+    return True
 
 
 def load_checkpoint(run_id: str):
