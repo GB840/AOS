@@ -51,7 +51,7 @@ AIGC:
 | :--- | :--- | :--- |
 | 1 | **本地优先·数据自持** | 数据在用户的设备上，不上传 |
 | 2 | **模型无关·大脑热插拔** | 换 AI 像换老师，记忆全带走 |
-| 3 | **完整开源·一键安装** | MIT/Apache 协议，零门槛（注：被集成组件中 DBX 为 AGPL-3.0，须履行相应开源义务） |
+| 3 | **完整开源·一键安装** | MIT/Apache 协议，零门槛（DBX=AGPL-3.0 仅为白皮书 L3E 提到的可视化参考，详见 §0.0.5.A 选型铁律执行记录，AOS 从未 import 该组件） |
 | 4 | **主权归你·永不收割** | 用户是主人，系统是伙伴 |
 | 5 | **无平台·无抽成·无中心节点** | 系统只提供协议 |
 | 6 | **价值回流·劳动有报** | 用户创造的价值流回用户口袋 |
@@ -138,11 +138,31 @@ AIGC:
 | 9 自动进化·终身学习 | 理念 2 + 2.5 + 8 | 🟡 代码在，③ 级端到端未验 |
 | 10 身体延伸·灵魂唯一 | 理念 3 芯粒隔离（讲的是进程隔离，非跨设备同一灵魂） | 🟢 **协议已落代码**（`kernel/soul_sync.py`：标准 `.aospkg` 包 + 落盘 Fernet 加密（复用 `utils.keystore`）+ 可插拔传输（本地目录/U 盘**零联网默认**、WebDAV 选配不绑厂商）+ Lamport 版本 + 冲突两边都不丢 + 新设备 `adopt()` 认领同一灵魂。`sync_protocol` 已从 `NOT_IMPLEMENTED` 变为真实 `aospkg/1.0+local_dir|webdav`；3 项守门测试含 A→U 盘→B→改→回传 全链路 + 落盘密文不含明文） |
 
+### §0.0.5.A 选型铁律执行记录（2026-08-05 落地，避免"未集成但口头提及"被误读为"违反铁律"）
+
+> **铁律**：AOS 引入任何第三方组件须 **MIT / Apache-2.0（无 AGPL）**。本节明文记录所有"已核验但未集成 / 已替代 / 故意留作参考"的项，**不构成豁免未来真接同协议组件**——留痕目的是把"标签"和"行为"分开，让「可验证即真理」可被复核。
+
+| 组件 | 协议 | 处置 | 实证 |
+| :--- | :--- | :--- | :--- |
+| **DBX**（`t8y2/dbx`） | AGPL-3.0 | 🔗 纯参考，**未集成**。仅在白皮书 V6 L3E 节点作为"统一可视化层"参考项提及。`grep -rE "from dbx|import dbx" src/` 零命中（2026-08-05 实测）。等价：项目用 `web/app.py` 统一控制台 | §0.0.5 第 3 行原标"被集成组件中 DBX"为表述不精确，已订正 |
+| **Fish Speech** 模型权重 | CC-BY-NC-SA-4.0 | 🔗 纯参考，**未集成**。代码 BSD-3 可商用但权重 NC，已由 Apache-2.0 的 **Piper TTS**（`src/core/fabric/adapters/piper_backend.py`）替代 | 白皮书 V6 L1E 已删 / L1E3 Piper 真接 |
+| **TriviumDB** | MIT | 🔁 本环境接不上（实测 `Requires-Python >=3.9,<3.13`，沙箱 Py3.13 拒绝） | 白皮书 V6 L3C 诚实降级，**不内存冒充** |
+| **Turso (`pyturso`)** | MIT | 🔁 本环境接不上（sdist Rust 编译在沙箱 exit 1） | 同上 |
+| **plasma-ai/fractal** | Apache-2.0 | 🔁 跨平台不可引（Unix-only `fcntl` 缺 + 需 tmux + 外部 agent CLI） | AOS 自研等价 `kernel/fractal/spawner.py` + `growth_guard.py` |
+| **Automaton**（`Conway-Research/automaton`） | MIT | 🔁 不可引（需 Conway Cloud + 链上钱包 + USDC） | AOS 自研等价 `kernel/evolution.py` + `lifeform/self_evolve_engine.py` |
+| **Conway Terminal** | MIT | 🔁 不可引（同上链上依赖） | AOS 自研等价 `api/billing_api.py` + `core/database/models/economy.py`（不含加密依赖） |
+| **Fractal 协议 Mobius「全球首个自进化 Agent OS」** | 自述 | ❌ 全网核实不实，已删除外部头衔 | 白皮书 V6 §十一 诚实核验，能力转 L6 自研 P1 |
+| **Holo「分形全息 Agent · 3.02× · 98.1%」** | 自述 | ❌ 指标伪造，已删除 | 同上，能力转 L2 + L6 自研 |
+| **IEEE 2026-02「四层记忆 + CIAR 论文」** | 出处伪造 | ❌ 实为 `maksim-tsi/mas-memory-layer` ADR-004（个人 GitHub，无 DOI / 同行评审），已改开源工程引用 | 同上，能力转 L3 自研 P0 |
+| **LeWorldModel「1GB 显存跑 JEPA」** | 假指标 | ❌ 实为 CSDN AI 洗稿文编造，`lucas-maes/le-wm` 真实参数 ~15M / 单张 L40S GPU | 同上，能力转 L7 自研 P1 |
+
+**结论**：AOS 当前**零 AGPL 真接组件**（DBX 仅为文档参考标签，代码层未 import）。未来如确需真接任何 AGPL/NC 组件，须先经 §0.0.3 四条硬检验 + 母纲原则 4/5 双重过审，并在本节留痕。
+
 **结论**：十条原则里 **5 条（4/5/6/7/10）在九大工程理念中原本没有任何承接**，现已分别处置。
 
 - 原则 **4**：已从「文档条款」升级为 **🟢 可执行代码 + 守门测试**（`sovereignty.py` + `test_no_harvest_charter.py`），
   并在自检中真查获并拆除了 4 处违规（功能墙 / 本地用户被当租户卡 / 硬编码路径 / 指标虚高）。
-- 原则 **5**：抽成部分已有静态守门；「无中心节点」仍未验证。
+- 原则 **5**：**已从「部分」升级为「🟢 已落代码」**——抽成守门（`test_no_revenue_commission_logic` 静态扫描）+ 灵魂同步三层通道（`soul_sync.py` 零联网默认）+ 3 项守门测试（A→U 盘→B 全链路 + 落盘密文不含明文 + sync_protocol 真实标识）构成完整证据链。**诚实边界**：「非中心化」明确为「用户自持 + 同步走自有通道（本地目录/U 盘/WebDAV）」，非 P2P 网络——别让人误读成有去中心化网络代码。详见 §0.0.5.A
 - 原则 **6 价值回流**：**已落真实账本**（`value_ledger.py` + 蒸馏器接线 + 3 守门测试），劳动有报从口号变成记账代码。
 - 原则 **7 方言平等**：**能力层已真落地**（`kernel/dialect_asr.py`）。不是占位——真路由、真引擎探测、真分派。
   诚实边界要说清三层，别混为一谈：
