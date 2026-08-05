@@ -67,8 +67,21 @@ AOS 有 MEA 的"形"，缺 MEA 的"神"——三处真实缺口：
 - 测试：`tests/test_verified_milestones.py` **6 项②级全绿**：默认放行 / 拒绝抛错不写 / 放行写入 / 异常降级 / 原始 steps 不自动进 verified 层 / 多里程碑有序。
 - 提交：`5a07689`（本地，待用户 push）。
 
-**剩余 Gap（更深改造，待用户指令）：**
-- **Gap3**（fresh-context executor）：autopilot 主循环同上下文长跑，需把每子任务派发 chiplet 子进程（已有 crash boundary）实现 executor 隔离。
-- **默认 auditor 接入**：当前 gate + verified 层已就位但默认无 auditor；需在 autopilot 启动时注册一个真实环境探针（文件/服务/测试事实验证），而非仅测试用 mock。
+**真实 Auditor 接线已完成②级实证落地（2026-08-05 "好" 授权续推）：**
+- 新增 `src/kernel/auditor.py`：`EnvironmentAuditor` 只读核查**文件/日志等环境事实**；支持 `verify` 规格（`file`/`files`/`contains` 正则），无 `verify` 默认放行（向后兼容），未知核查类型跳过不阻断。
+- `autopilot.run()`/`resume_run()` 入口经 `_maybe_install_default_auditor()` 自动 `set_auditor`；仅在未注册时接入（测试已 set 不被覆盖），失败静默放行绝不阻塞 run。
+- `propose_milestone` 修正：直接把 milestone(含 verify) 交 auditor，而非包 wrapper 导致 verify 取不到。
+- 测试：`tests/test_environment_auditor.py` **8 项②级全绿**：无verify放行/文件存在放行/缺失拒绝/未知类型跳过/Gate拒写checkpoint且库不覆盖/文件存在Gate放行/真实auditor拒里程碑/文件存在接受里程碑。
+- 提交：`04cdf17`（本地，待用户 push）。
 
-> 注：Gap2/Gap1 均为低风险增量（纯钩子/独立表 + 向后兼容），已直接落地。Gap3 涉及 autopilot 主循环结构改造，按"先审查再动手"铁律，待用户确认范围后推进。
+**MEA 三角对齐最终结论（2026-08-05）：**
+| MEA 角色 | AOS 对应实现 | 状态 |
+|---|---|---|
+| Manager（维护目标+已验证里程碑，不碰环境） | `autopilot.run` 编排 + `verified_milestones` 已验证层 | ✅ ② |
+| Executor（每轮全新上下文，轨迹用完即弃） | `_execute` 每轮新建 `OrchestrationChiplet`（autopilot.py:1336 注释明示） | ✅ ②（经代码核查，原判"待做"为滞后） |
+| Auditor（只读独立验证环境事实，仅通过才写状态） | `EnvironmentAuditor` + `AuditorGate`(`save_checkpoint`钩子) + `propose_milestone` 验证 | ✅ ② |
+| 状态持久化（跨上下文续跑） | `run_state_store` sqlite checkpoint（`resume_run` 从断点续跑） | ✅ ② |
+
+**剩余非阻断项**：任务级 `verify` 规格化（由各 run 在 checkpoint/milestone 里声明自己的环境事实验证点）——属使用约定，非代码债；框架已就位，调用方按需填 `verify` 即可。
+
+> 注：Gap2/Gap1/真实Auditor 均为低风险增量（钩子+独立表+独立模块 + 向后兼容），已直接落地。 executor fresh-context 经核查已由既有 OrchestrationChiplet 架构满足，无需结构改造。
