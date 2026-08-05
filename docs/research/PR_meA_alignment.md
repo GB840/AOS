@@ -45,22 +45,27 @@
 
 ## 主机执行命令（push 与建 PR 由你主机执行，AI 不代推）
 
-```bash
-# 1) 进入仓库根（已配 SSH origin=git@github.com:GB840/AOS.git）
-cd /path/to/AOS
+> **push 已于 2026-08-05 完成**：`1a6d6b0..97da3a4 feature/infra-setup -> feature/infra-setup`（8 个提交已上远程）。下面只差建 PR。
 
-# 2) 推送 feature 分支（远程 master 已在 1a6d6b0，本分支 07ee391 为其线性后继，纯 ff）
-git push origin feature/infra-setup
+### 方案 A（推荐，零安装）：GitHub 网页建 PR
+浏览器打开对比页（base=master，head=已推的 feature/infra-setup）：
+```
+https://github.com/GB840/AOS/compare/master...feature/infra-setup
+```
+- **Title**：`feat(MEA): 长程任务三权分立对齐`
+- **Description**：把本文件（PR_meA_alignment.md）整段粘进去
+- 点 **Create pull request**
 
-# 3a) 有 gh 则直接建 PR（本文件即正文）：
-gh pr create --base master --head feature/infra-setup \
-  --title "feat(MEA): 长程任务三权分立对齐 —— AuditorGate+已验证里程碑层+真实EnvironmentAuditor接线" \
-  --body-file docs/research/PR_meA_alignment.md
-
-# 3b) 无 gh 则用 GitHub API（把 <TOKEN> 换成你的 GitHub PAT，需 repo 权限）：
-curl -X POST -H "Authorization: Bearer <TOKEN>" -H "Accept: application/vnd.github+json" \
-  https://api.github.com/repos/GB840/AOS/pulls \
-  -d '{"title":"feat(MEA): 长程任务三权分立对齐","head":"feature/infra-setup","base":"master","body":"见仓库 docs/research/PR_meA_alignment.md"}'
+### 方案 B：装 gh 后再建（一次性）
+```powershell
+winget install --id GitHub.cli
+# 重开终端后：
+gh pr create --base master --head feature/infra-setup --title "feat(MEA): 长程任务三权分立对齐" --body-file docs/research/PR_meA_alignment.md
 ```
 
-> 注：远程 `master` 与 `feature/infra-setup` 当前均停在 `1a6d6b0`；推送后 feature 前进到 `07ee391`，PR diff = 这 7 个提交。GitHub 常 `Empty reply from server`（国内可达性问题），若 push 失败改用 `git@github.com:GB840/AOS.git` 的 443 SSH 或重试。
+### 方案 C：无 gh 用 GitHub API（需 PAT，PowerShell 单行长这样）
+```powershell
+$token="<你的GitHub_PAT_需repo权限>"; $body=@{title="feat(MEA): 长程任务三权分立对齐"; head="feature/infra-setup"; base="master"; body="见仓库 docs/research/PR_meA_alignment.md"} | ConvertTo-Json; Invoke-RestMethod -Uri "https://api.github.com/repos/GB840/AOS/pulls" -Method Post -Headers @{Authorization="Bearer $token"; Accept="application/vnd.github+json"} -Body $body -ContentType "application/json"
+```
+
+> 注：远程 `master` 停在 `1a6d6b0`；feature 已前进到 `97da3a4`，PR diff = 这 8 个提交。GitHub 常 `Empty reply from server`（国内可达性问题）主要影响 `git push`，网页/API 走 HTTPS 通常正常。
