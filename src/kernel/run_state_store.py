@@ -19,6 +19,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 
 _LOG = logging.getLogger("run_state_store")
 
@@ -72,6 +73,17 @@ def _conn() -> sqlite3.Connection:
                    created REAL,
                    updated REAL,
                    state   TEXT
+               )"""
+        )
+        # MEA Gap1：独立的「已验证事实」层。与 runs.state（executor 进度快照）分离——
+        # 只有经 auditor 验证的里程碑才进此表；未验证的"声称"绝不落盘（错误前提不污染状态）。
+        _CONN.execute(
+            """CREATE TABLE IF NOT EXISTS verified_milestones (
+                   run_id       TEXT,
+                   milestone_id TEXT,
+                   payload      TEXT,
+                   verified_at  REAL,
+                   PRIMARY KEY (run_id, milestone_id)
                )"""
         )
     return _CONN
@@ -139,6 +151,55 @@ def load_checkpoint(run_id: str):
         "task": row[2],
         "planner": row[3],
     }
+
+
+def propose_milestone(run_id: str, milestone: dict) -> str:
+    """MEA Gap1：把一条里程碑写入「已验证事实」层。
+
+    - 若已注册 ``_AUDITOR``：写盘前由其基于环境事实独立验证；
+      验证未通过则**抛 ValueError 且不写入**（声称的里程碑不污染已验证状态）。
+    - 若未注册 auditor：默认放行（向后兼容；设计意图是 autopilot 接上真实探针）。
+    - auditor 自身抛异常：降级放行 + 告警（绝不因审计器故障阻塞 run）。
+
+    返回 milestone_id。调用方（autopilot）应把"经此验证的里程碑"作为
+    Manager 角色可依赖的「已验证进度」，而非依赖 runs.state 的原始快照。
+    """
+    mid = f"m_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
+    if _AUDITOR is not None:
+        try:
+            verdict = _AUDITOR(
+                {"type": "milestone", "milestone": milestone}, run_id
+            )
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("AuditorGate(里程碑) 异常，降级放行: %s", e)
+            verdict = True
+        if not verdict:
+            raise ValueError(
+                f"auditor rejected milestone for run={run_id}: {milestone!r}"
+            )
+    with _LOCK, _conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO verified_milestones "
+            "(run_id, milestone_id, payload, verified_at) VALUES (?,?,?,?)",
+            (run_id, mid, json.dumps(milestone, ensure_ascii=False, default=str),
+             time.time()),
+        )
+    return mid
+
+
+def get_verified_milestones(run_id: str) -> list:
+    """返回某 run 经审计验证的全部里程碑（按验证时间升序）。
+
+    与 ``load_checkpoint(run_id)['state']['steps']`` 的关键区别：
+    这里是**经 auditor 验证过的事实集**，而非 executor 自称的进度快照。
+    """
+    with _LOCK, _conn() as c:
+        rows = c.execute(
+            "SELECT payload FROM verified_milestones "
+            "WHERE run_id=? ORDER BY verified_at ASC",
+            (run_id,),
+        ).fetchall()
+    return [json.loads(r[0]) for r in rows]
 
 
 def mark_done(run_id: str) -> None:
