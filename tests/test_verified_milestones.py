@@ -9,8 +9,6 @@
 """
 from __future__ import annotations
 
-import importlib
-
 import pytest
 
 import src.kernel.run_state_store as rs

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
 from kernel.plugins.fabric_hub import FabricHub
-from kernel.plugins.orchestration_chiplet import OrchestrationChiplet
 
 
 class _Doubler(BaseAgentAdapter):
@@ -213,5 +212,10 @@ def test_parallel_failure_isolated():
     assert res.ok is True
     assert res.data["ok_steps"] == 1
     assert res.data["failed_steps"] == 1
-    assert res.data["trace"][0]["ok"] is True
-    assert res.data["trace"][1]["ok"] is False
+    # 并发组内 trace 的 append 顺序取决于谁先完成（_Failer 可能先于 _Doubler 返回），
+    # 故按 capability 查找而非按索引断言，避免误判并发完成顺序。
+    trace = res.data["trace"]
+    doubler_step = next(t for t in trace if t.get("capability") == "bench.doubler")
+    failer_step = next(t for t in trace if t.get("capability") == "bench.fail")
+    assert doubler_step["ok"] is True
+    assert failer_step["ok"] is False

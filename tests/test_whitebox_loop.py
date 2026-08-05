@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
-from core.fabric.capability import TIER_HIGH, TIER_MEDIUM
+from core.fabric.capability import TIER_HIGH
 from core.fabric.registry import FabricRegistry
 from core.fabric.trace_store import TaskTraceStore, TracedRoute, _traces_dir
 

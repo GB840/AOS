@@ -38,7 +38,7 @@ _DEFAULT_EVOLUTION_LOG = str(
 _INTENT_RULES: list[tuple[str, str, str, str]] = [
     # (正则, layer, complexity, workflow_id)
     (
-        r"(自己改|自修改|调整策略|元层|meta|self.?modif|propose)",
+        r"(自己改|自修改|调整策略|元层|self.?modif|propose|进化|自我进化|修改策略|演化)",
         "L3.5",
         "high",
         "meta_orchestration",

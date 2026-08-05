@@ -92,3 +92,16 @@ confidence_level = "medium"
 ignore = ["70612"]  # 忽略某些已知的误报
 full-report = true
 continue-on-error = true
+
+# =============================================================================
+# ruff 配置：只启用「真问题」规则集，避免全仓库历史风格债（UP/BLE/DTZ/N/SIM…）
+# 连坐 CI。F=pyflakes(未用导入/未定义名/未用变量 真 bug)；E9=语法错误。
+# 风格类（PEP585/604、盲 except、时区、命名等）属渐进清理范畴，不在 CI 卡死。
+# CI 的 Static checks 进一步只对「本 PR 增量文件」做 diff-aware 校验（见 ci.yml）。
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["F", "E9"]

@@ -8,11 +8,8 @@
 """
 from __future__ import annotations
 
-import importlib
-
 import pytest
 
-import src.kernel.auditor as auditor_mod
 import src.kernel.run_state_store as rs
 from src.kernel.auditor import build_default_auditor
 

@@ -266,7 +266,6 @@ def _compute_causal_hints(failed: List[str], distiller: Optional[EvolutionDistil
     纯函数、可单测：从失败步文本里解析能力标签，逐一查因果建议；无蒸馏器或
     样本不足则双双返回空——反思退化回质疑 agent 诊断，绝不伪造证据。
     """
-    from typing import Tuple
     hints: Dict[str, Any] = {}
     if distiller is not None:
         for f in failed:
@@ -725,7 +724,6 @@ def _ensure_parent_dirs(code: str) -> None:
 
 def _route(capability: str, payload: Dict[str, Any]) -> Any:
     """把 OrchestrationChiplet 的能力调用派发给真实适配器。"""
-    from core.fabric.adapter import InvokeRequest
 
     # 派发边界策略校验（理念6 诚实：让 PolicyEngine 在真实路径上具有约束力）。
     # 默认审计模式仅记录；设 AOS_POLICY_ENFORCE=1 时命中 deny 规则即阻断，
@@ -2090,14 +2088,14 @@ def _inject_fix_hints(task: str, hints: List[str]) -> str:
     )
 
 
-def _get_autopilot_core(tenant_id: Optional[str] = None) -> "AdaptiveCore":
+def _get_autopilot_core(tenant_id: Optional[str] = None) -> Any:
     """惰性取**该租户**的内核自适应中枢（避免模块级循环依赖：adaptive→learning_loop
     在方法内 import autopilot.run，故这里也惰性 import）。
 
     tenant_id=None → 共享默认实例（自用模式，行为与之前一致）；
     非空 → 该租户独占稳态与失败记忆库，教训不跨租户串味（母纲「主权归你」）。
     """
-    from kernel.adaptive import get_adaptive_core, StageGuard
+    from kernel.adaptive import get_adaptive_core
     return get_adaptive_core(tenant_id=tenant_id)
 
 
