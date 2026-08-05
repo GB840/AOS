@@ -16,7 +16,7 @@
 ## 1. 根本诊断:灵魂与肉体不对齐
 
 - **灵魂**(STATUS.md 宣称):开放能力总线,AOS 不重造大脑,只做接线板。
-- **肉体**(实际代码):`brain.py` 1965 行 + 7 个大脑子模块 2237 行 ≈ **~4200 行自研编排决策逻辑**(07-10 二期核验实测；原 1841/1850 为过期快照),且 fabric 是"嫁接"进 brain 而非取代它,**新旧两套架构并存**。
+- **肉体**(实际代码):`brain.py` 2301 行 + 7 个大脑子模块 2299 行 ≈ **~4756 行自研编排决策逻辑**(2026-08 实测；07-10 二期核验的 1965/2237 为过期快照),且 fabric 是"嫁接"进 brain 而非取代它,**新旧两套架构并存**。
 - **代价**:每加一个功能都要同时喂两套架构;提交历史里大量"死锁/撞包/三重失效"就是两套架构在同一进程里打架的症状(如 commit deb5082 跨-await 持锁死锁)。
 - **结论**:收敛只有一条路——砍 brain.py 成纯胶水,让 fabric 当主干。详见 `docs/BRAIN_TRIAGE.md`。
 
@@ -33,11 +33,11 @@
 
 | # | 问题 | 严重度 | 备注 |
 |---|---|---|---|
-| 1 | 环境跑不起来:Python 3.14 但声明 3.10/3.11;sqlmodel/ag2/mem0 未装;pytest 无法 collect | 🔴 P0 | 所有讨论的共同前提 |
+| 1 | 环境跑不起来:Python 3.14 但声明 3.10/3.11;sqlmodel/ag2/mem0 未装;pytest 无法 collect | ✅ 已解 | 2026-08 复核:pytest 正常 collect 并通过;Python 版本已统一为 3.11(pyproject/CI/README/`.python-version` 四方一致) |
 | 2 | 新旧架构未收敛(brain.py 自研大脑 vs fabric) | 🔴 P0 | 根因,见 §1 |
 | 3 | git 已 40 提交(原 23 为过期快照)、版本保护改善中 | 🔴 P0 | 高危(历史不足,继续补提交) |
 | 4 | 硬编码密钥残留(brain.py:91-94 明文 admin/aos123456) | 🟠 P1 | 隐患 |
-| 5 | 巨型文件违反自家规范(brain.py 实测 1965 行远超 AGENTS.md max 500 行;原写 web/app.py 211KB 系误指,真实入口为 web/console.py) | 🟠 P1 | AGENTS.md 定 max 500 行 |
+| 5 | 巨型文件违反自家规范(brain.py 实测 2301 行、src/web/app.py 实测 4769 行,均远超 AGENTS.md max 500 行;web/app.py 真实存在且为 start_all.sh 拉起的 Streamlit 入口) | 🟠 P1 | AGENTS.md 定 max 500 行;拆分 app.py 为持续项 |
 | 6 | 重复/死代码:UITARS 注册块复制两遍、日期硬编码、死属性 | 🟡 P2 | 零风险可删 |
 | 7 | 自研 OpenClaw 违反铁律(已标 DEPRECATED 但代码仍在) | 🟡 P2 | |
 | 8 | fabric 6 adapter 仅 2 个 live(LiteLLM/Mem0/browser-use/Langfuse 均 health()=False) | 🟠 P1 | 不是缺能力,是没通电 |

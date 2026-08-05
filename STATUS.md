@@ -12,7 +12,7 @@ AIGC:
 # AOS 项目状态总地图（STATUS）
 
 > 这是一份**导航索引**，不是技术文档。每次大状态变动更新这里。
-> 最后更新：**2026-07-25**（数字纠偏：实测 **27 适配器类（基础 _ADAPTERS 26 + orchestrator） / 36 适配器文件（core/fabric/adapters 新栈 36 文件 / 34 类） / 1139 测试函数 / 178 测试文件 · FabricHub 实际注册 38 个引擎（基础 27 + 动态 11），live 31 / dead 7 · 11 内核子包 + 36 内核顶层模块 · 20 API 路由文件**）。
+> 最后更新：**2026-08-06**（规模实测：41 适配器文件（core/fabric/adapters）/ **225 测试文件 / 1835 测试函数** · FabricHub 注册 ~38 引擎 · 11 内核子包 + 36 内核顶层模块 · 50+ 技能）。
 
 ---
 
@@ -21,7 +21,7 @@ AIGC:
 AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器）** 为干净运行时，统一持有路由/记忆/上下文主权并调度各芯粒适配器；legacy 的 `brain.py` 仍作 `/api/chat` 灰度兜底（双轨尚未合流）。在此之上新增了**内容飞轮平台**（Studio/Hub/Pulse/Evolve + 5 适配器 + SkillHub/AutoSkill 集成），端到端已真跑通（搜索→LLM 写脚本→本地 ffmpeg+edge-tts 生成视频）。
 
 **规模（实测，非记忆，2026-07-25 baseline_snapshot + probe_all 真机核对）：**
-- **27 适配器类**（FabricHub `_ADAPTERS` 26 + orchestrator 1）/ 36 适配器文件（core/fabric/adapters 新栈 36 文件 / 34 类） / 1139 测试函数 / 178 测试文件
+- **41 适配器文件**（core/fabric/adapters 新栈）/ **225 测试文件 / 1835 测试函数**（2026-08 实测）
 - FabricHub **实际注册 38 个**引擎（基础 27 + 动态 11），**live 31 / dead 7**
 - 11 内核子包 + 36 内核顶层模块 / 20 API 路由文件 / 50+ 技能（manifest.json）
 - **7 大 dead 引擎**（2026-07-25 probe_dead.py 实跑 8s 探活）：openclaw / stt / lfm2 / minicpm_o / vlm / mediakit / comfyui
@@ -39,8 +39,23 @@ AOS 已完成"融为一体"重构：以 **FabricHub（单基座能力路由器�
 | 内容飞轮平台 | Studio/Hub/Pulse/Evolve + 5 适配器 + SkillHub/AutoSkill + /studio 前端 | ✅ 已 commit（待 push） | `a13c489` |
 | 文档刷新 | AGENTS.md 真实规模数字 | ✅ 已 commit（待 push） | `5e889c3` |
 
-**分支**：`feature/infra-setup`；**最新提交**：`5e889c3`（之前还有 `a13c489` 内容飞轮批次）。
-**运行环境**：Python 3.14，绝对路径 `C:/Users/Administrator/AppData/Local/Programs/Python/Python314/python.exe`（系统 Python，非 venv）。
+## 1.5 近期重大交付：MEA 三权分立（2026-08，此前文档零记载）
+
+长程任务"Manager/Executor/Auditor"三权分立已在 `feature/infra-setup` 落地（②级实证，未引入外部依赖）：
+- **AuditorGate**（`src/kernel/run_state_store.py`）：写入持久状态前可经只读审计验证，未通过拒绝覆盖旧快照（错误前提不污染状态）。
+- **已验证里程碑层**（`verified_milestones` 表）：executor 自称完成的 steps **不会自动**变已验证事实，须显式 `propose_milestone` 且经审计才写入。
+- **EnvironmentAuditor**（`src/kernel/auditor.py`）：只读核查文件/日志环境事实；`autopilot.run()/resume_run()` 自动启用 Gate。
+- **三角对齐**：Manager↔autopilot+verified_milestones / Executor↔OrchestrationChiplet 每轮新建(fresh-context) / Auditor↔EnvironmentAuditor+AuditorGate。
+- 测试：`test_auditor_gate.py`(5) + `test_verified_milestones.py`(6) + `test_environment_auditor.py`(17+9边路) 共 **28+ passed**；`auditor.py` 覆盖率 **95%**。
+
+## 1.6 CI 可信度收口（2026-08-06）
+- `ci.yml`：静态检查/单测改 diff-aware（只校验本 PR 增量，不连坐全量历史风格债）；smoke 去掉 `continue-on-error`（`core.platform` 已真实实现，smoke 100% 绿）。
+- `security-scan.yml`：触发器改 `master`+`feature/**`（原 main/develop 永不触发）；ruff 改 diff-aware。
+- Python 版本四方统一为 3.11；修复 `aos` 控制台命令打包断裂（`scripts/` 纳入打包）。
+- 新增 `src/core/platform.py`：真实 observability/resilience/middleware/sandbox/devops 19 原语（供 smoke 平台外壳）。
+
+**分支**：`feature/infra-setup`；**最新提交**：`9754d43`（上方 MEA / CI 收口等大量提交未在此旧时间线逐一列，本段为补记）。
+**运行环境**：Python **3.11+**（pyproject `requires-python>=3.11` / CI 3.11 / `.python-version` 3.11 / README 一致）；开发用 managed venv。
 
 ---
 
@@ -238,7 +253,7 @@ C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe script
 C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe -m py_compile <file>
 ```
 
-- 测试基线（2026-07-25 真机实测）：`tests/` 共 **178 文件 / 1139 个 test_ 函数**
+- 测试基线（2026-08 实测）：`tests/` 共 **225 文件 / 1835 个 test_ 函数**
   （2026-07-19 旧基线 139/955 已过期）。
   近端绿绿回归套（沙箱 30s timeout 实跑）：`test_causal.py + test_mcp_fabric_exposure.py + test_approvals_routes.py` **17/17 PASS（3.33s）**
   （旧记录 10/6/1 = 17 个，已收敛在 17/17 PASS）。

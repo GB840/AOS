@@ -18,7 +18,7 @@
 
 ### 1.1 灵魂与肉体不对齐 —— 根因
 - **宣称**：开放能力总线，不重造大脑，只做接线板（STATUS.md）。
-- **实际**：`brain.py`(~1965 行) + 7 大脑模块(~2237 行) + `brain_registration.py`(144 行) ≈ **~4346 行自研决策**（07-10 二期核验实测；原 1770/1850/113 为过期快照），且 fabric 是"嫁接"进 brain 而非取代。**新旧两套架构并存。**
+- **实际**：`brain.py`(~2301 行) + 7 大脑模块(~2299 行) + `brain_registration.py`(156 行) ≈ **~4756 行自研决策**（2026-08 实测；07-10 二期核验的 1965/2237/144 为过期快照），且 fabric 是"嫁接"进 brain 而非取代。**新旧两套架构并存。**
 - **代价**：每加功能喂两套架构；提交历史里"死锁/撞包/三重失效"就是两套架构同进程打架（commit deb5082 跨-await 持锁死锁）。
 - ⚠️ 注：行数为 07-10 实测快照，代码仍在动，**以 `git ls-files | xargs wc -l` 实测为准**，勿引用本节数字做决策。
 - 详见 → `docs/BRAIN_TRIAGE.md`（处置思路，行号已漂移，按方法名定位）
@@ -40,11 +40,11 @@
 - ✅ **环境已解**：已有 `requirements.lock`，venv + sqlmodel/ag2/mem0 可装齐（初版"跑不起来"已过期）。
 - ⚠️ **fabric adapter 待复测**：OpenClaw 已真实部署 @18789，其余（LiteLLM/Mem0/browser-use/Langfuse）health() 需实测确认，勿沿用"仅 2 live"旧说法。
 - ✅ **git 版本保护改善**：提交数已 23 → **40**（初版数据过期）。
-- 🟡 **表数**：权威计数 42（test_database 断言），grep `__tablename__` 为 47，有 5 个账未平，建议 reconcile。
+- ✅ **表数**：权威计数 **42**（`test_database` 断言 + `scripts/verify_db_layer.py` 实跑确认 `models.TABLE_COUNT == 42`）；07-10 所称"grep 47 / 5 个账未平"已 reconcile 完成，现有计数一致。
 - mcp/ag2/pyjwt 已在 7/9 补进 requirements 并锁版本。
 
 ### 1.4 工程卫生落后
-- 巨型文件违反自家规范（`brain.py` 实测 1965 行远超 AGENTS.md max 500 行；注：原写 `web/app.py` 211KB 系误指——仓库无 `web/app.py`，真实入口为 `web/console.py` 轻量代理，详见 `docs/AOS_DIGEST_PLAYBOOK.md` §1.1）。
+- 巨型文件违反自家规范（`brain.py` 实测 2301 行、远超 AGENTS.md max 500 行；`src/web/app.py` 实测 4769 行同样超标——**该文件真实存在且是 `start_all.sh` 实际拉起的 Streamlit 入口**，07-10 文档称"仓库无 web/app.py"为事实错误）。
 - 死代码/重复：UITARS 注册块复制两遍、日期硬编码、4 个 `_*_bridge` 死属性、`_chat_legacy` 死路径。
 - ✅ ~~明文口令 `admin/aos123456`~~：**已治理**（brain.py:91-92 改读 config，仅剩注释），不再是存活隐患。
 
