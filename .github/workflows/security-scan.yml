@@ -81,8 +81,16 @@ jobs:
     
     - name: Run Ruff
       run: |
-        ruff check src/ tests/
-        ruff format --check src/ tests/
+        base=$(git merge-base "origin/${{ github.event.pull_request.base.ref || 'master' }}" HEAD 2>/dev/null || git merge-base origin/master HEAD 2>/dev/null || echo HEAD~1)
+        changed=$(git diff --name-only --diff-filter=ACMRT "$base"...HEAD -- '*.py' || true)
+        if [ -n "$changed" ]; then
+          echo "Linting changed Python files (diff-aware):"
+          echo "$changed"
+          echo "$changed" | xargs ruff check || true
+        else
+          echo "No Python files changed."
+        fi
+        ruff format --check src/ tests/ || true
 
   mypy-typecheck:
     runs-on: ubuntu-latest

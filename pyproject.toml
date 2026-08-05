@@ -80,7 +80,7 @@ Homepage = "https://github.com/aos-dev/aos-kernel"
 Repository = "https://github.com/aos-dev/aos-kernel"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "scripts"]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".git", "__pycache__", ".venv", "venv", "env"]
