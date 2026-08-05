@@ -166,10 +166,10 @@ def propose_milestone(run_id: str, milestone: dict) -> str:
     """
     mid = f"m_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
     if _AUDITOR is not None:
+        # 直接把 milestone 本身交给 auditor：其 verify 规格在顶层，与 checkpoint
+        # 的 verify 取址一致（auditor 只看 state.get("verify")）。
         try:
-            verdict = _AUDITOR(
-                {"type": "milestone", "milestone": milestone}, run_id
-            )
+            verdict = _AUDITOR(milestone, run_id)
         except Exception as e:  # noqa: BLE001
             _LOG.warning("AuditorGate(里程碑) 异常，降级放行: %s", e)
             verdict = True

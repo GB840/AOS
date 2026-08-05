@@ -2105,6 +2105,22 @@ def _get_autopilot_core(tenant_id: Optional[str] = None) -> "AdaptiveCore":
 from kernel.adaptive import StageGuard  # noqa: E402  (置于函数后，惰性确保无环)
 
 
+def _maybe_install_default_auditor():
+    """MEA Auditor 接线（只读审计关卡）：autopilot 跑任务时让 Gate 真正生效。
+
+    仅在 run_state_store 尚未注册审计器时，接入默认环境事实审计器；
+    若调用方（如测试）已 set_auditor，则不被覆盖。失败静默放行，绝不因审计器
+    装配问题阻塞 run。
+    """
+    try:
+        import kernel.run_state_store as _rss
+        if _rss._AUDITOR is None:
+            from kernel.auditor import build_default_auditor
+            _rss.set_auditor(build_default_auditor())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run(task: str, planner: str = "ag2", run_id: Optional[str] = None,
         tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """执行一个自主任务（求是引擎式：规划→执行→质疑→重设计→再执行…）。
@@ -2121,6 +2137,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None,
     Returns: 顶层含 reflection 字段（轮次/是否达上限）+ run_id。
     """
     start = time.time()
+    _maybe_install_default_auditor()  # MEA：让 AuditorGate 在真实 run 中生效
     # 环节1：规划（动态——规划死则降级为「空计划」，以结构化结果收尾，不崩整轮）
     core = _get_autopilot_core(tenant_id)
     # PREFLIGHT（自进化闭环「读回」）：查共享失败记忆库，命中已知修复则注入规划输入，
@@ -2181,6 +2198,7 @@ def resume_run(run_id: str) -> Dict[str, Any]:
     不重跑已完成的轮次（checkpoint 已保存其成功产出与步骤），只续跑断点之后。
     status 已是 done 却来 resume → 直接返回已存结果，不重跑。
     """
+    _maybe_install_default_auditor()  # MEA：让 AuditorGate 在 resume 中同样生效
     snap = load_checkpoint(run_id)
     if not snap:
         return {"error": f"无 checkpoint: {run_id}"}
