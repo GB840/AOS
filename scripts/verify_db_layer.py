@@ -12,7 +12,7 @@ from sqlmodel import SQLModel, select
 from sqlalchemy.exc import IntegrityError
 from core.database import init_db, models, session_scope
 from core.database.models import (
-    Agent, AuditLog, EvolutionLog, Message, Thread,
+    Agent, AuditLog, Message, Thread,
     Notification,
 )
 
