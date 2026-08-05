@@ -108,3 +108,79 @@ def test_propose_milestone_accepted_when_verify_file_exists(tmp_path):
     })
     m = rs.get_verified_milestones("r1")
     assert len(m) == 1 and m[0]["id"] == 1
+
+
+# ===== auditor.py 边路覆盖（补齐 61%→~95% 的漏测分支） =====
+
+
+def test_contains_regex_match_pass(tmp_path):
+    f = tmp_path / "log.txt"
+    f.write_text("epoch 7 finished ok", encoding="utf-8")
+    a = build_default_auditor()
+    assert a({"verify": {"contains": {"path": str(f), "pattern": r"epoch\s+\d+"}}}, "r1") is True
+
+
+def test_contains_regex_no_match(tmp_path):
+    f = tmp_path / "log.txt"
+    f.write_text("nothing here", encoding="utf-8")
+    a = build_default_auditor()
+    assert a({"verify": {"contains": {"path": str(f), "pattern": r"epoch\s+\d+"}}}, "r1") is False
+
+
+def test_contains_missing_path(tmp_path):
+    a = build_default_auditor()
+    # 路径不存在 → 核查失败
+    assert a({"verify": {"contains": {"path": str(tmp_path / "x.log"), "pattern": "."}}}, "r1") is False
+
+
+def test_contains_non_dict_spec(tmp_path):
+    f = tmp_path / "log.txt"
+    f.write_text("data", encoding="utf-8")
+    a = build_default_auditor()
+    # contains 的值非 dict → _check_contains 返回 False（拒绝）
+    assert a({"verify": {"contains": str(f)}}, "r1") is False
+
+
+def test_custom_checks_injection(tmp_path):
+    calls = []
+
+    def my_check(val):
+        calls.append(val)
+        return val == "good"
+
+    a = build_default_auditor()
+    a._checks["mykind"] = my_check  # 注入自定义核查类型
+    assert a({"verify": {"mykind": "good"}}, "r1") is True
+    assert a({"verify": {"mykind": "bad"}}, "r1") is False
+    assert calls == ["good", "bad"]
+
+
+def test_non_dict_state_passes():
+    a = build_default_auditor()
+    # 非 dict 状态（异常输入）→ 保守放行，不崩
+    assert a("not-a-dict", "r1") is True
+
+
+def test_verify_spec_not_dict_passes():
+    a = build_default_auditor()
+    # verify 非 dict（如字符串/列表）→ 跳过核查，放行
+    assert a({"verify": "should-be-dict"}, "r1") is True
+    assert a({"verify": ["list", "not", "dict"]}, "r1") is True
+
+
+def test_check_raises_returns_false():
+    def boom(_val):
+        raise RuntimeError("injected failure")
+
+    a = build_default_auditor()
+    a._checks["boom"] = boom
+    # 核查抛异常 → 视为失败，拒绝
+    assert a({"verify": {"boom": "x"}}, "r1") is False
+
+
+def test_files_check_wraps_single_path(tmp_path):
+    f = tmp_path / "a.txt"
+    _touch(f)
+    a = build_default_auditor()
+    # files 给定单条（非列表）→ _check_files 内部包成列表仍能核查
+    assert a({"verify": {"files": str(f)}}, "r1") is True
