@@ -12,6 +12,8 @@ import os
 
 import pytest
 
+pytest.importorskip("mem0")  # 缺 mem0 包（本地零成本记忆依赖）；装齐后自动跑
+
 from core.fabric.adapters.mem0_adapter import build_mem0_config
 
 

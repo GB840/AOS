@@ -12,6 +12,8 @@ import urllib.request
 
 import pytest
 
+pytest.importorskip("piper")  # 缺 piper-tts 包；装齐后自动跑
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from core.fabric.adapters.piper_backend import PiperTTS, PIPER_AVAILABLE  # noqa: E402
