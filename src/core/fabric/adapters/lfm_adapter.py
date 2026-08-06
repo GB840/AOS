@@ -115,7 +115,7 @@ class LFMAdapter(BaseAgentAdapter):
     def health_detail(self) -> dict:
         return {
             "engine": self._engine,
-            "tier": self.tier,
+            "tier": self.tier(),
             "backend": self._backend,
             "model": self._model,
             "live": self.health(),
