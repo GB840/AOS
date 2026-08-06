@@ -48,7 +48,7 @@ def test_stage_order_and_all_run():
     cfg = OPCLoopConfig(business="自媒体一人公司", executor=ex, max_cycles=1)
     out = OPCBusinessLoop(cfg).run()
     ids = [c[0] for c in ex.calls]
-    assert ids == ["analyze", "promote", "acquire", "deliver", "maintain"]
+    assert ids == ["analyze", "promote", "acquire", "deliver", "evolve", "maintain"]
 
 
 def test_side_effect_requires_confirm():
@@ -69,8 +69,8 @@ def test_side_effect_requires_confirm():
     assert acquire["skipped"] is True
     # 其余阶段仍执行
     assert ex.calls
-    # 确认函数仅在副作用阶段被调用（acquire / deliver）
-    assert set(confirmed) == {"acquire", "deliver"}
+    # 确认函数仅在副作用阶段被调用（acquire / deliver / evolve）
+    assert set(confirmed) == {"acquire", "deliver", "evolve"}
 
 
 def test_reflection_saved_and_injected():
