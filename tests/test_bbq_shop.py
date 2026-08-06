@@ -380,14 +380,16 @@ class TestBBQShopFullLoop:
         
         system = create_bbq_system("测试烧烤店")
         
-        # 添加一些数据
+        # 先注册菜单（handle_order 要求菜品已在菜单，按 name 查找）
         for i in range(3):
-            system.add_order({
-                "items": [{"dish_name": f"菜品{i}", "quantity": 5, "price": 20.0}],
-                "total_amount": 100.0,
-                "actual_amount": 100.0,
-                "channel": "douyin",
-            })
+            system.add_dish({"name": f"菜品{i}", "price": 20.0})
+
+        # 下几单
+        for i in range(3):
+            system.handle_order(
+                channel="douyin",
+                items=[{"dish_name": f"菜品{i}", "quantity": 5}],
+            )
         
         # 获取报告
         report = system.get_report()
