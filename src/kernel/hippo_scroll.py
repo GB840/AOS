@@ -184,6 +184,15 @@ class EvidenceTrack:
 # 第二~三层：认知轨 — 可演化、分层置信、多观点并存
 # ═══════════════════════════════════════════════════════════════════
 
+def _tokenize(text: str) -> list[str]:
+    """统一分词（中英文一致）：中文按单字、英文/数字按词(≥2)。
+
+    倒排索引建立(_add_node)与查询(_semantic_scan)共用，保证两端分词一致。
+    注意：Python 的 \\w 不匹配中文，中文不能靠 \\w+ 提取，必须显式覆盖 CJK 区间。
+    """
+    return re.findall(r"[\u4e00-\u9fff]|[a-zA-Z0-9_]{2,}", text.lower())
+
+
 class CognitionTrack:
     """网状概念图谱 + 多源思辨仲裁。
 
@@ -275,11 +284,9 @@ class CognitionTrack:
         with self._lock:
             self._nodes[nid] = node
             self._by_anchor.setdefault(anchor_id, []).append(nid)
-            # 更新倒排索引
-            keywords = re.findall(r'\w+', content.lower())
-            for kw in keywords:
-                if len(kw) >= 2:  # 只索引长度>=2的关键词
-                    self._inverted_index[kw].append(nid)
+            # 更新倒排索引（中文按单字、英文按词，与查询分词一致）
+            for kw in _tokenize(content.lower()):
+                self._inverted_index[kw].append(nid)
         return nid
 
     @property
@@ -367,11 +374,10 @@ class PyramidRetriever:
     def _semantic_scan(self, query: str, top_k: int) -> List[Dict[str, Any]]:
         """顶层语义粗召回：在 cognition nodes 中做文本匹配。"""
         q = query.lower()
-        keywords = re.findall(r'\w+', q)
+        keywords = _tokenize(q)
         candidate_node_ids = set()
         for kw in keywords:
-            if len(kw) >= 2:
-                candidate_node_ids.update(self._cognition._inverted_index.get(kw, []))
+            candidate_node_ids.update(self._cognition._inverted_index.get(kw, []))
         
         scored = []
         for nid in candidate_node_ids:
@@ -387,7 +393,13 @@ class PyramidRetriever:
                     "modality": anchor.modality.value if anchor else "unknown",
                     "score": 1.0 if q in node.content[:50] else 0.5,
                 })
-        scored.sort(key=lambda x: x["score"], reverse=True)
+        # 置信度高的优先（共识 > 解读 > 结论），同置信度再按 score 降序，
+        # 保证检索结果里"多方印证共识"稳定排在最前
+        _conf_rank = {"high": 3, "medium": 2, "low": 1, "disputed": 0}
+        scored.sort(
+            key=lambda x: (_conf_rank.get(x["confidence"].lower(), 0), x["score"]),
+            reverse=True,
+        )
         return scored[:top_k]
 
     def _descent_to_raw(self, anchors: List[Optional[EvidenceAnchor]]) -> List[Dict[str, Any]]:

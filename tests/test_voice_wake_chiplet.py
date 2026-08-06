@@ -235,7 +235,7 @@ def test_stt_engine_pick_is_honest():
     from core.fabric.adapters.stt_adapter import STTAdapter
     a = STTAdapter()
     # 不报错；引擎名是 whisper_cpp / faster_whisper / web_speech 之一
-    assert a._engine in ("whisper_cpp", "faster_whisper", "web_speech")
+    assert a._engine in ("whisper_cpp", "faster_whisper", "vosk", "web_speech")
     # health 是可调用的 bool
     assert isinstance(a.health(), bool)
 
