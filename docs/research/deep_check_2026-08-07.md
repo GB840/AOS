@@ -7,6 +7,97 @@
 
 ---
 
+## 〇、可直接照贴的改动清单（全部在你的 M 文件里，我一个都没动）
+
+按修复性价比排序。每条都是"找到这行 → 换成这行"，不需要理解上下文。
+
+**① `src/kernel/value_ledger.py`** —— 把 `import ast` 从第 211 行的函数体内**提到文件顶部**的 import 区。（一行，修完母纲原则 6 的守门就真生效了，`test_value_siphon_scanner_actually_works` 随之转绿）
+
+**② `src/kernel/evolve/evolve_engine.py:980-981`**
+```python
+# 改前
+            decided = [p for p in updated if p.status in ("applied", "rejected")]
+            pending = [p for p in updated if p.status not in ("applied", "rejected")]
+# 改后
+            decided = [p for p in updated if p.applied or p.rejected]
+            pending = [p for p in updated if not (p.applied or p.rejected)]
+```
+
+**③ `src/kernel/compliance.py:298`**
+```python
+# 改前
+        "bank_card":   re.compile(r"(?<!\d)\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{1,7}(?!\d)"),
+# 改后
+        "bank_card":   re.compile(r"(?<![0-9a-zA-Z])\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{1,7}(?![0-9a-zA-Z])"),
+```
+
+**④ `src/kernel/immunity.py:358` 和 `:374`**（两处一模一样）
+```python
+# 改前
+                           lambda: self._fallback(model) if self._fallback(model) else None)
+# 改后
+                           lambda: self._fallback(model) or None)
+```
+
+**⑤ `src/kernel/approval/approval_store.py`** —— `approve()`（第 320 行）与 `reject()`（第 358 行）开头补过期判定。建议先把 `list_pending` 里第 248-254 行那段抽成方法：
+```python
+    def _is_expired(self, a) -> bool:
+        if not a.expires_at:
+            return False
+        try:
+            return time.mktime(time.strptime(a.expires_at[:19], "%Y-%m-%dT%H:%M:%S")) < time.time()
+        except (ValueError, OverflowError):
+            return False
+```
+然后在 `approve()` 里 `if a.status != "pending"` 那个判断**之后**加：
+```python
+                if self._is_expired(a):
+                    a.status = "expired"
+                    items[i] = a
+                    self._cache = items
+                    self._persist()
+                    return {"ok": False, "error": "审批已过期", "approval": a.to_dict()}
+```
+
+**⑥ `src/core/fabric/resilience.py:78-83`** —— 超时不要写死 `None`，改成挂起待收割：
+```python
+# 改前
+    if th.is_alive() or 'err' in box:
+        logger.warning('guarded_import: %s unavailable (timeout=%.1fs)', name, to)
+        with _PROBE_LOCK:
+            _PROBED[name] = None
+        return None
+# 改后
+    if th.is_alive():
+        # 超时不等于失败：线程仍在跑，稍后可能成功。挂起待下次收割，
+        # 不写死 _PROBED，避免慢依赖（torch/transformers 冷启动）被永久判死。
+        with _PROBE_LOCK:
+            _PENDING[name] = (th, box)
+        logger.warning('guarded_import: %s 探测超时(%.1fs)，挂起待重试', name, to)
+        return None
+    if 'err' in box:
+        with _PROBE_LOCK:
+            _PROBED[name] = None
+        return None
+```
+并在函数开头的快速路径后补一段收割：
+```python
+    # 收割上次超时挂起的探测：线程若已完成则取结果，无需重新 import
+    pend = _PENDING.get(name)
+    if pend is not None and not pend[0].is_alive():
+        with _PROBE_LOCK:
+            _PENDING.pop(name, None)
+            _PROBED[name] = pend[1].get('m')
+        return _PROBED[name]
+```
+（模块级加 `_PENDING: dict = {}`）
+
+**⑦ `src/execution/sandbox.py::_check_dangerous_patterns`** —— 这条**不要用补丁思路加正则**，见 P0-3，需要换成 AST 白名单。工作量最大，建议单独排期。
+
+**⑧ `src/kernel/memory_control.py::_compact`** —— 见 P1-2，建议把 `compliance/audit.py::_enforce_rotation` 抽成公共 `utils/rotate_jsonl.py`，三处（audit / cost_tracker / memory_control）统一调用。
+
+---
+
 ## 零、结论速览
 
 | 级别 | 条数 | 说明 |
