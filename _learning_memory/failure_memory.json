@@ -46,5 +46,65 @@
     "resolution": "",
     "attempts": 1,
     "created_at": "2026-07-16T04:32:32.476124"
+  },
+  "830b1082afac": {
+    "id": "830b1082afac",
+    "task_pattern": "a",
+    "failed_step": "litellm",
+    "error_snippet": "simulated transient failure",
+    "root_cause": "unknown",
+    "fix_hint": "搜索该错误信息找到解决方案",
+    "resolved": false,
+    "resolution": "",
+    "attempts": 8,
+    "created_at": "2026-08-07T00:24:36.442081"
+  },
+  "d1c714917f13": {
+    "id": "d1c714917f13",
+    "task_pattern": "b",
+    "failed_step": "hermes",
+    "error_snippet": "simulated transient failure",
+    "root_cause": "unknown",
+    "fix_hint": "搜索该错误信息找到解决方案",
+    "resolved": false,
+    "resolution": "",
+    "attempts": 8,
+    "created_at": "2026-08-07T00:24:36.490401"
+  },
+  "506466d760a9": {
+    "id": "506466d760a9",
+    "task_pattern": "c",
+    "failed_step": "openclaw",
+    "error_snippet": "simulated transient failure",
+    "root_cause": "unknown",
+    "fix_hint": "搜索该错误信息找到解决方案",
+    "resolved": false,
+    "resolution": "",
+    "attempts": 8,
+    "created_at": "2026-08-07T00:24:36.493232"
+  },
+  "44838d8dd08d": {
+    "id": "44838d8dd08d",
+    "task_pattern": "d",
+    "failed_step": "openclaw",
+    "error_snippet": "simulated transient failure",
+    "root_cause": "unknown",
+    "fix_hint": "搜索该错误信息找到解决方案",
+    "resolved": false,
+    "resolution": "",
+    "attempts": 8,
+    "created_at": "2026-08-07T00:24:36.496401"
+  },
+  "d1afb34bc36f": {
+    "id": "d1afb34bc36f",
+    "task_pattern": "x",
+    "failed_step": "litellm",
+    "error_snippet": "stub: fake kernel has no real LLM",
+    "root_cause": "unknown",
+    "fix_hint": "搜索该错误信息找到解决方案",
+    "resolved": false,
+    "resolution": "",
+    "attempts": 8,
+    "created_at": "2026-08-07T00:24:36.504002"
   }
 }

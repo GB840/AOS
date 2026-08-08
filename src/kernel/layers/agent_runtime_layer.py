@@ -128,11 +128,20 @@ class FileMemoryManager(MemoryManager):
     可无缝替换为 SQLite/Redis/等实现了 MemoryManager 的类。
     """
 
+    # 理念8「限最大存储条数防磁盘打满」：.aos_memory.jsonl 上限。
+    # 与 trace_store._MAX_TRACE_FILES=500 同源纪律。set 是 append-only（同 key
+    # 多次写留多行旧值），_load 全文件读。上限 1000 行，达上限 compact：基于
+    # _store 内存视图重写，每 key 只留最新值（去重，与 controllable_memory 同策略）。
+    _MAX_LINES = 1000
+    _TRIM_CHECK_EVERY = 50
+
     def __init__(self, filepath: str = ".aos_memory.jsonl") -> None:
         self._filepath = filepath
         self._store: Dict[str, Any] = {}
         self._lock = threading.RLock()
         self._load()
+        # 理念8 轮转计数器（_compact 触发节流）
+        self._since_last_trim = 0
 
     def _load(self) -> None:
         with self._lock:
@@ -174,6 +183,32 @@ class FileMemoryManager(MemoryManager):
         with self._lock:
             self._store[key] = value
             self._save(key, value)
+            # 理念8：防磁盘打满的节流 compact（同 key 多次写会留多行旧值）
+            self._since_last_trim += 1
+            if self._since_last_trim >= self._TRIM_CHECK_EVERY:
+                self._since_last_trim = 0
+                self._compact()
+
+    def _compact(self) -> None:
+        """达 _MAX_LINES 上限时基于 _store 重写文件，每 key 只留最新值（去重）。"""
+        import json as _json
+        import os as _os
+        try:
+            if not _os.path.exists(self._filepath):
+                return
+            with open(self._filepath, "r", encoding="utf-8") as f:
+                count = sum(1 for ln in f if ln.strip())
+            if count < self._MAX_LINES:
+                return
+            # _store 已是每 key 最新值（同 key 后写覆盖前写），直接重写
+            tmp = self._filepath + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for k, v in self._store.items():
+                    f.write(_json.dumps({"k": k, "v": v}, ensure_ascii=False,
+                                        default=str) + "\n")
+            _os.replace(tmp, self._filepath)
+        except Exception:  # noqa: BLE001 - compact 失败不致命
+            pass
 
     def search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         q = query.lower()

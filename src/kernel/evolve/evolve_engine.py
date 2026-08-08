@@ -28,6 +28,12 @@ _EVOLVE_DIR = os.environ.get(
     os.path.join("data", "workspaces", "fabric", "evolve"),
 )
 
+# 理念8「限最大存储条数防磁盘打满」：每工作流提案文件上限。
+# 与 trace_store._MAX_TRACE_FILES=500 同源纪律。proposals_{wf}.jsonl 每次
+# generate_proposals 批量追加，_find_proposal 遍历所有文件逐行扫描。
+# 上限 200/工作流，_update_proposal 重写时保留最新 200 条（删已 applied/rejected 的旧提案）。
+_MAX_PROPOSALS_PER_WF = 200
+
 
 def _evolve_dir() -> str:
     os.makedirs(_EVOLVE_DIR, exist_ok=True)
@@ -967,6 +973,20 @@ class EvolveEngine:
         # 如果是新的就追加
         if not any(p.id == proposal.id for p in all_props):
             updated.append(proposal)
+
+        # 理念8：每工作流提案上限，超限时优先删已决策（applied/rejected）的旧提案，
+        # 不足再按时间序删最旧。保留 pending 和最新提案。
+        if len(updated) > _MAX_PROPOSALS_PER_WF:
+            decided = [p for p in updated if p.applied or p.rejected]
+            pending = [p for p in updated if not (p.applied or p.rejected)]
+            # 先删已决策的最旧条目，仍超限则删 pending 最旧
+            overflow = len(updated) - _MAX_PROPOSALS_PER_WF
+            if len(decided) >= overflow:
+                updated = pending + decided[overflow:]
+            else:
+                updated = (pending[overflow - len(decided):] if overflow > len(decided)
+                           else pending) + decided
+            updated = updated[-_MAX_PROPOSALS_PER_WF:]
 
         try:
             with open(path, "w", encoding="utf-8") as f:

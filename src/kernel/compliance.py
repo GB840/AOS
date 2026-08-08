@@ -132,12 +132,24 @@ class AuditTrail:
     - 可订阅 EventBus 自动记录内核事件
     """
 
+    # 理念8「限最大存储条数防磁盘打满」：审计文件上限。
+    # 与 trace_store._MAX_TRACE_FILES=500 同源纪律。subscribe_to_kernel 订阅全部
+    # 内核事件（agent/message/skill/model.*），高频写文件。内存已裁 max_entries=10000
+    # 但文件无界追加。上限 10000 行，达上限搬最旧到 .archived.jsonl 冷存。
+    # verify_integrity/query 只走内存 _entries，文件轮转不影响哈希链验证。
+    # 冷存文件内哈希链完整（每条含 prev_hash），可供跨文件审计回溯。
+    _MAX_FILE_ENTRIES = 10000
+    _TRIM_CHECK_EVERY = 100
+    _ARCHIVED_SUFFIX = ".archived.jsonl"
+
     def __init__(self, filepath: str = "", max_entries: int = 10000):
         self._lock = threading.RLock()
         self._entries: List[AuditEntry] = []
         self._max_entries = max_entries
         self._filepath = filepath
         self._last_hash = "0000"  # 创世哈希
+        # 理念8 轮转计数器
+        self._since_last_trim = 0
 
     def record(self, actor: str, action: str, resource: str = "",
                result: str = "ok", detail: Optional[Dict[str, Any]] = None) -> AuditEntry:
@@ -226,8 +238,38 @@ class AuditTrail:
                     "entry_hash": entry.entry_hash,
                     "prev_hash": entry.prev_hash,
                 }, ensure_ascii=False) + "\n")
+            # 理念8：防磁盘打满的节流轮转
+            self._since_last_trim += 1
+            if self._since_last_trim >= self._TRIM_CHECK_EVERY:
+                self._since_last_trim = 0
+                self._enforce_file_rotation()
         except OSError as e:
             _LOG.warning("AuditTrail: failed to write audit entry to %s: %s", self._filepath, e)
+
+    def _enforce_file_rotation(self) -> None:
+        """达 _MAX_FILE_ENTRIES 上限时搬最旧到 .archived.jsonl 冷存（不物理删）。
+
+        verify_integrity/query 只走内存 _entries，文件轮转不影响。冷存文件内
+        每条含 prev_hash（链式哈希），可供跨文件审计回溯。轮转失败不致命。
+        """
+        try:
+            if not self._filepath or not os.path.exists(self._filepath):
+                return
+            with open(self._filepath, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f if ln.strip()]
+            if len(lines) < self._MAX_FILE_ENTRIES:
+                return
+            keep = lines[-self._MAX_FILE_ENTRIES:]
+            archive = lines[:-self._MAX_FILE_ENTRIES]
+            if not archive:
+                return
+            arch_path = self._filepath + self._ARCHIVED_SUFFIX
+            with open(arch_path, "a", encoding="utf-8") as f:
+                f.writelines(archive)
+            with open(self._filepath, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+        except Exception as e:  # noqa: BLE001
+            _LOG.debug("AuditTrail file rotation failed: %s", e)
 
     @property
     def total_entries(self) -> int:
@@ -253,7 +295,7 @@ class ContentGuard:
     SENSITIVE_PATTERNS: Dict[str, Pattern] = {
         "phone_cn":    re.compile(r"1[3-9]\d{9}"),
         "id_card":     re.compile(r"\d{17}[\dXx]"),
-        "bank_card":   re.compile(r"(?<!\d)\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{1,7}(?!\d)"),
+        "bank_card":   re.compile(r"(?<![0-9a-zA-Z])\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{1,7}(?![0-9a-zA-Z])"),
         "email":       re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
         "ip_address":   re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
         "api_key_bearer": re.compile(r"(?:sk-|TK-|AK-)[a-zA-Z0-9]{20,}"),

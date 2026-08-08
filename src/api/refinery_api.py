@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -44,16 +45,20 @@ class RefineryRollbackRequest(BaseModel):
 
 
 # 单例引擎
+# P1 并发修复：DCL 保护，防止并发首调各自构造引擎/闭环（可能启动后台线程）。
 _refinery_engine = None
 _evolution_loop = None
+_singleton_lock = threading.Lock()
 
 
 def _get_refinery_engine():
     """懒加载炼化引擎。"""
     global _refinery_engine
     if _refinery_engine is None:
-        from kernel.refinery import CodeRefineryEngine
-        _refinery_engine = CodeRefineryEngine()
+        with _singleton_lock:
+            if _refinery_engine is None:
+                from kernel.refinery import CodeRefineryEngine
+                _refinery_engine = CodeRefineryEngine()
     return _refinery_engine
 
 
@@ -61,8 +66,10 @@ def _get_evolution_loop():
     """懒加载进化闭环。"""
     global _evolution_loop
     if _evolution_loop is None:
-        from kernel.refinery import RefineryEvolutionLoop
-        _evolution_loop = RefineryEvolutionLoop()
+        with _singleton_lock:
+            if _evolution_loop is None:
+                from kernel.refinery import RefineryEvolutionLoop
+                _evolution_loop = RefineryEvolutionLoop()
     return _evolution_loop
 
 

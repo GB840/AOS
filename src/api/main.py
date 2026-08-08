@@ -732,6 +732,10 @@ async def info():
 # 深检结果缓存 (避免 /health/deep 每次都对 fabric 各引擎做网络探测)
 _HEALTH_CACHE: dict = {"ts": 0.0, "data": None}
 _HEALTH_TTL = 5.0
+# P2 并发修复：/health/deep 是 async，await _brain_health_check() 期间事件循环
+# 可调度另一个请求进入，两者都看到缓存过期 → 各自执行深检 → 覆盖缓存。
+# 用 asyncio.Lock + DCL 保证 TTL 窗口内只深检一次。
+_HEALTH_LOCK: asyncio.Lock | None = None
 
 
 @app.get("/health")
@@ -919,13 +923,22 @@ async def system_status():
 @app.get("/health/deep")
 async def health_check_deep():
     """完整 9 组件健康 (readiness). 在线程池执行 + 短缓存, 不阻塞事件循环。"""
+    global _HEALTH_LOCK
     now = time.time()
     if _HEALTH_CACHE["data"] is not None and (now - _HEALTH_CACHE["ts"]) < _HEALTH_TTL:
         return _HEALTH_CACHE["data"]
-    data = await _brain_health_check()
-    _HEALTH_CACHE["data"] = data
-    _HEALTH_CACHE["ts"] = now
-    return data
+    # 惰性创建锁（单线程事件循环内无 await 点，原子）
+    if _HEALTH_LOCK is None:
+        _HEALTH_LOCK = asyncio.Lock()
+    async with _HEALTH_LOCK:
+        # DCL：持锁后二次检查 TTL，防并发深检
+        now = time.time()
+        if _HEALTH_CACHE["data"] is not None and (now - _HEALTH_CACHE["ts"]) < _HEALTH_TTL:
+            return _HEALTH_CACHE["data"]
+        data = await _brain_health_check()
+        _HEALTH_CACHE["data"] = data
+        _HEALTH_CACHE["ts"] = now
+        return data
 
 
 # ---- 团队级认证 (OAuth2/JWT, 与 API-Key 并存) ----
@@ -2787,6 +2800,11 @@ async def api_resolve_engine(capability: str):
 
 
 _fabric_hub_cache = None
+# P1 并发修复：async 惰性单例竞态——await asyncio.to_thread 期间会释放事件
+# 循环控制权，并发请求可同时看到 _fabric_hub_cache is None 各自启动一次
+# to_thread 构造，导致两个 FabricHub 实例（一个泄漏、可能持有后台线程/句柄）。
+# 用 asyncio.Lock + double-check 保证全局唯一构造。
+_fabric_hub_lock: asyncio.Lock | None = None
 
 
 async def _get_fabric_hub():
@@ -2795,10 +2813,15 @@ async def _get_fabric_hub():
     所有模块（API / Studio / Hub / Evolve / AutoSkill / MCP）共享同一个实例，
     确保能力路由、健康状态、记忆门面全链路一致。
     """
-    global _fabric_hub_cache
+    global _fabric_hub_cache, _fabric_hub_lock
     if _fabric_hub_cache is None:
-        from kernel.plugins.fabric_hub import get_fabric_hub
-        _fabric_hub_cache = await asyncio.to_thread(get_fabric_hub)
+        # 单线程事件循环内无 await 点，惰性创建锁本身是原子的
+        if _fabric_hub_lock is None:
+            _fabric_hub_lock = asyncio.Lock()
+        async with _fabric_hub_lock:
+            if _fabric_hub_cache is None:
+                from kernel.plugins.fabric_hub import get_fabric_hub
+                _fabric_hub_cache = await asyncio.to_thread(get_fabric_hub)
     return _fabric_hub_cache
 
 
@@ -3376,10 +3399,17 @@ async def bidding_analyze(
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
 
+    # P4-2 安全修复：file.filename 来自用户上传，完全可控。原代码直接拼接到路径，
+    # 攻击者传 filename="../../../../etc/passwd" 即可写出 tmp_dir 之外。
+    # 用 os.path.basename 剥离路径分隔符，再拒绝残留 .. 的文件名。
+    safe_name = os.path.basename(file.filename)
+    if not safe_name or ".." in safe_name or "/" in safe_name or "\\" in safe_name:
+        raise HTTPException(status_code=400, detail="非法文件名")
+
     # 保存上传文件到临时路径（BiddingAgent 需要文件路径）
     tmp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "_traces", "uploads")
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_path = os.path.join(tmp_dir, f"bidding_{int(time.time()*1000)}_{file.filename}")
+    tmp_path = os.path.join(tmp_dir, f"bidding_{int(time.time()*1000)}_{safe_name}")
 
     try:
         with open(tmp_path, "wb") as f:

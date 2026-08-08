@@ -81,8 +81,14 @@ _SESSION_MAX_TURNS = 5
 _SESSION_MAX_COUNT = 1024  # 最多缓存会话数，超出按 LRU 淘汰，防无限增长
 # 绝对路径：基于 __file__ 上溯到仓库根，不依赖进程 CWD。
 # 遵循宪法第1条「本地优先·数据自持」——数据在仓库内，不上云。
+# P3-3 架构修复：会话目录支持 AOS_FABRIC_SESSION_DIR 环境变量覆盖，
+# 与 run_state_store 的 AOS_STATE_DIR 保持一致的"本地数据路径可配置"纪律。
+# 用户可把会话数据放到外置盘 / 加密卷 / 同步目录，实现数据自持。
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_SESSION_DIR = _REPO_ROOT / "data" / "workspaces" / "fabric" / "sessions"
+_SESSION_DIR = Path(
+    os.environ.get("AOS_FABRIC_SESSION_DIR")
+    or str(_REPO_ROOT / "data" / "workspaces" / "fabric" / "sessions")
+)
 _SESSION_LOCK = threading.Lock()  # 保护_SESSIONS的并发访问
 
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,9 @@ BYOK_DIRNAME = "byok"
 BYOK_FILENAME = "byok.key"
 
 _master_fernet = None
+# 主密钥缓存锁：load_fernet_master 的 check-then-act + 文件生成需原子，
+# 否则并发两线程各 generate_key + 覆写密钥文件 → BYOK 密钥丢失（P0 安全修复）。
+_master_lock = threading.Lock()
 
 
 def _byok_key_path(base_dir: Path) -> Path:
@@ -183,45 +187,54 @@ def load_fernet_master(
     *,
     force_generate: bool = False,
 ) -> Fernet:
-    """返回（并缓存）BYOK 主密钥 Fernet 实例。"""
+    """返回（并缓存）BYOK 主密钥 Fernet 实例。
+
+    线程安全：double-checked locking 保证并发首调只生成一次密钥。
+    无锁版本会并发覆写密钥文件 → BYOK 密钥丢失（P0 安全修复）。
+    """
     global _master_fernet
+    # 第一次检查（无锁，快速路径）
     if _master_fernet is not None:
         return _master_fernet
-
-    base_dir = Path(base_dir) if base_dir else _default_base()
-    app_env = app_env or _app_env()
-
-    # 1) 环境变量（最优先，适合容器 / K8s Secret）
-    env_key = os.environ.get(BYOK_MASTER_ENV)
-    if env_key:
-        _master_fernet = Fernet(env_key) if _is_raw_fernet_key(env_key) else _derive_fernet(env_key)
-        return _master_fernet
-
-    # 2) 文件回退
-    path = _byok_key_path(base_dir)
-    if path.is_file():
-        raw = _load_pem(path)
-        if raw:
-            _master_fernet = Fernet(raw) if _is_raw_fernet_key(raw) else _derive_fernet(raw)
+    with _master_lock:
+        # 第二次检查（持锁，防重复构造）
+        if _master_fernet is not None:
             return _master_fernet
 
-    # 3) 生成（仅开发环境或显式 force_generate）
-    if force_generate or app_env != "production":
-        key = Fernet.generate_key()
-        write_secret_file(path, key.decode("utf-8"))
-        _master_fernet = Fernet(key)
-        logger.warning(
-            "⚠️ 已自动生成 BYOK 主密钥并持久化到 %s（开发环境）。"
-            "生产环境请设置环境变量 %s，勿依赖自动生成。",
-            path,
-            BYOK_MASTER_ENV,
-        )
-        return _master_fernet
+        base_dir = Path(base_dir) if base_dir else _default_base()
+        app_env = app_env or _app_env()
 
-    # 4) 生产环境缺失 -> fail-fast
-    raise RuntimeError(
-        f"生产环境缺少 BYOK 主密钥：请设置环境变量 {BYOK_MASTER_ENV}，"
-        f"或在 {path} 放置密钥文件。"
+        # 1) 环境变量（最优先，适合容器 / K8s Secret）
+        env_key = os.environ.get(BYOK_MASTER_ENV)
+        if env_key:
+            _master_fernet = Fernet(env_key) if _is_raw_fernet_key(env_key) else _derive_fernet(env_key)
+            return _master_fernet
+
+        # 2) 文件回退
+        path = _byok_key_path(base_dir)
+        if path.is_file():
+            raw = _load_pem(path)
+            if raw:
+                _master_fernet = Fernet(raw) if _is_raw_fernet_key(raw) else _derive_fernet(raw)
+                return _master_fernet
+
+        # 3) 生成（仅开发环境或显式 force_generate）
+        if force_generate or app_env != "production":
+            key = Fernet.generate_key()
+            write_secret_file(path, key.decode("utf-8"))
+            _master_fernet = Fernet(key)
+            logger.warning(
+                "⚠️ 已自动生成 BYOK 主密钥并持久化到 %s（开发环境）。"
+                "生产环境请设置环境变量 %s，勿依赖自动生成。",
+                path,
+                BYOK_MASTER_ENV,
+            )
+            return _master_fernet
+
+        # 4) 生产环境缺失 -> fail-fast
+        raise RuntimeError(
+            f"生产环境缺少 BYOK 主密钥：请设置环境变量 {BYOK_MASTER_ENV}，"
+            f"或在 {path} 放置密钥文件。"
     )
 
 

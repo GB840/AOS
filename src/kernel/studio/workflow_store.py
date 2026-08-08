@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 from dataclasses import asdict, is_dataclass
@@ -24,6 +25,33 @@ _WORKFLOW_DIR = os.environ.get(
     "AOS_WORKFLOW_DIR",
     os.path.join("data", "workspaces", "fabric", "workflows"),
 )
+
+# P4-1 安全修复（极高危）：wf_id 来自 URL 路径参数（@router.get("/workflows/{wf_id}")），
+# 原 delete() 直接 shutil.rmtree(os.path.join(base_dir, wf_id))，攻击者传
+# wf_id="../../important_dir" 即可删除任意目录。加白名单校验杜绝路径遍历。
+_WF_ID_PATTERN = re.compile(r'^[A-Za-z0-9_\-\.]{1,128}$')
+
+
+def _validate_wf_id(wf_id: str) -> str:
+    """校验 wf_id 只含安全字符（字母数字下划线连字符点），防路径遍历。
+
+    返回校验后的 wf_id；不合法抛 ValueError（调用方应转 400）。
+    """
+    if not wf_id or not _WF_ID_PATTERN.match(wf_id):
+        raise ValueError(f"Invalid workflow id: {wf_id!r}")
+    # 额外防御：拒绝 .. 和路径分隔符（即便正则已挡，多一层保险）
+    if ".." in wf_id or "/" in wf_id or "\\" in wf_id:
+        raise ValueError(f"Invalid workflow id: {wf_id!r}")
+    return wf_id
+
+
+def _validate_version(version: str) -> str:
+    """校验 version 字符串防路径遍历（版本号如 v1.0.0）。"""
+    if not version or not re.match(r'^[A-Za-z0-9_\-\.]{1,32}$', version):
+        raise ValueError(f"Invalid version: {version!r}")
+    if ".." in version or "/" in version or "\\" in version:
+        raise ValueError(f"Invalid version: {version!r}")
+    return version
 
 
 def _wf_dir() -> str:
@@ -140,6 +168,7 @@ class WorkflowStore:
 
     def get(self, wf_id: str) -> Optional[Workflow]:
         """获取工作流。"""
+        _validate_wf_id(wf_id)
         with self._lock:
             wf_dir = os.path.join(self._base_dir, wf_id, "workflow.json")
             if not os.path.exists(wf_dir):
@@ -173,6 +202,7 @@ class WorkflowStore:
 
     def delete(self, wf_id: str) -> bool:
         """删除工作流。"""
+        _validate_wf_id(wf_id)
         with self._lock:
             wf_dir = os.path.join(self._base_dir, wf_id)
             if not os.path.exists(wf_dir):
@@ -229,6 +259,7 @@ class WorkflowStore:
 
     def list_versions(self, wf_id: str) -> List[str]:
         """列出所有版本。"""
+        _validate_wf_id(wf_id)
         with self._lock:
             versions_dir = os.path.join(self._base_dir, wf_id, "versions")
             if not os.path.exists(versions_dir):
@@ -241,6 +272,8 @@ class WorkflowStore:
 
     def get_version(self, wf_id: str, version: str) -> Optional[Workflow]:
         """获取指定版本。"""
+        _validate_wf_id(wf_id)
+        _validate_version(version)
         with self._lock:
             v_path = os.path.join(self._base_dir, wf_id, "versions", f"{version}.json")
             if not os.path.exists(v_path):
@@ -254,6 +287,8 @@ class WorkflowStore:
 
     def revert_to_version(self, wf_id: str, version: str) -> Optional[Workflow]:
         """回退到指定版本。"""
+        _validate_wf_id(wf_id)
+        _validate_version(version)
         with self._lock:
             old_wf = self.get_version(wf_id, version)
             if not old_wf:
@@ -272,6 +307,8 @@ class WorkflowStore:
 
     def save_run(self, run: WorkflowRun) -> None:
         """保存运行记录。"""
+        _validate_wf_id(run.workflow_id)
+        _validate_wf_id(run.id)
         with self._lock:
             runs_dir = os.path.join(self._base_dir, run.workflow_id, "runs")
             os.makedirs(runs_dir, exist_ok=True)
@@ -289,6 +326,7 @@ class WorkflowStore:
         字母序排序——uuid 无时间序，返回的不是「最近 N 条」。改为按 mtime
         排序，与「最近运行」语义对齐。
         """
+        _validate_wf_id(wf_id)
         with self._lock:
             runs_dir = os.path.join(self._base_dir, wf_id, "runs")
             if not os.path.exists(runs_dir):

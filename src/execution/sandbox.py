@@ -270,6 +270,9 @@ class SandboxManager:
         preexec = None
         if _HAS_RLIMIT:
             def _pre():
+                # P4-4 安全修复：原 except: pass 完全静默，若 setrlimit 失败
+                # 沙箱限制（内存/CPU）可能没生效但无人知晓。改为记录到 stderr
+                # （preexec 在子进程内，不能用主进程 logger；用 os.write 避免异常）。
                 try:
                     mb = int(mem_limit_mb or 0)
                     if mb > 0:
@@ -278,8 +281,17 @@ class SandboxManager:
                     cs = int(cpu_seconds or 0)
                     if cs > 0:
                         _resource.setrlimit(_resource.RLIMIT_CPU, (cs, cs))
-                except Exception:
-                    pass
+                except Exception as e:
+                    # preexec_fn 在子进程执行，不能用主进程 logger。
+                    # 写 stderr 让父进程 communicate() 能捕获到告警。
+                    import sys as _sys
+                    try:
+                        _sys.stderr.write(
+                            f"[sandbox] WARNING: setrlimit 失败，沙箱限制可能未生效: {e}\n"
+                        )
+                        _sys.stderr.flush()
+                    except Exception:
+                        pass  # 连 stderr 都写不了，只能放弃记录
             preexec = _pre
 
         try:

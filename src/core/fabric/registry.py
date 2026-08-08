@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict  # 修复 P1-2：补 typing 导入，避免 get_type_hints() 触发 NameError
 
@@ -87,10 +88,18 @@ def preference_table(policy: str | None = None) -> dict[str, int]:
     return _local_first_preference()
 
 
+# P3-2 并发修复：PROVIDER_PREFERENCE 可被 apply_route_policy() 热切换（全局字典引用
+# 赋值）。_pref() 多次读 PROVIDER_PREFERENCE 会有 TOCTOU 风险；加锁保证写原子化、
+# 读时快照引用一次，与全局 _SINGLETON_LOCK 同纪律（pulse/cost_tracker/keystore）。
+_REGISTRY_GLOBAL_LOCK = threading.Lock()
+
+
 def apply_route_policy(policy: str | None = None) -> None:
     """热切换路由偏好（运行时可调用；缺省读环境变量）。"""
     global PROVIDER_PREFERENCE
-    PROVIDER_PREFERENCE = preference_table(policy)
+    new_table = preference_table(policy)
+    with _REGISTRY_GLOBAL_LOCK:
+        PROVIDER_PREFERENCE = new_table
 
 
 # 默认生效表：母纲原则1「本地优先·数据自持」
@@ -114,7 +123,15 @@ PROVIDER_QUALITY: dict[str, float] = {}   # engine_id -> 质量分（高优先�
 
 
 def _pref(engine_id: str) -> int:
-    return PROVIDER_PREFERENCE.get(engine_id, _DEFAULT_PREF)
+    """线程安全读 PROVIDER_PREFERENCE：快照引用一次避免 TOCTOU。
+
+    apply_route_policy() 会用新字典替换 PROVIDER_PREFERENCE 引用（原子赋值），
+    本函数把**当前引用**拷到局部变量，再 .get() 查值——即便是热切换并发发生，
+    整次查询基于同一字典的一致快照，不会出现"查表前后读自两个不同表"。
+    """
+    with _REGISTRY_GLOBAL_LOCK:
+        pref_table = PROVIDER_PREFERENCE
+    return pref_table.get(engine_id, _DEFAULT_PREF)
 
 
 class FabricRegistry:

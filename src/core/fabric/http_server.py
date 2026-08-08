@@ -899,7 +899,11 @@ class FabricHubHTTPHandler(BaseHTTPRequestHandler):
         if not os.path.isfile(fpath):
             return self._send_json({"error": "audio not found"}, status=404)
         ctype = "audio/mpeg" if fname.lower().endswith(".mp3") else "audio/wav"
-        data = open(fpath, "rb").read()
+        # P4-3 资源泄漏修复：原 open(fpath, "rb").read() 不用 with，文件句柄
+        # 依赖 GC 回收。HTTP server 长期运行，每次音频请求泄漏一个 fd，
+        # 最终可能耗尽 fd 上限。改用 with 确保句柄立即释放。
+        with open(fpath, "rb") as f:
+            data = f.read()
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))

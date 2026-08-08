@@ -92,7 +92,7 @@
 ```
 （模块级加 `_PENDING: dict = {}`）
 
-**⑦ `src/execution/sandbox.py::_check_dangerous_patterns`** —— 这条**不要用补丁思路加正则**，见 P0-3，需要换成 AST 白名单。工作量最大，建议单独排期。
+**⑦ `src/execution/sandbox.py::_check_dangerous_patterns`** —— 见 P0-3（**结论已更正**）。不是"加规则"能解决的：它对删库/偷密钥/外传/内存炸弹 6/6 全放行，Windows 上还没有 rlimit。本轮只做「如实降格 docstring + 补 5 族间接引用」，真隔离（Job Object / 容器）单独排期。
 
 **⑧ `src/kernel/memory_control.py::_compact`** —— 见 P1-2，建议把 `compliance/audit.py::_enforce_rotation` 抽成公共 `utils/rotate_jsonl.py`，三处（audit / cost_tracker / memory_control）统一调用。
 
@@ -103,7 +103,7 @@
 | 级别 | 条数 | 说明 |
 |---|---|---|
 | P0 已修 | 1 | `lfm_adapter` tier 少括号 → 已提交 `83a417c` |
-| P0 待修 | 3 | 反虹吸扫描恒空 / 沙箱形同虚设 / evolve 字段漂移 |
+| P0 待修 | 3 | 反虹吸扫描恒空 / 沙箱非安全边界（结论已更正） / evolve 字段漂移 |
 | P1 待修 | 5 | 审批过期无效 / 限存储无效 / 免疫双调 / 导入永久判死 / 银行卡正则误伤 |
 | P1 数据 | 1 | 蒸馏记忆重复率 95.6% |
 | **驳回** | **5** | 审计 agent 过报，实测不成立 |
@@ -140,23 +140,54 @@
 - **假绿链（最要命）**：`tests/test_no_harvest_charter.py::test_no_value_siphon` 断言"扫描结果为空"，而被测函数**恒空** → 测试**永远绿**，但它证明的是"函数坏了"，不是"没有虹吸"。**这条绿灯目前不具备任何守门能力。**
 - **改法**：把 `import ast` 提到模块顶部。**同时**把守门测试改成"先喂一个已知含外联的样本文件，断言能扫出来（阳性对照），再断言真实代码库为空"——否则同类假绿还会再犯。
 
-### P0-3 代码沙箱危险模式检查形同虚设
+### P0-3 代码沙箱不是安全边界（结论已按实测更正）
 
-- **位置**：`src/execution/sandbox.py::_check_dangerous_patterns`
-- **实证**（7 个恶意载荷，只拦住 1 个）：
+> **更正声明**：本节初稿写的是"7 个恶意载荷只拦住 1 个"。**那个数字是错的**，是我凭上一轮记忆写的、没复跑。
+> 复跑后真实结果是 **9 个进程派生载荷拦住 4 个**，且 `git stash` 到 HEAD 版本重测同样是 4/9
+> （别名 / `from ... import` / `getattr` 拼接三式**早就在仓库里能拦**，不是 M 文件新加的）。
+> 数字虽然比原稿好，**但整体结论反而更坏**：见下面第二张表。
+
+- **位置**：`src/execution/sandbox.py::_check_dangerous_patterns`（黑名单 53-72 行 + AST 调用级检查 78-90 行）
+
+**实证 A —— 进程派生类载荷（9 个，拦 4 漏 5）**
 
   | 载荷 | 结果 |
   |---|---|
   | `import os; os.system("calc")` | **BLOCKED** ✅ |
-  | `from subprocess import *` + `Popen([...])` | BYPASS ❌ |
-  | `f = os.system; f("calc")`（别名） | BYPASS ❌ |
-  | `getattr(os, "sys"+"tem")("calc")` | BYPASS ❌ |
+  | `import os as o; o.system("calc")`（模块别名） | **BLOCKED** ✅ |
+  | `from os import system; system("calc")` | **BLOCKED** ✅ |
+  | `getattr(__import__("o"+"s"), "sys"+"tem")(...)` | **BLOCKED** ✅（命中 `__import__` 规则） |
   | `importlib.import_module("os").system(...)` | BYPASS ❌ |
-  | `eval("__import__(chr(111)+chr(115)).system(1)")` | BYPASS ❌ |
+  | `eval(compile(base64.b64decode(...)))` | BYPASS ❌ |
   | `builtins.__import__("os").system(...)` | BYPASS ❌ |
+  | `f = os.system; f("calc")`（中间变量转手） | BYPASS ❌ |
+  | `sys.modules["os"].system(...)` | BYPASS ❌ |
 
-- **性质**：字符串/正则黑名单在 Python 上**原理性不可能拦住动态求值**。
-- **改法（不要继续加正则）**：走 AST 白名单 —— 解析后拒绝 `Import`/`ImportFrom` 非白名单模块、拒绝 `eval`/`exec`/`compile`/`__import__`/`getattr` 动态调用节点；真正的隔离交给子进程 + 资源限制，黑名单只当第一道提示。
+**实证 B —— 非派生破坏类载荷（6 个，6/6 全放行）** ← 这才是真问题
+
+  | 载荷 | 结果 |
+  |---|---|
+  | `shutil.rmtree(<用户目录>)` 递归删库 | PASS ❌ |
+  | 以 `open(".env","w")` 覆写真实密钥文件 | PASS ❌ |
+  | 读 `.env` 密钥落盘到临时文件（外传前置） | PASS ❌ |
+  | `urllib.request` 把本地数据 POST 到外网 | PASS ❌ |
+  | `[bytearray(10**8) for _ in range(...)]` 内存炸弹 | PASS ❌ |
+  | 往用户启动项目录写 `.bat` 持久化 | PASS ❌ |
+
+**实证 C —— 平台事实**：本机 Windows 上 `sandbox._HAS_RLIMIT = False`、`sandbox._resource = None`。
+也就是说 `_DEFAULT_MEM_LIMIT_MB=512` / `_DEFAULT_CPU_SECONDS=30` 这两个常量在 Windows 上**一行都没生效**，
+**没有任何真实资源隔离**，只剩一个 `_HARD_TIMEOUT_CAP=600` 的墙钟总闸。
+
+- **性质（更正后的结论）**：问题**不是"黑名单规则不够多"，而是这东西根本不是安全边界**。
+  它只拦"派生外部进程"这一类，对纯 Python 内的删文件 / 偷密钥 / 打网络 / 吃内存**完全不设防**，
+  Windows 上又没有 rlimit。**它的真实定位是"防手滑护栏"，不是"可以跑不可信代码的沙箱"。**
+- **改法（方向已推翻原稿）**：
+  1. **如实降格**：把模块 docstring / 日志里"安全的代码执行环境""资源限制（CPU/内存）""文件系统隔离""网络访问控制"
+     改成实话——"防误操作护栏；**不可用于执行不可信代码**；Windows 无资源隔离"。母纲诚实纪律优先于好听。
+  2. **顺手补 5 族间接引用**（`importlib` / `builtins.__import__` / `eval-exec-compile` / 变量别名转手 / `sys.modules[...]`），
+     提高手滑成本 —— 但**必须在注释里写明这只是提高门槛，不是边界**。
+  3. **真边界属新能力、不属修 bug**：要真跑不可信代码，得 Windows Job Object（内存/CPU/进程数硬限）+ 低权限用户 + 独立工作目录，
+     或直接下沉到容器。这条单独排期，不要在本轮假装已解决。
 
 ### P0-4 `evolve_engine` 字段名漂移 → 5 个测试红
 
@@ -265,8 +296,8 @@
 
    即：**宪章守门 32 项里只有 1 项失效**，不是一片假绿。
 2. **字段名漂移是重构期的头号杀手。** `p.status` 这类"改了 dataclass 没改调用点"，静态检查抓不到（动态属性），单测没覆盖就直接带进生产。建议对核心 dataclass 加 `__slots__` 或跑一遍 AST 属性访问比对。
-3. **黑名单式安全（沙箱正则）在动态语言上是纸糊的。** 7 打 1 的结果说明问题不在"规则不够多"，而在方法选错了。
-4. **审计要复核。** 4 组 agent 报上来的条目里，**5 条经实测不成立**（占比不低）。凡是"我读代码觉得有问题"的结论，都必须能跑出复现证据才算数。
+3. **黑名单式安全（沙箱正则）在动态语言上是纸糊的。** 实测 9 个进程派生载荷拦 4 漏 5；更要命的是 6 个非派生破坏载荷（删库 / 覆写 .env / 偷密钥外传 / 内存炸弹 / 写启动项）**6/6 全放行**，且 Windows 上 `_HAS_RLIMIT=False` 无任何资源限额。**它不是安全边界，是防手滑护栏**——文档必须这么写。
+4. **审计要复核，我自己写的结论也要复核。** 4 组 agent 报上来的条目里 **5 条经实测不成立**；**我自己初稿里的"沙箱 7 打 1"也是错的**（真实 4/9，且 HEAD 版同为 4/9）。凡是"读代码觉得有问题"或"上一轮记得是这样"的结论，一律要能跑出复现证据才算数，跑出来不一样就当场改报告。
 
 ---
 

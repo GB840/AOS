@@ -17,60 +17,24 @@ aggregated reply. LLM access goes through the same OpenAI-compatible provider
 """
 from __future__ import annotations
 
-import difflib
 import os
 import re
+import threading
 from typing import Any
 
 import logging
 logger = logging.getLogger(__name__)
 
-
-def _text_similarity(a: str, b: str) -> float:
-    """0~1 字符级相似度（difflib ratio）；任一为空返回 0。"""
-    if not a or not b:
-        return 0.0
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
-
-def _dedup_text(text: str) -> str:
-    """去除 LLM（尤其 glm-4-flash 长 prompt 下）把正文整段重复输出的问题。
-
-    两层防御：
-      1) 段落级：相邻近重复段落直接丢弃（防「同一段连发两遍」）；
-      2) 整文级：扫描粗粒度候选边界，若某点之后的后缀与正文开头高度相似
-         （>=0.9 且重复段占比足够大），则截到该点（防「整篇报告输出两次」）。
-    短文本（<120 字）直接跳过，避免误伤短输出（如规划步骤）。
-    """
-    if not text or len(text) < 120:
-        return text
-    # 1) 段落级去重
-    paras = re.split(r"\n\s*\n", text)
-    cleaned: list[str] = []
-    for p in paras:
-        if p.strip() and cleaned:
-            if _text_similarity(cleaned[-1], p) >= 0.9:
-                continue
-        cleaned.append(p)
-    text = "\n\n".join(cleaned).strip()
-    if not text or len(text) < 120:
-        return text
-
-    # 2) 整文级去重：检测「整篇重复两遍」。
-    #    用「尾部 L 字 vs 头部 L 字」做对齐比较（对副本间的换行/分隔符偏移鲁棒），
-    #    从 L=n/2 向下扫到 n/4，命中高相似即判定为重复，切点 = n-L（保留第一份）。
-    n = len(text)
-    for L in range(n // 2, n // 4, -1):
-        head = text[:L]
-        tail = text[-L:]
-        if _text_similarity(head, tail) >= 0.9:
-            cut = n - L
-            # 仅当切点落在中段（约 1/3~2/3）才采纳，避免误伤正常长文
-            if n // 3 <= cut <= 2 * n // 3:
-                return text[:cut].strip()
-    return text
-
-from ..adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+# _text_similarity / _dedup_text 已提升至合约层（adapter.py），
+# 消除内核层（autopilot）对具体适配器私有函数的依赖（P0 架构修复：内核零依赖）。
+# 所有适配器和内核统一从 core.fabric.adapter 导入，避免双轨定义。
+from ..adapter import (
+    BaseAgentAdapter,
+    InvokeRequest,
+    InvokeResult,
+    _text_similarity,
+    _dedup_text,
+)
 from ..capability import Capability
 
 # autogen(ag2) 的 import 在某些环境下会**卡死**（不是报错，是阻塞），
@@ -79,6 +43,10 @@ from ..capability import Capability
 # 首次真正要跑 group chat 时才导入，6s 内没返回就判不可用，模块导入瞬时完成。
 _AG2_AVAILABLE = False
 _AUTOGEN_MODULE = None
+# P2 并发修复：_ensure_autogen 的 check-then-act 无锁，并发首调会各自
+# 启动 guarded_import（虽然内部有 Python import 锁，但 _AUTOGEN_MODULE
+# 和 _AG2_AVAILABLE 双写非原子）。锁保护写入，与 resilience.py 同纪律。
+_AG2_LOCK = threading.Lock()
 
 
 def _ensure_autogen(timeout: float = 180.0):
@@ -90,11 +58,15 @@ def _ensure_autogen(timeout: float = 180.0):
     global _AG2_AVAILABLE, _AUTOGEN_MODULE
     if _AUTOGEN_MODULE is not None or _AG2_AVAILABLE:
         return _AUTOGEN_MODULE
-    from ..resilience import guarded_import
-    mod = guarded_import("autogen", timeout)
-    _AUTOGEN_MODULE = mod
-    _AG2_AVAILABLE = mod is not None
-    return mod
+    with _AG2_LOCK:
+        # DCL：持锁后二次检查，防并发首调各自启动 guarded_import
+        if _AUTOGEN_MODULE is not None or _AG2_AVAILABLE:
+            return _AUTOGEN_MODULE
+        from ..resilience import guarded_import
+        mod = guarded_import("autogen", timeout)
+        _AUTOGEN_MODULE = mod
+        _AG2_AVAILABLE = mod is not None
+        return mod
 
 
 def _llm_config() -> dict[str, Any]:

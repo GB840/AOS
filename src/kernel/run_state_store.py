@@ -23,9 +23,13 @@ import uuid
 
 _LOG = logging.getLogger("run_state_store")
 
-_DB_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "_traces", "aos_runs.db"
+# P2 架构修复：支持 AOS_STATE_DIR 环境变量覆盖状态存储位置，
+# 落地"本地优先·数据自持"——用户可自定义状态目录（如外置盘/加密卷）。
+# 未设置时回退到项目根 _traces/ 目录（向后兼容）。
+_STATE_DIR = os.environ.get("AOS_STATE_DIR") or os.path.join(
+    os.path.dirname(__file__), "..", "..", "_traces"
 )
+_DB_PATH = os.path.join(_STATE_DIR, "aos_runs.db")
 _LOCK = threading.Lock()
 _CONN: sqlite3.Connection | None = None
 

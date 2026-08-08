@@ -27,8 +27,9 @@ import time
 import hashlib
 import threading
 from typing import Any, Dict, List, Optional
-from core.fabric.adapter import InvokeResult, InvokeRequest, extract_text
-from core.fabric.adapters.ag2_adapter import _dedup_text
+# P0 架构修复：_dedup_text 已提升至合约层（adapter.py），
+# 内核层不再直接 import 具体适配器（ag2_adapter），落地「内核零依赖」原则。
+from core.fabric.adapter import InvokeResult, InvokeRequest, extract_text, _dedup_text
 from kernel.run_state_store import (
     create_run, save_checkpoint, load_checkpoint, mark_done,
 )
@@ -40,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 
 # ---- 适配器惰性单例 ------------------------------------------------
+# P1 并发修复：所有惰性单例统一用 _SINGLETON_LOCK + double-checked locking
+# 保护，消除 check-then-act 竞态（构造期间另一线程也通过 None 检查 → 重复
+# 构造重型对象 / 句柄泄漏）。与 pulse/ cost_tracker/ keystore 同纪律。
+
+_SINGLETON_LOCK = threading.Lock()
 
 _search: Any = None
 _code_exec: Any = None
@@ -49,24 +55,30 @@ _ag2: Any = None
 def _get_search():
     global _search
     if _search is None:
-        from core.fabric.adapters.search_adapter import SearchAdapter
-        _search = SearchAdapter()
+        with _SINGLETON_LOCK:
+            if _search is None:
+                from core.fabric.adapters.search_adapter import SearchAdapter
+                _search = SearchAdapter()
     return _search
 
 
 def _get_code_exec():
     global _code_exec
     if _code_exec is None:
-        from core.fabric.adapters.code_execution_adapter import CodeExecutionAdapter
-        _code_exec = CodeExecutionAdapter()
+        with _SINGLETON_LOCK:
+            if _code_exec is None:
+                from core.fabric.adapters.code_execution_adapter import CodeExecutionAdapter
+                _code_exec = CodeExecutionAdapter()
     return _code_exec
 
 
 def _get_ag2():
     global _ag2
     if _ag2 is None:
-        from core.fabric.adapters.ag2_adapter import AG2Adapter
-        _ag2 = AG2Adapter()
+        with _SINGLETON_LOCK:
+            if _ag2 is None:
+                from core.fabric.adapters.ag2_adapter import AG2Adapter
+                _ag2 = AG2Adapter()
     return _ag2
 
 
@@ -77,8 +89,10 @@ def _get_repo():
     """仓库自进化芯粒惰性单例（action.repo）。"""
     global _repo
     if _repo is None:
-        from kernel.plugins.repo_agent import RepoAgent
-        _repo = RepoAgent()
+        with _SINGLETON_LOCK:
+            if _repo is None:
+                from kernel.plugins.repo_agent import RepoAgent
+                _repo = RepoAgent()
     return _repo
 
 
@@ -99,14 +113,17 @@ def _get_hub():
     if not _AUTOPILOT_USE_HUB:
         return None
     if _HUB is None and not _HUB_ATTEMPTED:
-        _HUB_ATTEMPTED = True
-        try:
-            logger.info("autopilot: 首次路由经 FabricHub 统一派发（惰性构造中…）")
-            from kernel.plugins.fabric_hub import get_fabric_hub
-            _HUB = get_fabric_hub()
-        except Exception:  # noqa: BLE001
-            logger.warning("autopilot: FabricHub 构造失败，透明降级到本地适配器",
-                           exc_info=True)
+        with _SINGLETON_LOCK:
+            # DCL：持锁后二次检查，防并发首调各自构造 20+ 适配器的重型 FabricHub
+            if _HUB is None and not _HUB_ATTEMPTED:
+                _HUB_ATTEMPTED = True
+                try:
+                    logger.info("autopilot: 首次路由经 FabricHub 统一派发（惰性构造中…）")
+                    from kernel.plugins.fabric_hub import get_fabric_hub
+                    _HUB = get_fabric_hub()
+                except Exception:  # noqa: BLE001
+                    logger.warning("autopilot: FabricHub 构造失败，透明降级到本地适配器",
+                                   exc_info=True)
     return _HUB
 
 
@@ -175,7 +192,11 @@ def _get_causal_distiller() -> Optional[EvolutionDistiller]:
     global _DISTILLER, _DISTILLER_INITED
     if _DISTILLER_INITED:
         return _DISTILLER
-    _DISTILLER_INITED = True
+    with _SINGLETON_LOCK:
+        # DCL：持锁后二次检查，防并发首调各自创建 EvolutionDistiller（双份落盘句柄）
+        if _DISTILLER_INITED:
+            return _DISTILLER
+        _DISTILLER_INITED = True
     # 0) 显式关闭开关：AOS_AUTOPILOT_DISTILL_OFF=1 退回 None（极端调试用）
     if os.environ.get("AOS_AUTOPILOT_DISTILL_OFF") == "1":
         return None

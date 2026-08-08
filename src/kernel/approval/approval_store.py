@@ -36,6 +36,15 @@ def _approvals_path() -> str:
     return base
 
 
+# 理念8「限最大存储条数防磁盘打满」：approvals.jsonl 上限。
+# 与 trace_store._MAX_TRACE_FILES=500 同源纪律。_append 单条追加（审批创建高频），
+# _persist 全量重写。上限 2000，达上限 compact：把已决策（approved/rejected）
+# 的最旧归档到 approvals.archived.jsonl，pending 保留。审批是合规审计数据，不物理删。
+_MAX_APPROVALS = 2000
+_TRIM_CHECK_EVERY = 50
+_ARCHIVED_SUFFIX = ".archived.jsonl"
+
+
 @dataclass
 class ApprovalRequest:
     """一个审批请求。"""
@@ -82,6 +91,8 @@ class ApprovalStore:
         if not os.path.exists(self._path):
             os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
             open(self._path, "a", encoding="utf-8").close()
+        # 理念8 轮转计数器
+        self._since_last_trim = 0
 
     # ── 基础 IO ──
 
@@ -119,6 +130,53 @@ class ApprovalStore:
             f.write(json.dumps(approval.to_dict(), ensure_ascii=False) + "\n")
         if self._cache is not None:
             self._cache.append(approval)
+        # 理念8：防磁盘打满的节流 compact
+        self._since_last_trim += 1
+        if self._since_last_trim >= _TRIM_CHECK_EVERY:
+            self._since_last_trim = 0
+            self._compact()
+
+    def _compact(self) -> None:
+        """达 _MAX_APPROVALS 上限时把已决策的最旧归档到 approvals.archived.jsonl。
+
+        审批是合规审计数据，不物理删。pending/approved/rejected 全堆在一起会
+        拖慢 _load；compact 时把已决策（approved/rejected）的最旧搬到冷存，
+        pending 全保留。基于 _cache 内存视图重写文件（原子写回）。
+        """
+        try:
+            if not os.path.exists(self._path):
+                return
+            with open(self._path, "r", encoding="utf-8") as f:
+                count = sum(1 for ln in f if ln.strip())
+            if count < _MAX_APPROVALS:
+                return
+            items = self._load()
+            # 已决策的归档，pending 保留
+            decided = [a for a in items if a.status in ("approved", "rejected")]
+            pending = [a for a in items if a.status not in ("approved", "rejected")]
+            if not decided:
+                return  # 全是 pending，不裁
+            # 归档已决策的最旧条目（decided 按时间序，前面是旧的）
+            overflow = count - _MAX_APPROVALS
+            to_archive = decided[:max(overflow, len(decided) // 2)]
+            keep_decided = decided[max(overflow, len(decided) // 2):]
+            # 写冷存
+            arch_path = self._path + _ARCHIVED_SUFFIX
+            with open(arch_path, "a", encoding="utf-8") as f:
+                for a in to_archive:
+                    f.write(json.dumps(a.to_dict(), ensure_ascii=False) + "\n")
+            # 重写主文件（pending + 保留的已决策）
+            tmp = self._path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for a in pending + keep_decided:
+                    f.write(json.dumps(a.to_dict(), ensure_ascii=False) + "\n")
+            os.replace(tmp, self._path)
+            # 更新 cache
+            self._cache = pending + keep_decided
+            logger.info("approvals compact：%d 条归档冷存，主文件保留 %d 条",
+                        len(to_archive), len(self._cache))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("approvals compact failed: %s", e)
 
     def _invalidate(self) -> None:
         self._cache = None
@@ -278,6 +336,20 @@ class ApprovalStore:
                 if a.status != "pending":
                     return {"ok": False, "error": f"已决策为 {a.status}",
                             "approval": a.to_dict()}
+                # 过期件不可批准：list_pending 已过滤过期，approve 必须同步检查
+                if a.expires_at:
+                    try:
+                        exp_ts = time.mktime(time.strptime(
+                            a.expires_at[:19], "%Y-%m-%dT%H:%M:%S"))
+                        if exp_ts < time.time():
+                            a.status = "expired"
+                            items[i] = a
+                            self._cache = items
+                            self._persist()
+                            return {"ok": False, "error": "审批已过期",
+                                    "approval": a.to_dict()}
+                    except (ValueError, OverflowError):
+                        pass
                 a.status = "approved"
                 a.decided_at = time.strftime("%Y-%m-%dT%H:%M:%S")
                 a.decided_by = decided_by
@@ -310,6 +382,20 @@ class ApprovalStore:
                 if a.status != "pending":
                     return {"ok": False, "error": f"已决策为 {a.status}",
                             "approval": a.to_dict()}
+                # 过期件同样不可 reject（统一标为 expired）
+                if a.expires_at:
+                    try:
+                        exp_ts = time.mktime(time.strptime(
+                            a.expires_at[:19], "%Y-%m-%dT%H:%M:%S"))
+                        if exp_ts < time.time():
+                            a.status = "expired"
+                            items[i] = a
+                            self._cache = items
+                            self._persist()
+                            return {"ok": False, "error": "审批已过期",
+                                    "approval": a.to_dict()}
+                    except (ValueError, OverflowError):
+                        pass
                 a.status = "rejected"
                 a.decided_at = time.strftime("%Y-%m-%dT%H:%M:%S")
                 a.decided_by = decided_by

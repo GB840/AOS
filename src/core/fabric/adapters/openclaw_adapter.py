@@ -356,10 +356,18 @@ class OpenClawAdapter(BaseAgentAdapter):
         cmd = [node, mjs, "gateway", "run", "--bind", "loopback",
                "--port", str(OPENCLAW_GATEWAY_PORT), "--token", token]
         try:
-            subprocess.Popen(
+            # P4-5 资源泄漏修复：原 Popen 返回值未保存，进程成为孤儿，父进程
+            # 退出后仍可能继续运行。保存 PID 并注册 atexit 终止钩子。
+            proc = subprocess.Popen(
                 cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, close_fds=True,
             )
+            # 注册退出钩子：父进程退出时终止 gateway 子进程，避免孤儿进程
+            import atexit
+            atexit.register(
+                lambda p=proc: p.terminate() if p.poll() is None else None
+            )
+            logger.info("ensure_gateway: 已拉起 gateway 子进程 PID=%d", proc.pid)
         except Exception as e:  # noqa: BLE001
             logger.warning("ensure_gateway: 启动失败: %s", e)
             return False

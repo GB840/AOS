@@ -10,6 +10,7 @@ them. That is the user's hard rule: real OSS engines + AOS improves on top.
 """
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from abc import ABC, abstractmethod
@@ -76,6 +77,59 @@ class BaseAgentAdapter(ABC):
         than bespoke - the openness enabler.
         """
         return []
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """0~1 字符级相似度（difflib ratio）；任一为空返回 0。
+
+    提升至合约层（adapter.py）：消除内核层（autopilot）对具体适配器
+    （ag2_adapter）私有函数的依赖，落地「内核零依赖具体适配器」原则。
+    所有适配器和内核均从本模块导入，避免双轨定义。
+    """
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _dedup_text(text: str) -> str:
+    """去除 LLM（尤其 glm-4-flash 长 prompt 下）把正文整段重复输出的问题。
+
+    两层防御：
+      1) 段落级：相邻近重复段落直接丢弃（防「同一段连发两遍」）；
+      2) 整文级：扫描粗粒度候选边界，若某点之后的后缀与正文开头高度相似
+         （>=0.9 且重复段占比足够大），则截到该点（防「整篇报告输出两次」）。
+    短文本（<120 字）直接跳过，避免误伤短输出（如规划步骤）。
+
+    提升至合约层（adapter.py）：消除内核层（autopilot）对具体适配器
+    （ag2_adapter）私有函数的依赖，落地「内核零依赖具体适配器」原则。
+    """
+    if not text or len(text) < 120:
+        return text
+    # 1) 段落级去重
+    paras = re.split(r"\n\s*\n", text)
+    cleaned: list[str] = []
+    for p in paras:
+        if p.strip() and cleaned:
+            if _text_similarity(cleaned[-1], p) >= 0.9:
+                continue
+        cleaned.append(p)
+    text = "\n\n".join(cleaned).strip()
+    if not text or len(text) < 120:
+        return text
+
+    # 2) 整文级去重：检测「整篇重复两遍」。
+    #    用「尾部 L 字 vs 头部 L 字」做对齐比较（对副本间的换行/分隔符偏移鲁棒），
+    #    从 L=n/2 向下扫到 n/4，命中高相似即判定为重复，切点 = n-L（保留第一份）。
+    n = len(text)
+    for L in range(n // 2, n // 4, -1):
+        head = text[:L]
+        tail = text[-L:]
+        if _text_similarity(head, tail) >= 0.9:
+            cut = n - L
+            # 仅当切点落在中段（约 1/3~2/3）才采纳，避免误伤正常长文
+            if n // 3 <= cut <= 2 * n // 3:
+                return text[:cut].strip()
+    return text
 
 
 def extract_text(out: Any) -> str:

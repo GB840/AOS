@@ -1,6 +1,7 @@
 import logging
 import secrets
 import hmac
+import threading
 import bcrypt
 from typing import Optional
 from fastapi import HTTPException, Security, status
@@ -17,13 +18,18 @@ logger = logging.getLogger(__name__)
 
 # JWT 非对称密钥 (RS256) 缓存：首次使用时解析，避免每次请求重复读盘。
 _jwt_key_cache: tuple[str, str] | None = None
+# P1 并发修复：每个 API 请求都调用 _get_jwt_keys，FastAPI Security 依赖可能
+# 在线程池中并发执行 → check-then-act 竞态导致重复读盘。DCL 保证唯一构造。
+_jwt_key_lock = threading.Lock()
 
 
 def _get_jwt_keys() -> tuple[str, str]:
     """返回 (private_pem, public_pem)，用于 RS256 签名/验签。"""
     global _jwt_key_cache
     if _jwt_key_cache is None:
-        _jwt_key_cache = load_jwt_keys(base_dir=Path(config.BASE_DIR), app_env=config.APP_ENV)
+        with _jwt_key_lock:
+            if _jwt_key_cache is None:
+                _jwt_key_cache = load_jwt_keys(base_dir=Path(config.BASE_DIR), app_env=config.APP_ENV)
     return _jwt_key_cache
 
 API_KEY_NAME = "X-API-Key"
@@ -343,8 +349,12 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         # 1) 永远公开：根路径 + 健康探针（供 supervisor/负载均衡探活）
         #    + 登录入口 /api/auth/token（换取 JWT，不可能要求先认证）
         #    + 静态前端页面（/studio/ /bidding/）：页面本身公开，API 调用仍走鉴权。
+        #    P0 安全修复：原 path.endswith("/health") 会误命中 /api/v1/health 等所有
+        #    以 /health 结尾的端点，导致内核遥测（bridge.telemetry()）匿名可访问。
+        #    改为显式白名单，仅公开负载均衡探活所需的最小集合。
         _PUBLIC_PREFIXES = ("/studio", "/bidding")
-        if (path == "/" or path.endswith("/health") or path.endswith("/health/deep")
+        _PUBLIC_HEALTH_PATHS = ("/health", "/health/deep")
+        if (path == "/" or path in _PUBLIC_HEALTH_PATHS
                 or path == "/api/auth/token"
                 or path == "/metrics/system"  # 系统级运营遥测，与 /health 同性质公开
                 or any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)):

@@ -70,6 +70,10 @@ class AnomalyDetector:
         self._consecutive_fail_count = 0
         self._latency_baseline: Dict[str, float] = {}
         self._alerts: List[Dict[str, Any]] = []
+        # P2 性能优化：滑动窗口清理计数器。每次 _record 只清理当前事件类型的
+        # 过期事件 O(M)，每 _FULL_CLEAN_EVERY 次才做全量清理 O(N×M)。
+        # 原实现每次都全量遍历所有类型，高频事件下有不必要的 CPU 开销。
+        self._record_count = 0
 
         # 订阅事件
         self._bus.subscribe("model.*", self._on_model_event)
@@ -106,17 +110,32 @@ class AnomalyDetector:
         else:
             self._note_success(event)
 
+    # P2 性能优化：全量清理间隔。每次 _record 只清当前类型 O(M)，
+    # 每 50 次才全量清所有类型 O(N×M)，避免高频事件下每条都全扫。
+    _FULL_CLEAN_EVERY = 50
+
     def _record(self, event: Event) -> None:
         with self._lock:
             self._events_by_type[event.event_type].append(event)
             cutoff = time.time() - self._window
-            for event_type in list(self._events_by_type.keys()):
-                self._events_by_type[event_type] = [
-                    e for e in self._events_by_type[event_type]
-                    if _event_timestamp(e) > cutoff
-                ]
-                if not self._events_by_type[event_type]:
-                    del self._events_by_type[event_type]
+            # 1) 快速路径：只清理当前事件类型的过期事件
+            self._events_by_type[event.event_type] = [
+                e for e in self._events_by_type[event.event_type]
+                if _event_timestamp(e) > cutoff
+            ]
+            if not self._events_by_type[event.event_type]:
+                del self._events_by_type[event.event_type]
+            # 2) 定期全量清理：清除其他类型的过期事件
+            self._record_count += 1
+            if self._record_count >= self._FULL_CLEAN_EVERY:
+                self._record_count = 0
+                for event_type in list(self._events_by_type.keys()):
+                    self._events_by_type[event_type] = [
+                        e for e in self._events_by_type[event_type]
+                        if _event_timestamp(e) > cutoff
+                    ]
+                    if not self._events_by_type[event_type]:
+                        del self._events_by_type[event_type]
 
     def _check_consecutive(self, event: Event) -> None:
         with self._lock:

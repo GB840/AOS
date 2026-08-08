@@ -39,6 +39,10 @@ _MODULE_TIMEOUTS: dict = {
 }
 _PROBED: dict = {}  # name -> module | None (缓存，避免重复探测)
 _WARMING: set = set()  # 正在后台预热中的模块名
+# P2 并发修复：_PROBED / _WARMING 的 check-then-act 无锁，并发首调会各自
+# 启动 daemon 线程跑 importlib（虽然 Python import 锁保证只执行一次模块体，
+# 但 _PROBED 赋值仍可能被覆盖为 None 而非真实模块）。锁保护缓存写入。
+_PROBE_LOCK = threading.Lock()
 
 
 def guarded_import(name: str, timeout: Optional[float] = None) -> Optional[Any]:
@@ -54,8 +58,10 @@ def guarded_import(name: str, timeout: Optional[float] = None) -> Optional[Any]:
     同一模块（Python import 锁会阻塞等待首个线程），让 health 如实标 dead，
     预热线程完成后再标 live，全程不卡调用方。
     '''
+    # 快速路径：已探测过直接返回（读 dict 在 GIL 下原子）
     if name in _PROBED:
         return _PROBED[name]
+    # 预热中：让 health 如实标 dead
     if name in _WARMING:
         return None
     to = timeout if timeout is not None else _MODULE_TIMEOUTS.get(name, _DEFAULT_TIMEOUT)
@@ -72,10 +78,13 @@ def guarded_import(name: str, timeout: Optional[float] = None) -> Optional[Any]:
     th.join(to)
     if th.is_alive() or 'err' in box:
         logger.warning('guarded_import: %s unavailable (timeout=%.1fs)', name, to)
-        _PROBED[name] = None
+        with _PROBE_LOCK:
+            _PROBED[name] = None
         return None
-    _PROBED[name] = box.get('m')
-    return _PROBED[name]
+    mod = box.get('m')
+    with _PROBE_LOCK:
+        _PROBED[name] = mod
+    return mod
 
 
 class SafeImport:

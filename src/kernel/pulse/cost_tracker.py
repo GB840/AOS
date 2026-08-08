@@ -26,6 +26,15 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# 理念8「限最大存储条数防磁盘打满」：costs.jsonl 单文件追加硬上限。
+# 与 trace_store._MAX_TRACE_FILES=500 / route_outcome_store._MAX_ROUTE_OUTCOMES=2000 同源纪律。
+# 成本明细是高频事件流（每次 LLM 调用记一条），上限 10000；聚合已在 cost_summary.json，
+# 故达上限时最旧条目搬到 costs.archived.jsonl 冷存（数据保全，不物理删）。
+_MAX_COSTS = 10000
+# 每次 record 都读全文件行数开销大，用内存计数器每 N 次才检查一次。
+_TRIM_CHECK_EVERY = 100
+_ARCHIVED_SUFFIX = ".archived.jsonl"
+
 # ── Token 计数 ──
 
 _TIKTOKEN_ENC = None  # 懒加载的 cl100k_base 编码器
@@ -213,6 +222,14 @@ class CostTracker:
         self._lock = threading.Lock()
         self._alerts: Dict[str, CostAlert] = {}
         self._load_alerts()
+        # 理念8 轮转计数器（_enforce_rotation 触发节流）
+        self._since_last_trim = 0
+        # 增量成本累计器（消除 _check_alerts 的 O(N×M) 全文件扫描放大）。
+        # 按 (period_prefix, scope, scope_id) 分桶存累计 cost_usd。
+        # record 时 O(1) 增量更新；_check_alerts O(1) 查询，不再调 get_breakdown。
+        # 轮转后置 None，下次 _check_alerts 触发惰性重建（从文件重算）。
+        self._cost_accum: Optional[Dict[str, float]] = None
+        self._cost_accum_day: str = ""  # 当前计数器所属日期（跨日需重建）
 
     # ── 记录 ──
 
@@ -252,16 +269,126 @@ class CostTracker:
             try:
                 with open(self._costs_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+                # 理念8：防磁盘打满的节流轮转（每 N 条追加检查一次上限）
+                self._since_last_trim += 1
+                if self._since_last_trim >= _TRIM_CHECK_EVERY:
+                    self._since_last_trim = 0
+                    self._enforce_rotation()
             except Exception as e:  # noqa: BLE001
                 logger.debug("写入成本事件失败: %s", e)
 
-        # best-effort 告警检查
-        try:
-            self._check_alerts(record)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("成本告警检查失败: %s", e)
+            # 增量更新成本累计器 + 告警检查（P0 并发修复：移入锁内，
+            # 消除 _cost_accum 的锁外 read-modify-write 竞态，与 ResilienceBus 同纪律）
+            try:
+                self._update_cost_accum(record)
+                self._check_alerts(record)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("成本累计器/告警检查失败: %s", e)
 
         return record
+
+    def _enforce_rotation(self) -> None:
+        """达 _MAX_COSTS 上限时把最旧条目搬到 costs.archived.jsonl 冷存。
+
+        costs.jsonl 是时间序追加，开头最旧、末尾最新；按行切分（不解析 JSON，
+        避免每条 loads 开销）。聚合统计已在 cost_summary.json，冷存仅供审计回溯。
+        轮转失败不致命（best-effort，与 CostTracker 整体纪律一致）。
+        """
+        try:
+            if not os.path.exists(self._costs_path):
+                return
+            with open(self._costs_path, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f if ln.strip()]
+            if len(lines) < _MAX_COSTS:
+                return
+            keep = lines[-_MAX_COSTS:]
+            archive = lines[:-_MAX_COSTS]
+            if not archive:
+                return
+            arch_path = self._costs_path + _ARCHIVED_SUFFIX
+            with open(arch_path, "a", encoding="utf-8") as f:
+                f.writelines(archive)
+            with open(self._costs_path, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+            logger.info("costs 轮转：%d 条搬到冷存 %s，主文件保留 %d 条",
+                        len(archive), arch_path, len(keep))
+            # 轮转改变了文件内容，置空计数器，下次 _check_alerts 触发惰性重建
+            self._cost_accum = None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("costs rotation failed: %s", e)
+
+    # ── 增量成本累计器（消除 _check_alerts 的 O(N×M) 全文件扫描）──
+
+    def _accum_key(self, period_prefix: str, scope: str, scope_id: str) -> str:
+        """分桶键：global 桶用空 scope_id，其余用具体 ID。"""
+        sid = "" if scope == "global" else (scope_id or "")
+        return f"{period_prefix}|{scope}|{sid}"
+
+    def _update_cost_accum(self, record: CostRecord) -> None:
+        """record 时 O(1) 增量更新累计器。跨日自动重建（丢弃昨日桶）。"""
+        ts = record.timestamp or ""
+        today = ts[:10]
+        month = ts[:7]
+        # 跨日：daily 桶需重置（昨日数据不再相关）；月跨则整体重建
+        if self._cost_accum_day and self._cost_accum_day != today:
+            self._cost_accum = None
+        self._cost_accum_day = today
+        if self._cost_accum is None:
+            self._rebuild_cost_accum()
+            return  # rebuild 已含本条
+        cost = record.cost_usd
+        wf = record.workflow_id or ""
+        uid = record.user_id or "anonymous"
+        agt = record.agent_id or ""
+        # daily 桶
+        self._cost_accum[self._accum_key(today, "global", "")] = \
+            self._cost_accum.get(self._accum_key(today, "global", ""), 0.0) + cost
+        self._cost_accum[self._accum_key(today, "workflow", wf)] = \
+            self._cost_accum.get(self._accum_key(today, "workflow", wf), 0.0) + cost
+        self._cost_accum[self._accum_key(today, "user", uid)] = \
+            self._cost_accum.get(self._accum_key(today, "user", uid), 0.0) + cost
+        self._cost_accum[self._accum_key(today, "agent", agt)] = \
+            self._cost_accum.get(self._accum_key(today, "agent", agt), 0.0) + cost
+        # monthly 桶
+        self._cost_accum[self._accum_key(month, "global", "")] = \
+            self._cost_accum.get(self._accum_key(month, "global", ""), 0.0) + cost
+        self._cost_accum[self._accum_key(month, "workflow", wf)] = \
+            self._cost_accum.get(self._accum_key(month, "workflow", wf), 0.0) + cost
+        self._cost_accum[self._accum_key(month, "user", uid)] = \
+            self._cost_accum.get(self._accum_key(month, "user", uid), 0.0) + cost
+        self._cost_accum[self._accum_key(month, "agent", agt)] = \
+            self._cost_accum.get(self._accum_key(month, "agent", agt), 0.0) + cost
+
+    def _rebuild_cost_accum(self) -> None:
+        """从文件全量重建累计器（仅计数器为空时调用，非热路径）。"""
+        self._cost_accum = {}
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        self._cost_accum_day = now[:10]
+        today = now[:10]
+        month = now[:7]
+        try:
+            for rec in self._iter_records():
+                ts = rec.get("timestamp", "")
+                cost = rec.get("cost_usd", 0) or 0
+                wf = rec.get("workflow_id", "") or ""
+                uid = rec.get("user_id", "anonymous") or "anonymous"
+                agt = rec.get("agent_id", "") or ""
+                rec_day = ts[:10]
+                rec_month = ts[:7]
+                # 只累计今日 daily 桶 + 本月 monthly 桶（旧数据不相关）
+                if rec_day == today:
+                    for scope, sid in (("global", ""), ("workflow", wf),
+                                       ("user", uid), ("agent", agt)):
+                        k = self._accum_key(today, scope, sid)
+                        self._cost_accum[k] = self._cost_accum.get(k, 0.0) + cost
+                if rec_month == month:
+                    for scope, sid in (("global", ""), ("workflow", wf),
+                                       ("user", uid), ("agent", agt)):
+                        k = self._accum_key(month, scope, sid)
+                        self._cost_accum[k] = self._cost_accum.get(k, 0.0) + cost
+        except Exception as e:  # noqa: BLE001
+            logger.debug("rebuild cost_accum failed: %s", e)
+            self._cost_accum = {}
 
     # ── 查询 ──
 
@@ -412,10 +539,20 @@ class CostTracker:
     # ── 内部 ──
 
     def _check_alerts(self, record: CostRecord) -> None:
-        """新事件到达时做轻量告警检查（只查相关 scope）。"""
+        """新事件到达时做轻量告警检查（O(1) 读增量计数器，不再全文件扫描）。
+
+        原实现：对每个相关 alert 调 get_breakdown → _iter_records 全文件扫描，
+        形成 O(N×M) 放大（N=记录数, M=alert数）。系统跑久了单次 record 的告警
+        检查会随 costs.jsonl 行数线性变慢。改后：record 时 O(1) 增量更新计数器，
+        本方法 O(1) 查询，性能与文件大小解耦。
+        """
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         today_prefix = now[:10]
         month_prefix = now[:7]
+
+        # 计数器为空（首次/轮转后/跨日）时惰性重建
+        if self._cost_accum is None:
+            self._rebuild_cost_accum()
 
         for alert in list(self._alerts.values()):
             if not alert.enabled:
@@ -428,15 +565,11 @@ class CostTracker:
             if alert.scope == "agent" and alert.scope_id != record.agent_id:
                 continue
 
-            since = today_prefix if alert.period == "daily" else month_prefix
-            bd = self.get_breakdown(
-                workflow_id=record.workflow_id if alert.scope == "workflow" else "",
-                user_id=record.user_id if alert.scope == "user" else "",
-                agent_id=record.agent_id if alert.scope == "agent" else "",
-                since=since,
-            )
+            period_prefix = today_prefix if alert.period == "daily" else month_prefix
+            key = self._accum_key(period_prefix, alert.scope, alert.scope_id)
+            actual = self._cost_accum.get(key, 0.0) if self._cost_accum else 0.0
 
-            if bd.total_cost > alert.threshold_usd:
+            if actual > alert.threshold_usd:
                 with self._lock:
                     if alert.id in self._alerts:
                         self._alerts[alert.id].last_triggered = now
@@ -445,7 +578,7 @@ class CostTracker:
                 logger.warning(
                     "成本告警触发: %s (scope=%s/%s, period=%s, actual=$%.4f > threshold=$%.4f)",
                     alert.name, alert.scope, alert.scope_id,
-                    alert.period, bd.total_cost, alert.threshold_usd,
+                    alert.period, actual, alert.threshold_usd,
                 )
 
     def _iter_records(self, limit: int = 10000):

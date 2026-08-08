@@ -83,6 +83,17 @@ def _confidence_for(n: int) -> float:
     return 0.3
 
 
+# 理念8「限最大存储条数防磁盘打满」：distilled_memory.jsonl 单文件追加硬上限。
+# 与 trace_store._MAX_TRACE_FILES=500 / route_outcome_store._MAX_ROUTE_OUTCOMES=2000 同源纪律。
+# 记忆是资产（非日志），上限放大到 5000；达上限时把最旧条目搬到 .archived.jsonl
+# 冷存（数据保全铁律：不物理删除），recall 不再召回冷存项（等同 archived tier 语义）。
+_MAX_DISTILLED = 5000
+# 每次 _persist 都读全文件行数开销大，用内存计数器每 N 条才检查一次。
+# 进程重启计数器归零只会让首次裁剪晚到 N 条后，不影响正确性。
+_TRIM_CHECK_EVERY = 50
+_ARCHIVED_SUFFIX = ".archived.jsonl"
+
+
 class MemoryDistiller:
     def __init__(self, trace_dirs: Optional[List[str]] = None,
                  interval_seconds: int = 300, user_id: str = "aos",
@@ -121,6 +132,8 @@ class MemoryDistiller:
                 logger.warning("MemoryLifecycleManager 构造失败，禁用生命周期: %s", e)
                 self._lifecycle = None
         os.makedirs(os.path.dirname(self.out_path) or ".", exist_ok=True)
+        # 理念8 轮转计数器（_enforce_rotation 触发节流）
+        self._since_last_trim = 0
 
     # ---- 路径 ----
     def _default_out(self) -> str:
@@ -306,11 +319,47 @@ class MemoryDistiller:
                 with open(self.out_path, "a", encoding="utf-8") as f:
                     for it in items:
                         f.write(json.dumps(it.to_record(), ensure_ascii=False) + "\n")
+                # 理念8：防磁盘打满的节流轮转（每 N 条追加检查一次上限）
+                if items:
+                    self._since_last_trim += len(items)
+                    if self._since_last_trim >= _TRIM_CHECK_EVERY:
+                        self._since_last_trim = 0
+                        self._enforce_rotation()
             except OSError as e:
                 logger.warning("distill persist failed: %s", e)
         if not self._mem0_disabled and self._mem0_store is not None:
             for it in items:
                 self._try_mem0_add(it)
+
+    def _enforce_rotation(self) -> None:
+        """达 _MAX_DISTILLED 上限时把最旧条目搬到 .archived.jsonl 冷存。
+
+        distilled_memory.jsonl 是时间序追加，故文件开头为最旧、末尾为最新；
+        直接按行切分（不解析 ts，避免每条 json.loads 开销）。冷存文件同样
+        append-only，供日后审计/恢复；recall 不读冷存（等同 archived tier）。
+        轮转失败不致命（best-effort，与 MemoryDistiller 整体纪律一致）。
+        """
+        try:
+            if not os.path.exists(self.out_path):
+                return
+            with open(self.out_path, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f if ln.strip()]
+            if len(lines) < _MAX_DISTILLED:
+                return
+            # 保留最新 _MAX_DISTILLED 条；最旧的搬到冷存归档（不物理删）
+            keep = lines[-_MAX_DISTILLED:]
+            archive = lines[:-_MAX_DISTILLED]
+            if not archive:
+                return
+            arch_path = self.out_path + _ARCHIVED_SUFFIX
+            with open(arch_path, "a", encoding="utf-8") as f:
+                f.writelines(archive)
+            with open(self.out_path, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+            logger.info("distilled_memory 轮转：%d 条搬到冷存 %s，主库保留 %d 条",
+                        len(archive), arch_path, len(keep))
+        except Exception as e:  # noqa: BLE001 - 轮转失败不致命
+            logger.warning("distilled_memory rotation failed: %s", e)
 
     def _try_mem0_add(self, item: DistilledMemory) -> bool:
         if self._mem0_pending:

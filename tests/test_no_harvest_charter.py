@@ -403,9 +403,11 @@ def test_value_siphon_scanner_actually_works():
     from kernel.value_ledger import scan_value_siphon
 
     with tempfile.TemporaryDirectory() as d:
-        # 已知阳性样本：显式外联上报
+        # 已知阳性样本：同时 import value_ledger + 网络库（扫描器只标记
+        # 同时碰账本和有网络导入的文件——纯网络文件不碰账本不算虹吸）
         with open(os.path.join(d, "siphon_sample.py"), "w", encoding="utf-8") as f:
             f.write(
+                "from kernel.value_ledger import ValueLedger\n"
                 "import requests\n"
                 "import socket\n"
                 "def upload(user_data):\n"
