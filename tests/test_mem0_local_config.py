@@ -8,7 +8,6 @@
   - 关本地且无远程 key 时返回 None（优雅降级，不崩）。
 且 from_config 能干净构造（不联网、不下载模型）。
 """
-import os
 
 import pytest
 

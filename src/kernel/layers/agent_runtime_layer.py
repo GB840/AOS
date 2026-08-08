@@ -242,7 +242,6 @@ class FileMemoryManager(MemoryManager):
     def _rewrite(self) -> None:
         with self._lock:
             import json
-            import os
             try:
                 with open(self._filepath, "w", encoding="utf-8") as f:
                     for k, v in self._store.items():
@@ -349,7 +348,6 @@ class AgentRuntimeLayer:
     async def run_workflow_async(self, steps: List[WorkflowStep],
                                  timeout_seconds: float = 300.0) -> List[WorkflowResult]:
         """异步入口：asyncio.gather 真并发编排。"""
-        step_map = {s.step_id: s for s in steps}
 
         # 拓扑排序：只有无依赖或依赖已完成的步骤才能执行
         results: Dict[str, WorkflowResult] = {}

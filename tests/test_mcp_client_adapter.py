@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
     "但 conftest 在测试环境拦截所有 localhost 探活，设 AOS_LOCAL_MCP_SERVER=1 本地跑）",
 )
 
-from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+from core.fabric.adapter import InvokeRequest
 from core.fabric.adapters.mcp_client_adapter import MCPClientAdapter
 from core.fabric.capability import Capability
 

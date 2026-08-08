@@ -92,7 +92,7 @@
 ```
 （模块级加 `_PENDING: dict = {}`）
 
-**⑦ `src/execution/sandbox.py::_check_dangerous_patterns`** —— 见 P0-3（**结论已更正**）。不是"加规则"能解决的：它对删库/偷密钥/外传/内存炸弹 6/6 全放行，Windows 上还没有 rlimit。本轮只做「如实降格 docstring + 补 5 族间接引用」，真隔离（Job Object / 容器）单独排期。
+**⑦ `src/execution/sandbox.py::_check_dangerous_patterns`** —— 见 P0-3（**结论已更正**）。不是"加规则"能解决的：它对删库/偷密钥/外传/内存炸弹 6/6 全放行，Windows 上还没有 rlimit。已于 commit df8e16c 落地「如实降格 docstring + 补 5 族间接引用」（进程派生载荷 4/9 拦 → 9/9 拦、合法代码 7/7 零误杀），真隔离（Job Object / 容器）单独排期。
 
 **⑧ `src/kernel/memory_control.py::_compact`** —— 见 P1-2，建议把 `compliance/audit.py::_enforce_rotation` 抽成公共 `utils/rotate_jsonl.py`，三处（audit / cost_tracker / memory_control）统一调用。
 
@@ -186,6 +186,7 @@
      改成实话——"防误操作护栏；**不可用于执行不可信代码**；Windows 无资源隔离"。母纲诚实纪律优先于好听。
   2. **顺手补 5 族间接引用**（`importlib` / `builtins.__import__` / `eval-exec-compile` / 变量别名转手 / `sys.modules[...]`），
      提高手滑成本 —— 但**必须在注释里写明这只是提高门槛，不是边界**。
+     ✅ **已于 commit df8e16c 落地**：`_check_dangerous_patterns` 重写 AST 检查 + 3 个辅助函数（_attr_base / _is_sys_modules / _track_alias_assign），进程派生载荷 **4/9 拦 → 9/9 拦**；合法代码（os.path / sys.argv / importlib.util.find_spec 等）**7/7 零误杀**；新增 `tests/test_sandbox_indirect_refs.py` 锁死回归。
   3. **真边界属新能力、不属修 bug**：要真跑不可信代码，得 Windows Job Object（内存/CPU/进程数硬限）+ 低权限用户 + 独立工作目录，
      或直接下沉到容器。这条单独排期，不要在本轮假装已解决。
 

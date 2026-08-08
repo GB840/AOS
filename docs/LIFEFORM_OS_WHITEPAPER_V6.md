@@ -666,6 +666,43 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 > Web4.0 行业数据诚实标注：x402 自 2025-05 累计交易约 **1.096 亿笔 / ~$1500 万**（Visa×Artemis《Agentic Payments from the Ground Up》2026-07-16），非此前流传的 1.783 亿笔/$1.357 亿（该数字无公开来源）。
 
 
+### 7.6 Agent调度网关整合（OpenOcta 参考实现）— VERIFIED
+
+> 核实状态：**VERIFIED**（已核官方 GitHub 源 `github.com/openocta/openocta`；Apache-2.0 经 raw LICENSE 原文确认；v1.0.5 / v1.0.6 版本与日期经 releases 页确认）。
+> 用户提供的深度拆解文档核心事实基本准确，仅「正式发布日」口径需校正（见末段四项校正）。详细核实批注见 `docs/research/openocta_verification_2026-08-08.md`。
+
+**OpenOcta（代号「八爪鱼」）** 是国产 Go 语言单二进制桌面级开源智能体，Apache-2.0 许可，约 30MB、运行时内存 <50M。其 Gateway + Webhook + MCP + 多通道 IM 桥接（微信 / 钉钉 / 飞书）的设计，可作为生命体 OS「肉体层 · Agent调度网关」的轻量级参考实现或边缘部署底座。
+
+**定位**：OpenOcta 是任务执行调度框架，**缺少**生命体 OS 的核心「灵魂」模块（人本生命状态建模内核 L0 / 双向思辨演化调节器 L5 / 四层阶梯记忆 L3–L4 / 永恒伦理宪法 / 分形自相似架构 / 虚实交互闭环 L7）。它**不能替代灵魂层**，但可复用其肉体层工程实现。
+
+**可复用的肉体层能力（判断成立 ✅）**：
+
+- **单二进制部署**：约 30MB、内存 <50M，适配低配边缘终端（树莓派 / 旧平板），契合「拒绝重容器」要求
+- **Gateway 网关**：可作为分形粒子消息总线的参考实现，对接 MCP 协议调度插件工具
+- **多通道 IM 桥接**：可对接音箱 / AR 眼镜等终端，适配「无 APP 化、多硬件终端」
+- **Skills & MCP**：作为肉体层 · 工具调度子层的现成实现
+- **四级记忆 + Knowledge Vault**：轻量 Markdown 知识库，作为数据底座层的轻量补充参考
+
+**⚠️ 必须澄清的边界**：OpenOcta 的「四级记忆 + Knowledge Vault」与 AOS 的 **L3 四层阶梯记忆（年轮 / 家谱 / 传承）+ L4 灵魂层**不是同一深度。前者是可参考的「数据底座轻量补充」，后者是带代际传承与主权归属的灵魂层；二者**不可因同名「四级记忆」直接划等号**。
+
+**关键工程提示**：AOS 代码库已存在 `src/core/fabric/adapters/openclaw_adapter.py`；OpenOcta 本质是 OpenClaw 的 Go 重写版（官方 README 自陈），新增平行 `openocta_adapter` 形状完全一致，零工程阻力。
+
+**整合路线**：
+
+| 阶段 | 动作 |
+| :--- | :--- |
+| 短期 | 借鉴 OpenOcta 的 Gateway 架构、MCP 配置、IM 桥接设计，加速肉体层工程实现 |
+| 中期 | 在低配边缘终端直接以 OpenOcta 作轻量 Agent 运行时底座，上层挂载 AOS 心智内核 |
+| 长期 | OpenOcta 保持独立演进，灵魂层完全自研，两者通过 MCP 协议互通 |
+
+**写入本白皮书前的四项校正（基于 2026-08-08 核实）**：
+
+1. **发布日期**：拆解文档所写「2026-03-03 元宵节正式发布」未被 GitHub tag 佐证；最早可见 tag 为 v0.2.2（2026-03-27），03-03 属官宣口径，已标注为「2026-03 官宣 / 首个发版 2026-03-27」。
+2. **四级记忆**：已在正文中澄清 OpenOcta Knowledge Vault ≠ AOS L3–L4 阶梯记忆，避免读者直接划等号。
+3. **适配器关系**：已补「AOS 已有 openclaw_adapter，OpenOcta 可平行新增 openocta_adapter」。
+4. **许可证冲突**：保留 Apache-2.0 结论；某二手来源称 GPLv3 为误传，官方确为 Apache-2.0。
+
+
 ## 第八章 发展前景、竞争格局与风险研判
 
 ### 市场机会

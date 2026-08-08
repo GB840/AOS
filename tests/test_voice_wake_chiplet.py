@@ -5,11 +5,10 @@ STT 引擎探测用 STTAdapter 真实 health 逻辑。"""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import time
 
 from core.fabric.voice_wake import numpy_vad, make_vad, VoiceWakeLoop
-from core.fabric.voice_chiplet import VoicePipeline, VoiceTurnResult
+from core.fabric.voice_chiplet import VoicePipeline
 
 
 # ============================================================================
@@ -198,7 +197,6 @@ def test_http_wake_status_uninitialized():
 
 
 def test_http_voice_turn_plan_param_routes_to_planner():
-    import json
     captured = {}
 
     # 用注入式 pipeline：planner_fn 记录调用

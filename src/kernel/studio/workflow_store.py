@@ -14,7 +14,7 @@ import os
 import re
 import shutil
 import threading
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from .workflow_models import Workflow, WorkflowRun

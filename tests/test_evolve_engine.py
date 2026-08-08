@@ -20,12 +20,10 @@ os.environ.setdefault("AOS_DATA_DIR", _tmp)
 os.environ["AOS_APPROVALS_PATH"] = os.path.join(_tmp, "approvals.jsonl")
 
 from kernel.evolve.evolve_engine import (  # noqa: E402
-    ABTest,
     EvolveEngine,
     OptimizationProposal,
 )
 from kernel.approval.approval_store import (  # noqa: E402
-    ApprovalStore,
     get_approval_store,
 )
 
@@ -211,7 +209,7 @@ def test_approve_proposal_syncs_to_approval_store(engine):
     assert approval_before.status == "pending"
 
     # approve（会尝试 apply，可能失败因为没真实 workflow，但 approve 标记应生效）
-    result = engine.approve_proposal(prop.id)
+    engine.approve_proposal(prop.id)
     # approve_proposal 内部先标记 approved=True，再尝试 apply
     # apply 可能失败，但 approved 标记已写入
     approval_after = store.get_by_proposal(prop.id)
@@ -252,7 +250,7 @@ def test_approve_proposal_no_loop(engine, monkeypatch):
     prop = _make_proposal(risk_level="medium")
     engine._save_proposal("test_wf", [prop])
 
-    result = engine.approve_proposal(prop.id)
+    engine.approve_proposal(prop.id)
     # apply_proposal 应该只被调用 1 次（钩子回调时被 approved=True 挡住，不再重试 apply）
     assert apply_count["apply"] == 1, \
         f"Expected apply_proposal called 1 time, got {apply_count['apply']}"
@@ -336,7 +334,7 @@ def test_create_ab_test(engine):
 
 
 def test_get_variant_alternates(engine):
-    test = engine.create_ab_test("wf1", "AB", {}, {})
+    engine.create_ab_test("wf1", "AB", {}, {})
     # 前几次应该交替返回 a/b
     v1 = engine.get_variant("wf1")
     v2 = engine.get_variant("wf1")

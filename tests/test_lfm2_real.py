@@ -8,7 +8,6 @@
 """
 import os
 
-import pytest
 
 from core.fabric.adapters.lfm_adapter import LFMAdapter
 from core.fabric.adapter import InvokeRequest

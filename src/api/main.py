@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import logging
+logger = logging.getLogger(__name__)
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, Request, File, UploadFile, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -559,7 +560,7 @@ async def startup_event():
     # 铁律：内核挂载失败绝不阻断启动（try/except 包裹，降级为无内核）。
     try:
         from kernel.v5_bridge import V5Bridge
-        bridge = await asyncio.to_thread(lambda: V5Bridge().mount(app))
+        await asyncio.to_thread(lambda: V5Bridge().mount(app))
         logger.info("v1.0 kernel mounted: skills=%s, gateway ready",
                     getattr(app.state, "skills_registered", 0))
     except Exception as e:  # noqa: BLE001
@@ -2834,7 +2835,7 @@ async def api_fabric_health():
     """
     global _fabric_hub_cache
     try:
-        hub = await _get_fabric_hub()
+        await _get_fabric_hub()
         return await asyncio.to_thread(_fabric_hub_cache.health_report)
     except Exception as e:  # noqa: BLE001
         return {"error": _safe_detail(e)}
@@ -3393,8 +3394,6 @@ async def bidding_analyze(
     - qualifications: 企业资质列表，逗号分隔（可选）
     - focus_areas: 重点关注领域，逗号分隔（可选）
     """
-    import tempfile
-    import shutil
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="仅支持 PDF 文件")

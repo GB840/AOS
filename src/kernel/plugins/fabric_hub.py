@@ -65,7 +65,7 @@ from kernel.plugins.plan_bridge import heuristic_plan, parse_plan_to_steps
 from kernel.evolution_distiller import EvolutionDistiller
 from kernel.value_ledger import ValueLedger  # 原则6 价值回流：接电蒸馏记账
 from core.fabric.resilience_bus import (
-    ResilienceBus, get_resilience_bus, set_resilience_bus,
+    ResilienceBus, set_resilience_bus,
 )
 
 _LOG = logging.getLogger("aos.fabric.hub")

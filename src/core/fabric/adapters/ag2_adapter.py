@@ -18,7 +18,6 @@ aggregated reply. LLM access goes through the same OpenAI-compatible provider
 from __future__ import annotations
 
 import os
-import re
 import threading
 from typing import Any
 
@@ -32,7 +31,6 @@ from ..adapter import (
     BaseAgentAdapter,
     InvokeRequest,
     InvokeResult,
-    _text_similarity,
     _dedup_text,
 )
 from ..capability import Capability
