@@ -370,3 +370,32 @@ def test_proposals_persist_across_instances(engine):
     found = e2._find_proposal("persist_test")
     assert found is not None
     assert found.title == "测试提案"
+
+
+def test_evolve_proposal_eviction_prioritizes_decided(monkeypatch, engine):
+    """理念8 限存储：超限时优先删已决策(decided)，保留 pending —— 与 _update_proposal 注释一致。
+
+    构造 5 个已决策 + 3 个 pending = 8 个，上限设为 5。淘汰后必须保留
+    全部 3 个 pending + 仅 2 个 decided（优先砍 decided，而非砍 pending）。
+    此测试锁死淘汰语义，防止未来误改成「保 decided、砍 pending」。
+    """
+    import kernel.evolve.evolve_engine as _ee
+    monkeypatch.setattr(_ee, "_MAX_PROPOSALS_PER_WF", 5)
+
+    for i in range(5):
+        engine._update_proposal(_make_proposal(id=f"ev_dec_{i}", applied=True))
+    for i in range(3):
+        engine._update_proposal(_make_proposal(id=f"ev_pen_{i}"))
+
+    path = engine._proposals_path("test_wf")
+    props = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                props.append(json.loads(line))
+    pending = [p for p in props if not (p.get("applied") or p.get("rejected"))]
+    decided = [p for p in props if (p.get("applied") or p.get("rejected"))]
+    assert len(props) == 5, f"应保留 5 个，实际 {len(props)}"
+    assert len(pending) == 3, f"应全保留 3 个 pending，实际 {len(pending)}"
+    assert len(decided) == 2, f"decided 应被优先砍到 2，实际 {len(decided)}"
