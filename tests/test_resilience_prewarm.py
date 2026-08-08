@@ -42,3 +42,20 @@ def test_prewarm_idempotent():
 def test_clear_caches_clears_warming():
     resilience.clear_caches()
     assert not resilience.is_warming("json")
+
+
+def test_expired_negative_cache_recovers():
+    # 修复回归：超时负缓存到期后应允许重新探测，而非永久返回 None。
+    resilience.clear_caches()
+    # 注入一个已过期的负缓存条目
+    resilience._PROBED["json"] = (resilience._NEG, time.time() - 1)
+    # json 真实可用 -> 重新探测成功，证明未永久缓存为不可用
+    assert resilience.guarded_import("json") is not None
+
+
+def test_permanent_negative_cache_sticks():
+    # 导入报错（模块确实缺失）仍永久缓存为不可用，保性能。
+    resilience.clear_caches()
+    resilience._PROBED["nope_mod"] = resilience._PERM_NEG
+    assert resilience.guarded_import("nope_mod") is None
+

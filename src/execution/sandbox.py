@@ -1,19 +1,27 @@
 """
-Sandbox Manager - 沙箱隔离层
+Sandbox Manager - 防手滑执行护栏（非安全沙箱边界）
 
-提供安全的代码执行环境，支持多种沙箱后端：
-- 本地沙箱（Docker/K8s）
-- E2B 沙箱
-- Firecrawl 沙箱
+诚实边界声明：本模块是 **defense-in-depth 的护栏层**，用于拦截明显的破坏性 /
+危险命令（rm -rf、格式化、fork bomb、os.system / subprocess 派生外壳等），
+降低「手滑误执行」与「低成熟度代码随意派生进程」的风险。
 
-核心能力：
-- 代码隔离执行
-- 资源限制（CPU/内存/时间）
-- 文件系统隔离
-- 网络访问控制
-- 环境变量管理
+它 **不是** 安全沙箱边界：
+- POSIX 下经 setrlimit 做 RLIMIT_AS / RLIMIT_CPU 资源限额，但仍是 best-effort，
+  不提供真正的文件系统隔离或网络访问控制；
+- Windows 下无 rlimit（_HAS_RLIMIT=False），仅能降优先级 + 限制 CPU 亲和，
+  硬内存上限需 Job Object，当前未实现，资源隔离基本无保证。
 
-标准：Docker/K8s 沙箱标准
+不要把本模块当作「能安全执行不可信代码」的边界来用——不可信代码仍需在
+独立容器 / 虚拟机 / 专用沙箱服务中运行。
+
+支持的执行后端（护栏在上述边界内生效）：
+- 本地子进程（Python / JavaScript / Bash）
+- 预留对接：Docker/K8s、E2B、Firecrawl 等外部沙箱服务
+
+核心护栏能力：
+- 危险命令黑名单 + AST 调用级检查（只拦实际派生进程/外壳，不拦 import 本身）
+- 总超时硬闸（防止传入过大 timeout 卡死）
+- 资源限额（POSIX 真实强制；Windows best-effort）
 """
 
 import os
