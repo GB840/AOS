@@ -28,9 +28,8 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "pydantic>=2.0.0",
-    "langgraph>=1.0.0",
-    "langchain-core>=1.0.0",
-    "crewai>=1.0.0",
+    # 注：langgraph / langchain-core / crewai 已于 2026-08-08 从必装移入
+    # 可选组 [orchestration]，原因见下方 optional-dependencies 处的说明。
     "numpy>=1.24.0",
     "PyYAML>=6.0",
     "requests>=2.30.0",
@@ -62,6 +61,19 @@ web = ["streamlit>=1.30.0", "pandas>=2.0.0"]
 llm = ["openai>=1.30.0", "litellm>=1.40.0", "websocket-client>=1.7.0"]
 # 安全扫描工具
 security = ["bandit>=1.7.0", "safety>=3.0.0"]
+# 第三方编排框架（可选增强，2026-08-08 从必装 dependencies 移出）。
+#
+# 移出依据（真机实证，非推断）：本机 venv 从未安装这三个包，而
+#   - api.main 正常启动，/openapi.json 输出 292 条路由；
+#   - 端到端租户链路（注册 → 拿 key → 设目标 → 状态回读）全程跑通。
+# 说明 AOS 核心（FabricHub / autopilot 自主环 / Playbook 工作流）压根不需要它们。
+# 把可选增强钉成必装，等于逼每个想跑 AOS 的人先吞下一整套重型框架及其传递依赖，
+# 直接违反母纲原则 3「完整开源·一键安装」与原则 7「技术普惠·8G 旧电脑能跑」。
+#
+# 依赖它们的两个包（kernel.danchuang.integrations / kernel.danchuang.llm）
+# 已改为 PEP 562 惰性导入：不装时轻量符号照常可用，访问重符号才报错，
+# 且错误信息里直接给出 `pip install -e ".[orchestration]"`。
+orchestration = ["langgraph>=1.0.0", "langchain-core>=1.0.0", "crewai>=1.0.0"]
 # 分布式工作流（src/deerflow/echo_workflow.py），未启用 DeerFlow 时无需安装。
 workflow = ["temporalio>=1.5.0"]
 # gRPC 控制面（src/common/*_pb2*.py），未启用多租户控制面时无需安装。
