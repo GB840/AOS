@@ -153,3 +153,84 @@ def test_native_os_borrowed():
               "src/core/fabric/intent_skill_router.py"):
         assert _os.path.exists(_os.path.join(_os.path.dirname(__file__), "..", p)), \
             f"借鉴原型文件缺失：{p}"
+
+
+# ---------------------------------------------------------------------------
+# 元诚实补漏：白皮书声称「诚实地图每一条代码路径均经 test -e 校验存在」，
+# 但上面的测试只查文档内部自洽，并未真去磁盘核验。本测试补上这一环，
+# 任何后续编辑若写了不存在的 src/ 路径，CI 直接红。
+# ---------------------------------------------------------------------------
+
+def _is_file_path(tok: str) -> bool:
+    """只把形如 *.py 或含/的路径当文件路径；类名/包名/命令（如 LiteLLMAdapter、vosk、pnpm install）归为符号引用，不计入缺失。"""
+    t = tok.strip().strip("`")
+    if not t:
+        return False
+    if ".py" in t:
+        return True
+    if t.endswith("/"):
+        return True
+    if "/" in t and "(" not in t and " " not in t:
+        return True
+    return False
+
+
+def _parse_honesty_table_paths(text):
+    """返回 [(node, [abs_path, ...]), ...] 仅含 ✅ 行的文件路径 token。"""
+    lines = text.splitlines()
+    start = next(i for i, ln in enumerate(lines)
+                 if ln.strip().startswith("| 节点") and "AOS 代码路径" in ln)
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("### "))
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    out = []
+    for ln in lines[start + 2 : end]:
+        if not ln.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if len(cells) < 5:
+            continue
+        node = cells[0].replace("**", "").strip()
+        if not re.match(r"^(L\d|CONST\d)", node):
+            continue
+        if "✅" not in cells[2]:
+            continue
+        paths = []
+        for m in re.finditer(r"`([^`]+)`", cells[3]):
+            if _is_file_path(m.group(1)):
+                p = os.path.join(repo_root, "src", m.group(1).strip().strip("`"))
+                if p not in paths:
+                    paths.append(p)
+        out.append((node, paths))
+    return out
+
+
+def test_whitepaper_code_paths_exist():
+    """白皮书 46 个 ✅ 节点声明的 src/ 文件路径必须真实存在（钉死「0 空壳」）。"""
+    text = _read()
+    rows = _parse_honesty_table_paths(text)
+    assert rows, "未解析到任何 ✅ 节点的代码路径"
+    missing = []
+    for node, paths in rows:
+        for p in paths:
+            if not os.path.exists(p):
+                missing.append(f"{node}: {os.path.relpath(p, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))}")
+    assert not missing, f"白皮书声明的代码路径不存在:\n" + "\n".join(missing)
+
+
+def test_whitepaper_code_paths_non_stub():
+    """✅ 节点文件不能是空壳（代码行 < 5 视为 stub）。"""
+    text = _read()
+    rows = _parse_honesty_table_paths(text)
+    stubs = []
+    for node, paths in rows:
+        for p in paths:
+            if os.path.isfile(p):
+                try:
+                    src = open(p, encoding="utf-8", errors="ignore").read()
+                except Exception:
+                    continue
+                cl = len([l for l in src.splitlines()
+                          if l.strip() and not l.strip().startswith("#")])
+                if cl < 5:
+                    stubs.append(f"{node}: {os.path.relpath(p, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))} 代码行={cl}")
+    assert not stubs, f"白皮书声明的代码路径是空壳:\n" + "\n".join(stubs)

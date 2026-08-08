@@ -658,6 +658,22 @@ async def _deferred_live_init(app):
         app.state.live_engine = None
         logger.warning("live evolution engine skipped: %s", e)
 
+    # 生命体层融合焊接：把白皮书「生命体 OS」模块（life_state / homeostasis /
+    # soul / spirit / fractal / body …）实例化为活组件，挂 app.state.lifeform
+    # 并注册进 FabricHub，使 34 个孤儿模块成为运行系统的一部分（一套系统）。
+    # best-effort：单模块构造失败自动跳过，绝不阻断启动（复用全仓库范式）。
+    try:
+        from kernel.lifeform_runtime import get_lifeform_runtime
+        lf = get_lifeform_runtime()
+        app.state.lifeform = lf
+        hub = await _get_fabric_hub()
+        lf.register_with_hub(hub)
+        logger.info("lifeform runtime mounted: components=%d failed=%d",
+                    len(lf.components), len(lf.errors))
+    except Exception as e:  # noqa: BLE001
+        app.state.lifeform = None
+        logger.warning("lifeform runtime skipped: %s", e)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -809,6 +825,30 @@ async def metrics_system():
 
     body = "\n".join(lines) + "\n"
     return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
+
+
+@app.get("/api/lifeform")
+async def lifeform_status():
+    """生命体层活体状态：证明白皮书「生命体 OS」是运行系统的一部分，不是磁盘上的孤儿。
+
+    返回真实装载的组件清单、真实体征读数（从磁盘 life_state 读出，非编造），
+    以及当前体征下系统会自主选择的模型档位（决策锚定的可见证据）。
+    """
+    lf = getattr(app.state, "lifeform", None)
+    if lf is None:
+        return {"lifeform_runtime": "unavailable",
+                "note": "启动时未挂载（见 startup 日志），不谎报可用"}
+    data = lf.status()
+    try:
+        heavy = os.environ.get("AOS_LLM_MODEL", "qwen3:8b")
+        data["model_decision"] = {
+            "heavy": heavy,
+            "picked_now": lf.pick_model(heavy),
+            "note": "energy 低于阈值时自动降档，此值随体征实时变化",
+        }
+    except Exception as e:  # noqa: BLE001
+        data["model_decision"] = {"error": str(e)}
+    return data
 
 
 @app.get("/api/status")

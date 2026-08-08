@@ -183,7 +183,7 @@ flowchart TB
 | L0B 状态图谱 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
 | L0C 决策锚定 | L0 | ✅AOS代码 | `kernel/life_state.py` + `kernel/spirit/datong.py` | ② |
 | L1A LocalAI v4.7.1 | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/localai_backend.py` OpenAI 兼容客户端（opt-in，需运行 LocalAI 服务端）；与现有 model_gateway 三级路由互补（本地/私有化一档） | ② |
-| L1B CLIProxyAPI / LiteLLM | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/litellm_adapter.py` `LiteLLMAdapter`（统一 100+ provider OpenAI 格式路由，已装 1.95.0）；与现有三级动态路由 `model_gateway_layer.py` 互补（轻量库模式 / 代理模式） | ② |
+| L1B CLIProxyAPI / LiteLLM | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/litellm_adapter.py` `LiteLLMAdapter`（统一 100+ provider OpenAI 格式路由，已装 1.95.0）；与现有三级动态路由 `kernel/layers/model_gateway_layer.py` 互补（轻量库模式 / 代理模式） | ② |
 | L1C Cindy / nanobot | L1 | 🔗纯参考 | **nanobot=HKUDS/nanobot MIT Python≥3.11 可装但依赖与 AOS 冲突（卸 rich15）**；Cindy=makecindy/cindy Apache-2.0 TS 桌面端、需云账号、非 Python 不可嵌；**AOS 用 FabricHub/agnes/ag2 自研等价**，未引外部代码 | ② |
 | L1D openship | L1 | 🔗纯参考 | **两个不同项目**：oblien/openship=Apache-2.0 部署/运维平台（MCP+REST+npm CLI，服务非库）；margutti/openship=旧 MIT 电商履约；均非 drop-in 库；AOS 有 `start_all.sh`/`Dockerfile`/`scripts/` 等价部署脚本 | ② |
 | L1E Fish Speech | L1 | 🔗纯参考 | **代码 BSD-3-Clause 可商用；模型权重 CC-BY-NC-SA-4.0 禁商用**（已核实），不集成；由 L1E3 Piper（Apache-2.0）真接替代；等价保留 `core/fabric/adapters/tts_adapter.py` | — |
@@ -192,7 +192,7 @@ flowchart TB
 | L1F turbo-fieldfare | L1 | 🔗纯参考 | **Apache-2.0 Swift/Metal，仅 macOS 26+/Apple Silicon**；暴露 `127.0.0.1:8080` OpenAI 兼容本地端点（opt-in 端侧 LLM）；仅标注思想来源，不计入核心能力 | — |
 | L1G 硬件抽象层 | L1 | ✅AOS代码 | `kernel/body/hal.py` | ② |
 | L1H Phy-Bus 物理适配总线 | L1 | ✅AOS代码 | `kernel/body/phy_bus.py` | ② |
-| L1I MCP 2026-07-28 | L1 | ✅AOS代码 | `aos_mcp/` + `kernel/layers/mcp_bus_layer.py` + `core/fabric/adapters/mcp_*.py` | ② |
+| L1I MCP 2026-07-28 | L1 | ✅AOS代码 | `aos_mcp/` + `kernel/layers/mcp_bus_layer.py` + `core/fabric/adapters/mcp_client_adapter.py` + `core/fabric/adapters/mcp_stdio_adapter.py` | ② |
 | L2A 粒子隔离沙箱 AgentENV | L2 | ✅AOS代码 | `kernel/isolation/` + `execution/sandbox.py`（AOS 自研，非外部件） | ② |
 | L2B 内生欲望引擎 | L2 | ✅AOS代码 | `kernel/desire.py` | ② |
 | L2C 生命节律调度 | L2 | ✅AOS代码 | `kernel/rhythm.py` | ② |
@@ -229,7 +229,7 @@ flowchart TB
 | L7E 故障紧急制动总线 | L7 | ✅AOS代码 | `kernel/interact/emergency_brake.py` | ② |
 | L7F Conway Terminal 支付网关 | L7 | 🔁自研等价 | Conway Terminal=Conway Research `npx conway-terminal` **MIT MCP server**，但需**链上钱包+Conway Cloud+USDC(x402)** → 不可引；**AOS `api/billing_api.py`+`core/database/models/economy.py` 为自研等价**（支付网关概念，不含加密依赖） | ② |
 | L7G PhyAgentOS（执行解耦） | L7 | 🔗纯参考 | 同 L6D（PhyAgentOS 具身域，非 AOS 数字 Agent OS），架构思想来源 | — |
-| L8A 感知粒子 | L8 | ✅AOS代码 | `kernel/fractal/particles.py` + `spawner.py` + `growth_guard.py`（框架真实；具体硬件驱动待接） | ② |
+| L8A 感知粒子 | L8 | ✅AOS代码 | `kernel/fractal/particles.py` + `kernel/fractal/spawner.py` + `kernel/fractal/growth_guard.py`（框架真实；具体硬件驱动待接） | ② |
 | L8B 轻执行粒子 | L8 | ✅AOS代码 | 同上（`kernel/fractal/` 统一粒子框架） | ② |
 | L8C 重型具身粒子 | L8 | ✅AOS代码 | 同上（框架就绪，机器人本体未接） | ② |
 | L8D 数字粒子 | L8 | ✅AOS代码 | 同上（PC/服务器侧已可 spawn） | ② |

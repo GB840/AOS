@@ -371,6 +371,30 @@ def _zhipu_generate(prompt: str, timeout: float = 90.0) -> Optional[str]:
         return None
 
 
+def _lifeform_pick_model(heavy: str) -> str:
+    """把生命体层接进模型选择：energy 低于阈值 → 自动降档到轻模型。
+
+    这是「生命体层真驱动运行时决策」的接入点（白皮书 L0C 决策锚定）。
+    仅作用于主生成链路；反思链路（_ollama_generate 默认模型）刻意不降档——
+    反思模型换小会退化成鹦鹉，使自进化闭环静默变成假闭环。
+    任何异常都退回 heavy，绝不阻断主链路。
+    """
+    try:
+        from kernel.lifeform_runtime import get_lifeform_runtime
+        return get_lifeform_runtime().pick_model(heavy)
+    except Exception:  # noqa: BLE001
+        return heavy
+
+
+def _lifeform_after_run(failed: bool = False, cost: float = 0.05) -> None:
+    """一次推理跑完回写体征，形成「跑得多→energy 降→下次自动降档」闭环。"""
+    try:
+        from kernel.lifeform_runtime import get_lifeform_runtime
+        get_lifeform_runtime().on_run_finished(cost=cost, failed=failed)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _openai_compat_generate(prompt: str, timeout: float = 90.0) -> Optional[str]:
     """OpenAI 兼容端点生成（stdlib only），读取 AOS_LLM_BASE_URL / AOS_LLM_MODEL。
 
@@ -383,7 +407,8 @@ def _openai_compat_generate(prompt: str, timeout: float = 90.0) -> Optional[str]
         return None
     import json as _json
     import urllib.request
-    model = os.environ.get("AOS_LLM_MODEL", "qwen3:8b")
+    # 生命体真驱动：energy 低时自主降档到轻模型（非仅读 env）。
+    model = _lifeform_pick_model(os.environ.get("AOS_LLM_MODEL", "qwen3:8b"))
     url = base.rstrip("/") + "/chat/completions"
     body = _json.dumps({
         "model": model,
@@ -413,17 +438,25 @@ def _llm_generate(prompt: str, *, allow_zhipu: bool = True) -> Optional[str]:
     # 1) 开源/OpenAI 兼容端点优先
     out = _openai_compat_generate(prompt)
     if out:
+        _lifeform_after_run(failed=False)
         return out
-    # 2) 本机 Ollama 兜底
+    # 2) 本机 Ollama 兜底（同样受生命体降档支配）
     try:
-        ollama_out = _ollama_generate(prompt, model=os.environ.get("AOS_LLM_MODEL"))
+        _m = os.environ.get("AOS_LLM_MODEL")
+        ollama_out = _ollama_generate(
+            prompt, model=_lifeform_pick_model(_m) if _m else None)
         if ollama_out:
+            _lifeform_after_run(failed=False)
             return ollama_out
     except Exception:  # noqa: BLE001
         pass
     # 3) 智谱 opt-in（默认关闭，需显式开关）
     if allow_zhipu and os.environ.get("AOS_ZHIPU_OPTIN") == "1" and os.environ.get("ZHIPU_API_KEY"):
-        return _zhipu_generate(prompt)
+        z = _zhipu_generate(prompt)
+        _lifeform_after_run(failed=not z)
+        return z
+    # 4) 全链路不通：记一次失败体征（debt 上升 → 下次更保守）
+    _lifeform_after_run(failed=True)
     return None
 
 
