@@ -378,6 +378,8 @@ def _lifeform_pick_model(heavy: str) -> str:
     仅作用于主生成链路；反思链路（_ollama_generate 默认模型）刻意不降档——
     反思模型换小会退化成鹦鹉，使自进化闭环静默变成假闭环。
     任何异常都退回 heavy，绝不阻断主链路。
+    前提：降档仅在配置了 AOS_LLM_MODEL（声明重模型）时触发；纯 Ollama
+    默认未声明重模型时不降档，属合理默认（系统不知重模型是哪个），非失效。
     """
     try:
         from kernel.lifeform_runtime import get_lifeform_runtime

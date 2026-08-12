@@ -141,6 +141,10 @@ class LifeformRuntime:
 
         这是白皮书 L0C「决策锚定」的落地点：生命状态真正改变系统行为，
         而不是一个只能被 status() 观赏的摆件。
+
+        前提（诚实补齐，勿越级）：降档仅在 autopilot 配置 AOS_LLM_MODEL
+        （声明重模型）时触发。纯 Ollama 默认、未声明重模型的场景，系统
+        无从「降」（不知道重模型是哪个），此时不降档属合理默认，并非未生效。
         """
         light = light or os.environ.get("AOS_LLM_MODEL_LIGHT") or DEFAULT_LIGHT_MODEL
         if not heavy or light == heavy:
