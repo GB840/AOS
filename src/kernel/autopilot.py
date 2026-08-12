@@ -380,10 +380,12 @@ def _lifeform_pick_model(heavy: str) -> str:
     任何异常都退回 heavy，绝不阻断主链路。
     前提：降档仅在配置了 AOS_LLM_MODEL（声明重模型）时触发；纯 Ollama
     默认未声明重模型时不降档，属合理默认（系统不知重模型是哪个），非失效。
+    轻模型可用 AOS_LLM_LIGHT_MODEL 覆盖，默认 qwen2.5:3b（无该 env 时）。
     """
     try:
         from kernel.lifeform_runtime import get_lifeform_runtime
-        return get_lifeform_runtime().pick_model(heavy)
+        light = os.environ.get("AOS_LLM_LIGHT_MODEL", "qwen2.5:3b")
+        return get_lifeform_runtime().pick_model(heavy, light)
     except Exception:  # noqa: BLE001
         return heavy
 
