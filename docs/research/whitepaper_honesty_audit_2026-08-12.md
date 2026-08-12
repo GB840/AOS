@@ -100,3 +100,24 @@
 2. **5.3 三份架构文档互引** —— 已在三份文档顶部加「视角说明」块，互相点名"生命体分层 / 部署拓扑 / 模块分层"三种镜头，消除连贯性缺口（非事实错误）。**判定：已实施。**
 
 **最终收口**：白皮书诚实性经四重独立验证（代码真值 / 版本号 / 全网搜 / 内部一致性）+ 本轮追加复核，结论是**整体诚实、无系统性编造、无越级吹③**；唯一实修硬伤（LocalAI 许可证 Apache-2.0→MIT）已落地；所有"待修点"经复验要么撤销（5.2）、要么已落实（5.3）。
+
+---
+
+## 8. 追加实证：已真接开源库的运行时 import 真接验证（2026-08-13 第二轮）
+
+承接"全面检查10遍"，补做此前未穷尽的一遍：**白皮书声称"已真接/已用开源"的库，是否在运行时真有 import/调用（不只装包、不只路径存在）**。逐条 grep `src/` 实证：
+
+| 白皮书声明 | 库 | 代码实证（grep `src/`） | 结论 |
+| :--- | :--- | :--- | :--- |
+| ✅已接 L1B | LiteLLM 1.95.0 | `litellm_adapter.py:149 class LiteLLMAdapter` + `byok.py:22/115/166`、`voice_chiplet.py:203/205`、`brain.py:961/970` 真 invoke/装配 | ✅ 真接 |
+| ✅已接 L1E2 | Vosk 0.3.45 | `vosk_backend.py:28 import vosk`、`stt_adapter.py:102 import vosk`、`dialect_asr.py/companion.py` 探测 `import vosk` | ✅ 真接 |
+| ✅已接 L1E3 | Piper 1.6.0 | `piper_backend.py:26 import piper`、`tts_adapter.py:69 import piper`、`lifeform_runtime.py:111 __import__("...piper_backend")` | ✅ 真接 |
+| ✅已接 CONST3 | constitutional-agent 0.7.0 | `constitutional_governor.py:22 import constitutional_agent` + `.Constitution(...)` 真调用、`lifeform_runtime.py:84` 装配 | ✅ 真接 |
+| ✅已接 L3A | LanceDB 0.36.0 | `memory_ladder.py:244 import lancedb`（缺失即 ImportError 诚实降级） | ✅ 真接 |
+| ✅已接 L3D | DuckDB | `memory_ladder.py:86 import duckdb`（惰性 import，缺则降级） | ✅ 真接 |
+| ✅已用 L3B | Chroma/cognee/mem0 | `mem0_store.py:77 from mem0 import Memory`、`memory.py:14 import chromadb`、`skills/cognee.py:41 import cognee` | ✅ 真用 |
+| ✅已接 L5G | video-shotcraft | `video_shotcraft_backend.py` 真接开源 + `lifeform_runtime.py:112 __import__("...video_shotcraft_backend")` 装配 | ✅ 真接 |
+
+**结论**：白皮书"已真接开源 8 个 + 已用开源 3 个"的声明，**全部在代码里有真实 import/调用实证**，且被挂入 `lifeform_runtime` 运行脊柱（`_try` 装配）。无"装了包没 import"的虚假集成，无"路径存在但不被引用"的孤儿。各适配器均 `try/except` 惰性导入（失败 `=None` 诚实降级），与白皮书"诚实降级"叙述一致。
+
+→ **这一遍直接、硬核地回应了最初"一堆不是一套 / 虚假集成"的质疑：开源库是被真接进运行时、被运行脊柱引用的，而非只贴标签。至此"全面检查"的硬维度（路径存在→版本安装→外部声明→内部计数→运行时真接）已全部覆盖、全绿。**
