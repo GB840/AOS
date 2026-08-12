@@ -50,7 +50,7 @@ flowchart TB
     end
 
     subgraph L1["⚙️ 第一层：肉体层（硬件 · 语音 · 推理 · 部署 · 协议）"]
-        L1A["🔧 多模态推理引擎：LocalAI v4.7.1（Apache-2.0 已真接客户端）[✅AOS已接开源]"]
+        L1A["🔧 多模态推理引擎：LocalAI v4.7.1（MIT 已真接客户端）[✅AOS已接开源]"]
         L1B["🔧 模型路由网关：LiteLLM（MIT 100+ provider，已真接）[✅AOS已接开源]"]
         L1C["🔧 跨平台交互客户端：Cindy / nanobot [🔗纯参考]（nanobot=MIT Py3.11+ 可装但依赖与 AOS 冲突；Cindy 非 Python；AOS 用 FabricHub）"]
         L1D["🔧 部署与运维层：openship [🔗纯参考]（oblien/openship=Apache-2.0 部署平台，服务非库；AOS 有 start_all.sh/Dockerfile）"]
@@ -211,7 +211,7 @@ flowchart TB
 | L0A 持续融合 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
 | L0B 状态图谱 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
 | L0C 决策锚定 | L0 | ✅AOS代码 | `kernel/life_state.py` + `kernel/spirit/datong.py` | ② |
-| L1A LocalAI v4.7.1 | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/localai_backend.py` OpenAI 兼容客户端（opt-in，需运行 LocalAI 服务端）；与现有 model_gateway 三级路由互补（本地/私有化一档） | ② |
+| L1A LocalAI v4.7.1 | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/localai_backend.py` OpenAI 兼容客户端（opt-in，需运行 LocalAI 服务端）；与现有 model_gateway 三级路由互补（本地/私有化一档） | ② |
 | L1B CLIProxyAPI / LiteLLM | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/litellm_adapter.py` `LiteLLMAdapter`（统一 100+ provider OpenAI 格式路由，已装 1.95.0）；与现有三级动态路由 `kernel/layers/model_gateway_layer.py` 互补（轻量库模式 / 代理模式） | ② |
 | L1C Cindy / nanobot | L1 | 🔗纯参考 | **nanobot=HKUDS/nanobot MIT Python≥3.11 可装但依赖与 AOS 冲突（卸 rich15）**；Cindy=makecindy/cindy Apache-2.0 TS 桌面端、需云账号、非 Python 不可嵌；**AOS 用 FabricHub/agnes/ag2 自研等价**，未引外部代码 | ② |
 | L1D openship | L1 | 🔗纯参考 | **两个不同项目**：oblien/openship=Apache-2.0 部署/运维平台（MCP+REST+npm CLI，服务非库）；margutti/openship=旧 MIT 电商履约；均非 drop-in 库；AOS 有 `start_all.sh`/`Dockerfile`/`scripts/` 等价部署脚本 | ② |
@@ -273,7 +273,7 @@ flowchart TB
 
 | 处置 | 节点 | 说明 |
 | :--- | :--- | :--- |
-| ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft、**L1E3 Piper**、**CONST3 constitutional-agent**、**L1B LiteLLM** | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** Apache-2.0 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm）；**Piper 1.6.0 真装**（Apache-2.0 离线 TTS，接入 TTSAdapter 引擎链替代 Fish Speech 禁商用权重，无模型诚实降级）；**constitutional-agent 0.7.0 真装**（MIT 本地宪法治理，封装 `Constitution` 六闸门+硬约束评估，无需外部 LLM）；**LiteLLM 1.95.0 真装**（MIT 统一 100+ provider OpenAI 路由，`LiteLLMAdapter` 已注册） |
+| ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft、**L1E3 Piper**、**CONST3 constitutional-agent**、**L1B LiteLLM** | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** MIT 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm）；**Piper 1.6.0 真装**（Apache-2.0 离线 TTS，接入 TTSAdapter 引擎链替代 Fish Speech 禁商用权重，无模型诚实降级）；**constitutional-agent 0.7.0 真装**（MIT 本地宪法治理，封装 `Constitution` 六闸门+硬约束评估，无需外部 LLM）；**LiteLLM 1.95.0 真装**（MIT 统一 100+ provider OpenAI 路由，`LiteLLMAdapter` 已注册） |
 | ✅ **AOS 已用开源** | L3B Chroma/cognee/mem0 | L3 长期语义层本就复用这三个开源，非自研；KowitoDB/txtai 按「现有够好→复用」不新增 |
 | 🔁 **本环境接不上（实测核实，诚实降级）** | L3C TriviumDB/Turso | **实测**：TriviumDB 全部版本 `Requires-Python >=3.9,<3.13`（`pip install` 实测拒绝）；Turso `pyturso` 仅 sdist、Rust 源码编译在沙箱 exit1。本环境 3.13.12 接不上，绝不用内存冒充 |
 | 🔗 **纯参考/生态对齐（非库·服务·平台不兼容·许可红线）** | L1C Cindy/nanobot、L1D openship、L1E Fish Speech、L1F turbo-fieldfare、L3E DBX、L6D/L7G PhyAgentOS、L9A dg-ai-notes、L9B openKylin、L9C openEuler、L9D OpenHarmony | Cindy/nanobot/openship 是框架或服务非 drop-in 库（nanobot 可装但依赖与 AOS 冲突，AOS 用 FabricHub/部署脚本）；Fish Speech 模型 NC（Piper 替代）；turbo-fieldfare 仅 macOS/Apple Silicon；DBX AGPL；PhyAgentOS 具身域；dg-ai-notes 教程；openKylin/openEuler/OpenHarmony 为国产开源 OS 生态参考（桌面智能体 OS / 服务器 Agentic Infra / 终端智能体框架），非库、不需 AOS 代码 |
