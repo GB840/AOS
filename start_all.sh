@@ -7,8 +7,21 @@ set -e
 AOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$AOS_DIR"
 
-VENV_PY="$USERPROFILE/.workbuddy/binaries/python/envs/aos/Scripts/python.exe"
-VENV_PY_DIR="$USERPROFILE/.workbuddy/binaries/python/envs/aos/Scripts"
+# --- 自适应选择 Python 解释器（跨环境：沙箱 venv / 本机系统 Python 都能跑）---
+# 1) 优先沙箱 managed aos venv（与 CI/沙箱一致）
+# 2) 其次 managed 3.13.12
+# 3) 否则回退到 PATH 中的 python / python3（用户本机系统 Python 3.14）
+if [ -x "$USERPROFILE/.workbuddy/binaries/python/envs/aos/Scripts/python.exe" ]; then
+  VENV_PY="$USERPROFILE/.workbuddy/binaries/python/envs/aos/Scripts/python.exe"
+  VENV_PY_DIR="$USERPROFILE/.workbuddy/binaries/python/envs/aos/Scripts"
+elif [ -x "$USERPROFILE/.workbuddy/binaries/python/versions/3.13.12/python.exe" ]; then
+  VENV_PY="$USERPROFILE/.workbuddy/binaries/python/versions/3.13.12/python.exe"
+  VENV_PY_DIR="$(dirname "$USERPROFILE/.workbuddy/binaries/python/versions/3.13.12/python.exe")"
+else
+  VENV_PY="$(command -v python || command -v python3 || echo python)"
+  VENV_PY_DIR="$(dirname "$VENV_PY")"
+fi
+STREAMLIT_BIN="$(command -v streamlit || echo "$VENV_PY_DIR/streamlit")"
 
 # --- 从 .env 读取密钥（不打印值）---
 read_env() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- ; }
@@ -85,7 +98,7 @@ if curl -s -m 4 -o /dev/null http://127.0.0.1:8501/web/ 2>/dev/null; then
   echo "[start_all] Web 控制台已在运行"
 else
   echo "[start_all] 启动 Web 控制台 (:8501, baseUrlPath=/web)..."
-  ( "$VENV_PY_DIR/streamlit" run src/web/app.py --server.port 8501 --server.headless true --browser.gatherUsageStats false --server.address 127.0.0.1 --server.baseUrlPath=/web > web_console.log 2>&1 & )
+  ( "$STREAMLIT_BIN" run src/web/app.py --server.port 8501 --server.headless true --browser.gatherUsageStats false --server.address 127.0.0.1 --server.baseUrlPath=/web > web_console.log 2>&1 & )
   sleep 8
 fi
 

@@ -154,8 +154,10 @@ class ReviewGate:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(d, f, ensure_ascii=False, indent=2)
             os.replace(tmp, self._specs_file)
-        except OSError:
-            pass
+        except OSError as e:
+            # P4-6 修复：原静默 pass 会导致 resume spec 持久化失败无人知晓，
+            # 审核闭环数据可能丢失。改为记录告警，让运维能感知磁盘/权限问题。
+            logger.warning("ReviewGate: resume spec 持久化失败（%s）: %s", self._specs_file, e)
 
 
 # ── 单例 ──

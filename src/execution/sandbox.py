@@ -1,28 +1,37 @@
 """
-Sandbox Manager - 沙箱隔离层
+Sandbox Manager - 防手滑执行护栏（非安全沙箱边界）
 
-提供安全的代码执行环境，支持多种沙箱后端：
-- 本地沙箱（Docker/K8s）
-- E2B 沙箱
-- Firecrawl 沙箱
+诚实边界声明：本模块是 **defense-in-depth 的护栏层**，用于拦截明显的破坏性 /
+危险命令（rm -rf、格式化、fork bomb、os.system / subprocess 派生外壳等），
+降低「手滑误执行」与「低成熟度代码随意派生进程」的风险。
 
-核心能力：
-- 代码隔离执行
-- 资源限制（CPU/内存/时间）
-- 文件系统隔离
-- 网络访问控制
-- 环境变量管理
+它 **不是** 安全沙箱边界：
+- POSIX 下经 setrlimit 做 RLIMIT_AS / RLIMIT_CPU 资源限额，但仍是 best-effort，
+  不提供真正的文件系统隔离或网络访问控制；
+- Windows 下无 rlimit（_HAS_RLIMIT=False），仅能降优先级 + 限制 CPU 亲和，
+  硬内存上限需 Job Object，当前未实现，资源隔离基本无保证。
 
-标准：Docker/K8s 沙箱标准
+不要把本模块当作「能安全执行不可信代码」的边界来用——不可信代码仍需在
+独立容器 / 虚拟机 / 专用沙箱服务中运行。
+
+支持的执行后端（护栏在上述边界内生效）：
+- 本地子进程（Python / JavaScript / Bash）
+- 预留对接：Docker/K8s、E2B、Firecrawl 等外部沙箱服务
+
+核心护栏能力：
+- 危险命令黑名单 + AST 调用级检查（只拦实际派生进程/外壳/执行任意代码，不拦 import 本身）；覆盖 5 类间接引用（模块别名 / from-import / __import__ / importlib·builtins 动态加载 / 变量别名转手 / sys.modules 动态获取）
+- 总超时硬闸（防止传入过大 timeout 卡死）
+- 资源限额（POSIX 真实强制；Windows best-effort）
 """
 
 import os
 import sys
+import ast
 import logging
 import uuid
 import tempfile
 import subprocess
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -86,8 +95,14 @@ _DANGER_MODULE_ATTRS = {
         "Popen", "call", "run", "check_call", "check_output",
         "check_run", "getoutput", "getstatusoutput",
     },
-    "sys": set(),
+    # 间接引用族：动态加载/获取任意模块对象，可绕过 import 语句派生进程或执行代码
+    "importlib": {"import_module"},          # importlib.import_module("os").system(...)
+    "builtins": {"__import__"},              # builtins.__import__("os").system(...)
+    "sys": {"modules"},                       # sys.modules["os"].system(...)（由 Subscript 检测拦截）
 }
+
+# 任意代码执行内置函数（直接调用即危险，不区分参数）
+_CODE_EXEC_BUILTINS = ("eval", "exec", "compile")
 
 # ── 资源限额 ────────────────────────────────────────────────────────────────
 # 硬上限：防止单次执行卡死。安装/下载类任务需要更长，故放宽到 600s
@@ -105,24 +120,61 @@ except Exception:  # pragma: no cover - 仅极老平台缺 resource 模块
     _HAS_RLIMIT = False
 
 
-def _check_dangerous_patterns(code: str) -> str | None:
-    """检查代码是否包含危险模式。返回匹配的模式字符串，或 None 表示安全。"""
-    import ast
+def _attr_base(node) -> "str | None":
+    """展开 a.b.c 属性链，返回最底层 Name 的 id（如 a.b.c -> 'a'）；非 Name 开头返回 None。"""
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        return cur.id
+    return None
 
+
+def _is_sys_modules(node) -> bool:
+    """判断 Subscript 是否为 sys.modules[...] 动态模块获取。"""
+    v = node.value  # type: ignore[attr-defined]
+    return (isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name)
+            and v.value.id == "sys" and v.attr == "modules")
+
+
+def _track_alias_assign(node, danger_mod: dict, danger_names: dict) -> None:
+    """记录别名转手 t = os.system / t = mod.danger_attr，使后续 t(...) 也命中危险规则。"""
+    if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+        return
+    val = node.value
+    if not isinstance(val, ast.Attribute):
+        return
+    base = _attr_base(val)
+    if base in _DANGER_MODULE_ATTRS and val.attr in _DANGER_MODULE_ATTRS[base]:
+        danger_names[node.targets[0].id] = base
+    elif base in danger_mod and val.attr in _DANGER_MODULE_ATTRS[danger_mod[base]]:
+        danger_names[node.targets[0].id] = danger_mod[base]
+
+
+def _check_dangerous_patterns(code: str) -> str | None:
+    """检查代码是否包含危险模式。返回匹配的模式字符串，或 None 表示安全。
+
+    护栏范围（defense-in-depth，**非安全边界**）：
+    - 黑名单字符串匹配（删库 / 格式化 / fork bomb 等）
+    - AST 调用级检查：不拦 import 本身，只拦「实际派生进程 / 外壳 / 执行任意代码」的调用。
+      覆盖 5 类间接引用绕过方式：模块别名、from-import 别名、__import__ 直接调用、
+      importlib / builtins 动态加载、变量别名转手、sys.modules 动态获取。
+
+    注意：纯 Python 内的删文件 / 偷密钥 / 打网络 / 吃内存载荷本层仍不防护；
+    这只是提高手滑门槛，不可信代码必须进容器 / VM / 专用沙箱服务。
+    """
     # 黑名单
     code_lower = code.lower()
     for pattern in _DANGEROUS_PATTERNS:
         if pattern.lower() in code_lower:
             return pattern
 
-    # AST 检查 (Python): 不拦 import，只拦危险函数的「实际调用」。
-    # 理由：os.path.join / sys.argv / subprocess 配置等常用且安全；真正危险的是
-    # os.system / os.popen / subprocess.Popen 等进程/外壳派生调用。
     try:
         tree = ast.parse(code)
         # 记录导入的「危险模块别名 → 真实模块名」
         danger_mod: dict = {}
-        danger_names: dict = {}  # from X import func 直接导入的危险函数名
+        danger_names: dict = {}  # from X import func 或别名转手 → 模块名
+        # 第一遍：收集 import 别名 + 变量别名转手（赋值）
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -137,25 +189,34 @@ def _check_dangerous_patterns(code: str) -> str | None:
                             danger_names[alias.asname or alias.name] = mod
                         else:
                             danger_mod[alias.asname or alias.name] = mod
-            elif isinstance(node, ast.Call):
-                f = node.func
-                # from os import system; system(...)
-                if isinstance(f, ast.Name) and f.id in danger_names:
-                    return f"call {f.id}()"
-                # os.system(...) / subprocess.Popen(...)
-                # 兜底：即使未显式 import，直接用已知危险模块名（os/subprocess）
-                # 作属性调用也视为危险（如裸写 subprocess.Popen(...)）。
-                if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
-                    mod = danger_mod.get(f.value.id)
-                    if mod is None and f.value.id in _DANGER_MODULE_ATTRS:
-                        mod = f.value.id
-                    if mod and f.attr in _DANGER_MODULE_ATTRS[mod]:
-                        return f"call {f.value.id}.{f.attr}()"
-        # __import__ 直接调用仍拦（可加载任意模块并执行任意代码）
+            elif isinstance(node, ast.Assign):
+                _track_alias_assign(node, danger_mod, danger_names)
+        # 第二遍：检查动态模块获取 + 危险调用
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                    and node.func.id == "__import__":
-                return "__import__ call"
+            # sys.modules[...] 动态获取模块对象（间接引用族）
+            if isinstance(node, ast.Subscript) and _is_sys_modules(node):
+                return "sys.modules[] dynamic module access"
+            if isinstance(node, ast.Call):
+                f = node.func
+                if isinstance(f, ast.Name):
+                    # eval / exec / compile 任意代码执行内置
+                    if f.id in _CODE_EXEC_BUILTINS:
+                        return f"call {f.id}()"
+                    # from os import system; system(...) 或别名转手 f = os.system; f(...)
+                    if f.id in danger_names:
+                        return f"call {f.id}()"
+                    # __import__(...) 直接调用（可加载任意模块并执行任意代码）
+                    if f.id == "__import__":
+                        return "__import__ call"
+                # 模块属性调用：os.system / subprocess.Popen / builtins.__import__ /
+                # importlib.import_module（这些直接调用即危险，不等后续 .system()）
+                elif isinstance(f, ast.Attribute):
+                    base = _attr_base(f)
+                    if base in _DANGER_MODULE_ATTRS and f.attr in _DANGER_MODULE_ATTRS[base]:
+                        return f"call {base}.{f.attr}()"
+                    mod = danger_mod.get(base)
+                    if mod and f.attr in _DANGER_MODULE_ATTRS[mod]:
+                        return f"call {base}.{f.attr}()"
     except SyntaxError:
         # 非 Python 代码（bash / JS / 纯命令）不能也不该被 ast 解析；
         # 字符串黑名单已足够覆盖危险模式，不把 SyntaxError 当危险误杀。
@@ -270,6 +331,9 @@ class SandboxManager:
         preexec = None
         if _HAS_RLIMIT:
             def _pre():
+                # P4-4 安全修复：原 except: pass 完全静默，若 setrlimit 失败
+                # 沙箱限制（内存/CPU）可能没生效但无人知晓。改为记录到 stderr
+                # （preexec 在子进程内，不能用主进程 logger；用 os.write 避免异常）。
                 try:
                     mb = int(mem_limit_mb or 0)
                     if mb > 0:
@@ -278,8 +342,17 @@ class SandboxManager:
                     cs = int(cpu_seconds or 0)
                     if cs > 0:
                         _resource.setrlimit(_resource.RLIMIT_CPU, (cs, cs))
-                except Exception:
-                    pass
+                except Exception as e:
+                    # preexec_fn 在子进程执行，不能用主进程 logger。
+                    # 写 stderr 让父进程 communicate() 能捕获到告警。
+                    import sys as _sys
+                    try:
+                        _sys.stderr.write(
+                            f"[sandbox] WARNING: setrlimit 失败，沙箱限制可能未生效: {e}\n"
+                        )
+                        _sys.stderr.flush()
+                    except Exception:
+                        pass  # 连 stderr 都写不了，只能放弃记录
             preexec = _pre
 
         try:

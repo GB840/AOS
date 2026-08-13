@@ -1,8 +1,9 @@
 import logging
 import secrets
 import hmac
+import threading
 import bcrypt
-from typing import Optional
+from typing import Callable, List, Optional
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader, APIKeyQuery
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -17,13 +18,18 @@ logger = logging.getLogger(__name__)
 
 # JWT 非对称密钥 (RS256) 缓存：首次使用时解析，避免每次请求重复读盘。
 _jwt_key_cache: tuple[str, str] | None = None
+# P1 并发修复：每个 API 请求都调用 _get_jwt_keys，FastAPI Security 依赖可能
+# 在线程池中并发执行 → check-then-act 竞态导致重复读盘。DCL 保证唯一构造。
+_jwt_key_lock = threading.Lock()
 
 
 def _get_jwt_keys() -> tuple[str, str]:
     """返回 (private_pem, public_pem)，用于 RS256 签名/验签。"""
     global _jwt_key_cache
     if _jwt_key_cache is None:
-        _jwt_key_cache = load_jwt_keys(base_dir=Path(config.BASE_DIR), app_env=config.APP_ENV)
+        with _jwt_key_lock:
+            if _jwt_key_cache is None:
+                _jwt_key_cache = load_jwt_keys(base_dir=Path(config.BASE_DIR), app_env=config.APP_ENV)
     return _jwt_key_cache
 
 API_KEY_NAME = "X-API-Key"
@@ -258,6 +264,54 @@ async def get_api_key(
     )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 附加 API Key 校验器注册表（子系统自带密钥体系的挂载点）
+#
+# 2026-08-08 实跑发现的真 bug（多租户上线致命阻断）：
+#   单创OS 给租户签发的是自己的 key（sk-xxx，存 tenants.db），
+#   而全局中间件校验的是平台级 config.API_KEY，两者用同一个 X-API-Key 头。
+#   中间件的「本地回环豁免」又是 fail-closed（带了凭据就必须校验通过），
+#   于是租户陷入死锁 —— 实测：
+#     GET /api/danchuang/tenant 不带凭据 → 401「缺少 API Key」（子系统拒）
+#     GET /api/danchuang/tenant 带租户key → 401「Invalid API Key」（中间件拒）
+#   租户永远拿不到自己的数据，多租户模式根本跑不通。
+#
+# 修法用注册表而非直接 import：security.py 不感知任何子系统（零耦合，
+# 依赖方向是 子系统 → security）。未注册时行为与修复前完全一致（向后兼容）。
+# 校验器只负责回答「这个 key 是不是本子系统签发的合法 key」，
+# 具体租户身份与权限边界仍由各端点自己解析（能力即路由，权限即边界）。
+# ──────────────────────────────────────────────────────────────────────
+
+_ADDITIONAL_KEY_VALIDATORS: List[Callable[[str], bool]] = []
+
+
+def register_api_key_validator(validator: Callable[[str], bool]) -> None:
+    """注册一个附加 API Key 校验器（幂等：同一函数重复注册只保留一份）。
+
+    Args:
+        validator: 接收 api_key 字符串，返回 True 表示该 key 由本子系统签发且有效。
+                   实现方必须自己吞掉异常（本模块也会兜底），绝不能让它冒泡打断鉴权链。
+    """
+    if validator not in _ADDITIONAL_KEY_VALIDATORS:
+        _ADDITIONAL_KEY_VALIDATORS.append(validator)
+
+
+def clear_api_key_validators() -> None:
+    """清空附加校验器（仅供测试隔离使用）。"""
+    _ADDITIONAL_KEY_VALIDATORS.clear()
+
+
+def _run_additional_validators(api_key: str) -> bool:
+    """逐个尝试附加校验器；任一通过即放行。单个校验器异常不影响整体鉴权。"""
+    for validator in _ADDITIONAL_KEY_VALIDATORS:
+        try:
+            if validator(api_key):
+                return True
+        except Exception:  # noqa: BLE001 — 校验器崩溃只能等价于「不认识这个 key」
+            logger.warning("附加 API Key 校验器执行失败，已跳过", exc_info=True)
+    return False
+
+
 class APISecurityMiddleware(BaseHTTPMiddleware):
     # 统一网关收编的上游子路径：各自上游自带鉴权（/web=Streamlit 控制台、
     # /openclaw=OpenClaw 网关、/deerflow=DeerFlow 网关），注意：AOS仅做流量转发，
@@ -343,8 +397,12 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         # 1) 永远公开：根路径 + 健康探针（供 supervisor/负载均衡探活）
         #    + 登录入口 /api/auth/token（换取 JWT，不可能要求先认证）
         #    + 静态前端页面（/studio/ /bidding/）：页面本身公开，API 调用仍走鉴权。
+        #    P0 安全修复：原 path.endswith("/health") 会误命中 /api/v1/health 等所有
+        #    以 /health 结尾的端点，导致内核遥测（bridge.telemetry()）匿名可访问。
+        #    改为显式白名单，仅公开负载均衡探活所需的最小集合。
         _PUBLIC_PREFIXES = ("/studio", "/bidding")
-        if (path == "/" or path.endswith("/health") or path.endswith("/health/deep")
+        _PUBLIC_HEALTH_PATHS = ("/health", "/health/deep")
+        if (path == "/" or path in _PUBLIC_HEALTH_PATHS
                 or path == "/api/auth/token"
                 or path == "/metrics/system"  # 系统级运营遥测，与 /health 同性质公开
                 or any(path == p or path.startswith(p + "/") for p in _PUBLIC_PREFIXES)):
@@ -430,7 +488,9 @@ class APISecurityMiddleware(BaseHTTPMiddleware):
         api_key_hash = getattr(config, "API_KEY_HASH", None)
         if api_key_hash and verify_api_key_hash(api_key, api_key_hash):
             return True
-        return False
+        # 平台级 key 不匹配时，交给子系统自带的密钥体系（如单创OS 租户 key）。
+        # 见上方 _ADDITIONAL_KEY_VALIDATORS 注释中的多租户死锁说明。
+        return _run_additional_validators(api_key)
 
     def _validate_upstream_auth(self, request: Request) -> bool:
         """验证上游网关请求确实携带有效的 AOS 凭据（而非仅存在任意头，旧逻辑可被伪造头绕过）。

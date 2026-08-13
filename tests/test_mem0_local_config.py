@@ -8,9 +8,10 @@
   - 关本地且无远程 key 时返回 None（优雅降级，不崩）。
 且 from_config 能干净构造（不联网、不下载模型）。
 """
-import os
 
 import pytest
+
+pytest.importorskip("mem0")  # 缺 mem0 包（本地零成本记忆依赖）；装齐后自动跑
 
 from core.fabric.adapters.mem0_adapter import build_mem0_config
 

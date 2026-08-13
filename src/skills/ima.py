@@ -33,8 +33,8 @@ from core.fabric.handoff import HandoffEnvelope, review_handoff, store_handoff
 logger = logging.getLogger(__name__)
 
 IMA_BASE_URL = "https://ima.qq.com"
-# 给定 Client ID（用户 2026-07-15 提供）；API Key 需用户在 .env 配置 IMA_OPENAPI_APIKEY
-DEFAULT_CLIENT_ID = "b1f8f7574dc75ac48e7bb0624ff72482"
+# Client ID 仅从环境变量 IMA_OPENAPI_CLIENTID 读取；禁止在源码硬编码真实值（开源合规）。
+# 未配置时 IMA 能力降级为不可用，不影响核心链路。
 
 IMA_OPERATIONS = {
     "search_knowledge": {
@@ -130,7 +130,7 @@ class IMASkill(Skill):
 
     def _check_creds(self):
         """检查并初始化 IMA 凭证（环境变量优先）"""
-        client_id = os.environ.get("IMA_OPENAPI_CLIENTID") or DEFAULT_CLIENT_ID
+        client_id = os.environ.get("IMA_OPENAPI_CLIENTID", "")
         api_key = os.environ.get("IMA_OPENAPI_APIKEY", "")
 
         if client_id and api_key:

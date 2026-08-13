@@ -20,12 +20,10 @@ os.environ.setdefault("AOS_DATA_DIR", _tmp)
 os.environ["AOS_APPROVALS_PATH"] = os.path.join(_tmp, "approvals.jsonl")
 
 from kernel.evolve.evolve_engine import (  # noqa: E402
-    ABTest,
     EvolveEngine,
     OptimizationProposal,
 )
 from kernel.approval.approval_store import (  # noqa: E402
-    ApprovalStore,
     get_approval_store,
 )
 
@@ -211,7 +209,7 @@ def test_approve_proposal_syncs_to_approval_store(engine):
     assert approval_before.status == "pending"
 
     # approve（会尝试 apply，可能失败因为没真实 workflow，但 approve 标记应生效）
-    result = engine.approve_proposal(prop.id)
+    engine.approve_proposal(prop.id)
     # approve_proposal 内部先标记 approved=True，再尝试 apply
     # apply 可能失败，但 approved 标记已写入
     approval_after = store.get_by_proposal(prop.id)
@@ -252,7 +250,7 @@ def test_approve_proposal_no_loop(engine, monkeypatch):
     prop = _make_proposal(risk_level="medium")
     engine._save_proposal("test_wf", [prop])
 
-    result = engine.approve_proposal(prop.id)
+    engine.approve_proposal(prop.id)
     # apply_proposal 应该只被调用 1 次（钩子回调时被 approved=True 挡住，不再重试 apply）
     assert apply_count["apply"] == 1, \
         f"Expected apply_proposal called 1 time, got {apply_count['apply']}"
@@ -336,7 +334,7 @@ def test_create_ab_test(engine):
 
 
 def test_get_variant_alternates(engine):
-    test = engine.create_ab_test("wf1", "AB", {}, {})
+    engine.create_ab_test("wf1", "AB", {}, {})
     # 前几次应该交替返回 a/b
     v1 = engine.get_variant("wf1")
     v2 = engine.get_variant("wf1")
@@ -370,3 +368,32 @@ def test_proposals_persist_across_instances(engine):
     found = e2._find_proposal("persist_test")
     assert found is not None
     assert found.title == "测试提案"
+
+
+def test_evolve_proposal_eviction_prioritizes_decided(monkeypatch, engine):
+    """理念8 限存储：超限时优先删已决策(decided)，保留 pending —— 与 _update_proposal 注释一致。
+
+    构造 5 个已决策 + 3 个 pending = 8 个，上限设为 5。淘汰后必须保留
+    全部 3 个 pending + 仅 2 个 decided（优先砍 decided，而非砍 pending）。
+    此测试锁死淘汰语义，防止未来误改成「保 decided、砍 pending」。
+    """
+    import kernel.evolve.evolve_engine as _ee
+    monkeypatch.setattr(_ee, "_MAX_PROPOSALS_PER_WF", 5)
+
+    for i in range(5):
+        engine._update_proposal(_make_proposal(id=f"ev_dec_{i}", applied=True))
+    for i in range(3):
+        engine._update_proposal(_make_proposal(id=f"ev_pen_{i}"))
+
+    path = engine._proposals_path("test_wf")
+    props = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                props.append(json.loads(line))
+    pending = [p for p in props if not (p.get("applied") or p.get("rejected"))]
+    decided = [p for p in props if (p.get("applied") or p.get("rejected"))]
+    assert len(props) == 5, f"应保留 5 个，实际 {len(props)}"
+    assert len(pending) == 3, f"应全保留 3 个 pending，实际 {len(pending)}"
+    assert len(decided) == 2, f"decided 应被优先砍到 2，实际 {len(decided)}"

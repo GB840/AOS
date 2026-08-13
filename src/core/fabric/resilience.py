@@ -25,6 +25,7 @@ from __future__ import annotations
 import importlib
 import logging
 import threading
+import time
 from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,19 @@ _MODULE_TIMEOUTS: dict = {
     "litellm": 30.0,
     "mem0ai": 40.0, "mem0": 40.0,
 }
-_PROBED: dict = {}  # name -> module | None (缓存，避免重复探测)
+_PROBED: dict = {}  # name -> module | _NEG 负缓存元组 (缓存，避免重复探测)
 _WARMING: set = set()  # 正在后台预热中的模块名
+# 负缓存哨兵：用 (_NEG, expiry) 区分「已探明不可用」与「尚未探测」。
+# - 永久负缓存（模块确实缺失 / 导入报错）：expiry=inf，不再重试，保性能；
+# - 超时负缓存（模块过慢 / 瞬时故障）：expiry=now+_NEG_TTL，到期后可重试，
+#   避免瞬时故障被永久缓存成不可用（修复 resilience None 缓存黑洞）。
+_NEG = object()
+_NEG_TTL = 300.0
+_PERM_NEG = (_NEG, float('inf'))
+# P2 并发修复：_PROBED / _WARMING 的 check-then-act 无锁，并发首调会各自
+# 启动 daemon 线程跑 importlib（虽然 Python import 锁保证只执行一次模块体，
+# 但 _PROBED 赋值仍可能被覆盖为 None 而非真实模块）。锁保护缓存写入。
+_PROBE_LOCK = threading.Lock()
 
 
 def guarded_import(name: str, timeout: Optional[float] = None) -> Optional[Any]:
@@ -54,8 +66,19 @@ def guarded_import(name: str, timeout: Optional[float] = None) -> Optional[Any]:
     同一模块（Python import 锁会阻塞等待首个线程），让 health 如实标 dead，
     预热线程完成后再标 live，全程不卡调用方。
     '''
-    if name in _PROBED:
-        return _PROBED[name]
+    # 快速路径：已探测过直接返回（读 dict 在 GIL 下原子）
+    cached = _PROBED.get(name)
+    if cached is not None:
+        # 负缓存元组 (_NEG, expiry)：永久负缓存或 TTL 内超时负缓存 -> 不可用
+        if isinstance(cached, tuple) and cached[0] is _NEG:
+            if cached[1] == float('inf') or time.time() < cached[1]:
+                return None
+            # 超时负缓存到期：丢弃重新探测，让瞬时故障有机会恢复
+            with _PROBE_LOCK:
+                _PROBED.pop(name, None)
+        else:
+            return cached  # 真实模块
+    # 预热中：让 health 如实标 dead
     if name in _WARMING:
         return None
     to = timeout if timeout is not None else _MODULE_TIMEOUTS.get(name, _DEFAULT_TIMEOUT)
@@ -72,10 +95,16 @@ def guarded_import(name: str, timeout: Optional[float] = None) -> Optional[Any]:
     th.join(to)
     if th.is_alive() or 'err' in box:
         logger.warning('guarded_import: %s unavailable (timeout=%.1fs)', name, to)
-        _PROBED[name] = None
+        # 导入报错=模块确实不可用 -> 永久负缓存（保性能）；
+        # 仅超时=可能过慢/瞬时故障 -> TTL 负缓存，到期后可重试。
+        neg = _PERM_NEG if 'err' in box else (_NEG, time.time() + _NEG_TTL)
+        with _PROBE_LOCK:
+            _PROBED[name] = neg
         return None
-    _PROBED[name] = box.get('m')
-    return _PROBED[name]
+    mod = box.get('m')
+    with _PROBE_LOCK:
+        _PROBED[name] = mod
+    return mod
 
 
 class SafeImport:
@@ -136,7 +165,7 @@ def prewarm(names: Iterable[str]) -> None:
             try:
                 _PROBED[n] = importlib.import_module(n)
             except Exception:  # noqa: BLE001 - 预热失败 = 该依赖不可用
-                _PROBED[n] = None
+                _PROBED[n] = _PERM_NEG
             finally:
                 _WARMING.discard(n)
 

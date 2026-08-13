@@ -5,11 +5,10 @@ STT 引擎探测用 STTAdapter 真实 health 逻辑。"""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import time
 
 from core.fabric.voice_wake import numpy_vad, make_vad, VoiceWakeLoop
-from core.fabric.voice_chiplet import VoicePipeline, VoiceTurnResult
+from core.fabric.voice_chiplet import VoicePipeline
 
 
 # ============================================================================
@@ -198,7 +197,6 @@ def test_http_wake_status_uninitialized():
 
 
 def test_http_voice_turn_plan_param_routes_to_planner():
-    import json
     captured = {}
 
     # 用注入式 pipeline：planner_fn 记录调用
@@ -235,7 +233,7 @@ def test_stt_engine_pick_is_honest():
     from core.fabric.adapters.stt_adapter import STTAdapter
     a = STTAdapter()
     # 不报错；引擎名是 whisper_cpp / faster_whisper / web_speech 之一
-    assert a._engine in ("whisper_cpp", "faster_whisper", "web_speech")
+    assert a._engine in ("whisper_cpp", "faster_whisper", "vosk", "web_speech")
     # health 是可调用的 bool
     assert isinstance(a.health(), bool)
 

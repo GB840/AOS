@@ -2,6 +2,10 @@
 
 > One-page reference for new developers. Last updated: 2026-07.
 
+> **视角说明**：本图是 **部署拓扑视角**（alpha 控制台 / beta 前端 / gamma 内核 三层进程拓扑），用于快速理解"进程怎么跑、端口怎么分"。另两份是不同镜头，非矛盾：
+> - `docs/LIFEFORM_OS_WHITEPAPER_V6.md`：**生命体分层视角**（L0–L9 六维 + 宪法，对齐白皮书叙事）。
+> - `docs/ARCHITECTURE_MAP.md`：**模块分层视角**（产品 / 内核 / 能力路由 / 基础设施 四层 + 适配器清单）。
+
 ## The Three Realities
 
 AOS runs three conceptual layers that coexist in one codebase:

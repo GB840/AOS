@@ -8,11 +8,20 @@ MCP Server 接进 AOS 的端到端行为。
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("AOS_LOCAL_MCP_SERVER"),
+    reason="需可用本地 MCP 服务（CI/沙箱跳过；本测试自起 localhost server，"
+    "但 conftest 在测试环境拦截所有 localhost 探活，设 AOS_LOCAL_MCP_SERVER=1 本地跑）",
+)
+
+from core.fabric.adapter import InvokeRequest
 from core.fabric.adapters.mcp_client_adapter import MCPClientAdapter
 from core.fabric.capability import Capability
 

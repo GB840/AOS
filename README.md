@@ -40,9 +40,9 @@
 
 ### 1. 后端（Python AOS 内核，FastAPI :8000）
 ```bash
-# 需要 Python 3.14，依赖装在系统 Python
-pip install -r requirements.txt        # 或 pyproject 装配
-python start_all.sh                   # 拉起 API + 相关服务（详见仓库脚本）
+# 需要 Python 3.11+（CI 用 3.11；详见 pyproject requires-python）
+pip install -e ".[dev]"                # 装开发依赖（requirements.txt 已废弃，pyproject 是唯一真相）
+bash start_all.sh                      # 拉起 API + 相关服务（详见仓库脚本）
 # 健康检查
 curl http://127.0.0.1:8000/api/status
 # 团队登录换 JWT（网关登录即转发到此）

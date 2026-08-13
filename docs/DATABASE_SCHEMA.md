@@ -1,8 +1,8 @@
-# AOS v5.0 数据库 Schema（38 张表 · 单一真相层）
+# AOS v5.0 数据库 Schema（42 张表 · 单一真相层）
 
 > 本文件由 `scripts/gen_schema_doc.py` 从 `src/core/database/models/*.py` 的 SQLModel 定义**自动内省**生成，与代码严格一致，修改模型后重跑脚本即可更新，不会漂移。
 
-AOS 全部结构化状态存于**单一 SQLite 数据库**（`config.SQLITE_DB_PATH`，WAL 模式，并开启外键约束），是系统唯一真相来源。全文检索（FTS5）由 `memory` 层的虚拟表提供，不计入下方 38 张 ORM 表。
+AOS 全部结构化状态存于**单一 SQLite 数据库**（`config.SQLITE_DB_PATH`，WAL 模式，并开启外键约束），是系统唯一真相来源。全文检索（FTS5）由 `memory` 层的虚拟表提供，不计入下方 42 张 ORM 表。
 
 **表总数：42**
 

@@ -19,6 +19,14 @@ _DEFAULT_TRACE_PATH = str(
     Path(__file__).resolve().parents[2] / "data" / "trace" / "traces.jsonl"
 )
 
+# 理念8「限最大存储条数防磁盘打满」：traces.jsonl 单文件追加硬上限。
+# 与 trace_store._MAX_TRACE_FILES=500 同源纪律。每请求多 span 高频追加，
+# list_traces/get_trace/get_stats 全文件扫描。上限 5000，达上限搬最旧到
+# traces.archived.jsonl 冷存（调用链数据保全，不物理删）。
+_MAX_TRACES = 5000
+_TRIM_CHECK_EVERY = 100
+_ARCHIVED_SUFFIX = ".archived.jsonl"
+
 
 class Tracer:
     """简单的 jsonl 调用追踪器。"""
@@ -27,6 +35,8 @@ class Tracer:
         self._path = path or os.environ.get("AOS_TRACE_PATH", _DEFAULT_TRACE_PATH)
         self._lock = threading.Lock()
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        # 理念8 轮转计数器
+        self._since_last_trim = 0
 
     def start_trace(
         self, name: str, parent_trace_id: Optional[str] = None, **tags: Any
@@ -77,6 +87,32 @@ class Tracer:
         with self._lock:
             with open(self._path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            # 理念8：防磁盘打满的节流轮转
+            self._since_last_trim += 1
+            if self._since_last_trim >= _TRIM_CHECK_EVERY:
+                self._since_last_trim = 0
+                self._enforce_rotation()
+
+    def _enforce_rotation(self) -> None:
+        """达 _MAX_TRACES 上限时搬最旧到 traces.archived.jsonl 冷存（不物理删）。"""
+        try:
+            if not os.path.exists(self._path):
+                return
+            with open(self._path, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f if ln.strip()]
+            if len(lines) < _MAX_TRACES:
+                return
+            keep = lines[-_MAX_TRACES:]
+            archive = lines[:-_MAX_TRACES]
+            if not archive:
+                return
+            arch_path = self._path + _ARCHIVED_SUFFIX
+            with open(arch_path, "a", encoding="utf-8") as f:
+                f.writelines(archive)
+            with open(self._path, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+        except Exception:  # noqa: BLE001 - 轮转失败不致命
+            pass
 
     def list_traces(self, limit: int = 100) -> list[dict]:
         """列出最近的 N 个 trace(按 trace_id 分组,取最近 limit 个)。"""

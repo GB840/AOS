@@ -37,6 +37,15 @@ def _events_path() -> str:
     return os.path.join(_pulse_dir(), "events.jsonl")
 
 
+# 理念8「限最大存储条数防磁盘打满」：events.jsonl 单文件追加硬上限。
+# 与 trace_store._MAX_TRACE_FILES=500 同源纪律。每 workflow run/step run/feedback
+# 都 flush 写入，get_failure_analysis/get_feedbacks 全文件扫描。上限 10000，
+# 达上限搬最旧到 events.archived.jsonl 冷存（事件流数据保全，不物理删）。
+_MAX_EVENTS = 10000
+_TRIM_CHECK_EVERY = 100  # 每 N 次 flush 检查一次上限
+_ARCHIVED_SUFFIX = ".archived.jsonl"
+
+
 class PulseCollector:
     """数据采集器。"""
 
@@ -46,6 +55,8 @@ class PulseCollector:
         self._buffer: List[Dict] = []
         self._max_buffer = 100
         self._cost_tracker = None  # 懒加载，避免循环 import
+        # 理念8 轮转计数器（_enforce_rotation 触发节流）
+        self._since_last_trim = 0
 
     def _get_cost_tracker(self):
         """懒加载 CostTracker（避免循环 import）。"""
@@ -396,8 +407,37 @@ class PulseCollector:
                     for event in self._buffer:
                         f.write(json.dumps(event, ensure_ascii=False) + "\n")
                 self._buffer.clear()
+                # 理念8：防磁盘打满的节流轮转（每次 flush 算 1 次）
+                self._since_last_trim += 1
+                if self._since_last_trim >= _TRIM_CHECK_EVERY:
+                    self._since_last_trim = 0
+                    self._enforce_rotation()
             except Exception as e:
                 logger.debug("写入事件失败: %s", e)
+
+    def _enforce_rotation(self) -> None:
+        """达 _MAX_EVENTS 上限时搬最旧到 events.archived.jsonl 冷存（不物理删）。"""
+        try:
+            path = _events_path()
+            if not os.path.exists(path):
+                return
+            with open(path, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f if ln.strip()]
+            if len(lines) < _MAX_EVENTS:
+                return
+            keep = lines[-_MAX_EVENTS:]
+            archive = lines[:-_MAX_EVENTS]
+            if not archive:
+                return
+            arch_path = path + _ARCHIVED_SUFFIX
+            with open(arch_path, "a", encoding="utf-8") as f:
+                f.writelines(archive)
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+            logger.info("events 轮转：%d 条搬到冷存 %s，主文件保留 %d 条",
+                        len(archive), arch_path, len(keep))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("events rotation failed: %s", e)
 
 
 # 单例

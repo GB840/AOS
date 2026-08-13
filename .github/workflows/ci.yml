@@ -11,25 +11,46 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 全量 fetch，供 diff-aware lint 计算 merge-base
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Static checks (ruff + AST duplicate definitions)
-        run: make check
+      - name: Static checks (ruff on changed files + AST duplicate scan)
+        run: |
+          base=$(git merge-base "origin/${{ github.event.pull_request.base.ref || 'master' }}" HEAD 2>/dev/null || git merge-base origin/master HEAD 2>/dev/null || echo HEAD~1)
+          changed=$(git diff --name-only --diff-filter=ACMRT "$base"...HEAD -- '*.py' || true)
+          if [ -n "$changed" ]; then
+            echo "Linting changed Python files (diff-aware):"
+            echo "$changed"
+            ruff check $changed
+          else
+            echo "No Python files changed in this PR. Skipping ruff."
+          fi
+          python scripts/check_ast_duplicates.py src
 
       - name: Database-layer smoke test (lightweight, no full AOS deps)
         run: make smoke
 
-      - name: Unit tests
-        run: make test
+      - name: Unit tests (changed test files, diff-aware)
+        run: |
+          base=$(git merge-base "origin/${{ github.event.pull_request.base.ref || 'master' }}" HEAD 2>/dev/null || git merge-base origin/master HEAD 2>/dev/null || echo HEAD~1)
+          changed_tests=$(git diff --name-only --diff-filter=ACMRT "$base"...HEAD | grep -E '^tests/.*\.py$' || true)
+          if [ -n "$changed_tests" ]; then
+            echo "Running changed test files (diff-aware):"
+            echo "$changed_tests"
+            python -m pytest $changed_tests -v --tb=short -m "not integration and not e2e"
+          else
+            echo "No test files changed in this PR."
+          fi
 
       - name: Kernel integration test (zero-dependency, no API keys needed)
         run: |

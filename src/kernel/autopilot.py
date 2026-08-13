@@ -27,8 +27,9 @@ import time
 import hashlib
 import threading
 from typing import Any, Dict, List, Optional
-from core.fabric.adapter import InvokeResult, InvokeRequest, extract_text
-from core.fabric.adapters.ag2_adapter import _dedup_text
+# P0 架构修复：_dedup_text 已提升至合约层（adapter.py），
+# 内核层不再直接 import 具体适配器（ag2_adapter），落地「内核零依赖」原则。
+from core.fabric.adapter import InvokeResult, InvokeRequest, extract_text, _dedup_text
 from kernel.run_state_store import (
     create_run, save_checkpoint, load_checkpoint, mark_done,
 )
@@ -40,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 
 # ---- 适配器惰性单例 ------------------------------------------------
+# P1 并发修复：所有惰性单例统一用 _SINGLETON_LOCK + double-checked locking
+# 保护，消除 check-then-act 竞态（构造期间另一线程也通过 None 检查 → 重复
+# 构造重型对象 / 句柄泄漏）。与 pulse/ cost_tracker/ keystore 同纪律。
+
+_SINGLETON_LOCK = threading.Lock()
 
 _search: Any = None
 _code_exec: Any = None
@@ -49,24 +55,30 @@ _ag2: Any = None
 def _get_search():
     global _search
     if _search is None:
-        from core.fabric.adapters.search_adapter import SearchAdapter
-        _search = SearchAdapter()
+        with _SINGLETON_LOCK:
+            if _search is None:
+                from core.fabric.adapters.search_adapter import SearchAdapter
+                _search = SearchAdapter()
     return _search
 
 
 def _get_code_exec():
     global _code_exec
     if _code_exec is None:
-        from core.fabric.adapters.code_execution_adapter import CodeExecutionAdapter
-        _code_exec = CodeExecutionAdapter()
+        with _SINGLETON_LOCK:
+            if _code_exec is None:
+                from core.fabric.adapters.code_execution_adapter import CodeExecutionAdapter
+                _code_exec = CodeExecutionAdapter()
     return _code_exec
 
 
 def _get_ag2():
     global _ag2
     if _ag2 is None:
-        from core.fabric.adapters.ag2_adapter import AG2Adapter
-        _ag2 = AG2Adapter()
+        with _SINGLETON_LOCK:
+            if _ag2 is None:
+                from core.fabric.adapters.ag2_adapter import AG2Adapter
+                _ag2 = AG2Adapter()
     return _ag2
 
 
@@ -77,8 +89,10 @@ def _get_repo():
     """仓库自进化芯粒惰性单例（action.repo）。"""
     global _repo
     if _repo is None:
-        from kernel.plugins.repo_agent import RepoAgent
-        _repo = RepoAgent()
+        with _SINGLETON_LOCK:
+            if _repo is None:
+                from kernel.plugins.repo_agent import RepoAgent
+                _repo = RepoAgent()
     return _repo
 
 
@@ -99,14 +113,17 @@ def _get_hub():
     if not _AUTOPILOT_USE_HUB:
         return None
     if _HUB is None and not _HUB_ATTEMPTED:
-        _HUB_ATTEMPTED = True
-        try:
-            logger.info("autopilot: 首次路由经 FabricHub 统一派发（惰性构造中…）")
-            from kernel.plugins.fabric_hub import get_fabric_hub
-            _HUB = get_fabric_hub()
-        except Exception:  # noqa: BLE001
-            logger.warning("autopilot: FabricHub 构造失败，透明降级到本地适配器",
-                           exc_info=True)
+        with _SINGLETON_LOCK:
+            # DCL：持锁后二次检查，防并发首调各自构造 20+ 适配器的重型 FabricHub
+            if _HUB is None and not _HUB_ATTEMPTED:
+                _HUB_ATTEMPTED = True
+                try:
+                    logger.info("autopilot: 首次路由经 FabricHub 统一派发（惰性构造中…）")
+                    from kernel.plugins.fabric_hub import get_fabric_hub
+                    _HUB = get_fabric_hub()
+                except Exception:  # noqa: BLE001
+                    logger.warning("autopilot: FabricHub 构造失败，透明降级到本地适配器",
+                                   exc_info=True)
     return _HUB
 
 
@@ -175,7 +192,11 @@ def _get_causal_distiller() -> Optional[EvolutionDistiller]:
     global _DISTILLER, _DISTILLER_INITED
     if _DISTILLER_INITED:
         return _DISTILLER
-    _DISTILLER_INITED = True
+    with _SINGLETON_LOCK:
+        # DCL：持锁后二次检查，防并发首调各自创建 EvolutionDistiller（双份落盘句柄）
+        if _DISTILLER_INITED:
+            return _DISTILLER
+        _DISTILLER_INITED = True
     # 0) 显式关闭开关：AOS_AUTOPILOT_DISTILL_OFF=1 退回 None（极端调试用）
     if os.environ.get("AOS_AUTOPILOT_DISTILL_OFF") == "1":
         return None
@@ -266,7 +287,6 @@ def _compute_causal_hints(failed: List[str], distiller: Optional[EvolutionDistil
     纯函数、可单测：从失败步文本里解析能力标签，逐一查因果建议；无蒸馏器或
     样本不足则双双返回空——反思退化回质疑 agent 诊断，绝不伪造证据。
     """
-    from typing import Tuple
     hints: Dict[str, Any] = {}
     if distiller is not None:
         for f in failed:
@@ -351,6 +371,34 @@ def _zhipu_generate(prompt: str, timeout: float = 90.0) -> Optional[str]:
         return None
 
 
+def _lifeform_pick_model(heavy: str) -> str:
+    """把生命体层接进模型选择：energy 低于阈值 → 自动降档到轻模型。
+
+    这是「生命体层真驱动运行时决策」的接入点（白皮书 L0C 决策锚定）。
+    仅作用于主生成链路；反思链路（_ollama_generate 默认模型）刻意不降档——
+    反思模型换小会退化成鹦鹉，使自进化闭环静默变成假闭环。
+    任何异常都退回 heavy，绝不阻断主链路。
+    前提：降档仅在配置了 AOS_LLM_MODEL（声明重模型）时触发；纯 Ollama
+    默认未声明重模型时不降档，属合理默认（系统不知重模型是哪个），非失效。
+    轻模型可用 AOS_LLM_LIGHT_MODEL 覆盖，默认 qwen2.5:3b（无该 env 时）。
+    """
+    try:
+        from kernel.lifeform_runtime import get_lifeform_runtime
+        light = os.environ.get("AOS_LLM_LIGHT_MODEL", "qwen2.5:3b")
+        return get_lifeform_runtime().pick_model(heavy, light)
+    except Exception:  # noqa: BLE001
+        return heavy
+
+
+def _lifeform_after_run(failed: bool = False, cost: float = 0.05) -> None:
+    """一次推理跑完回写体征，形成「跑得多→energy 降→下次自动降档」闭环。"""
+    try:
+        from kernel.lifeform_runtime import get_lifeform_runtime
+        get_lifeform_runtime().on_run_finished(cost=cost, failed=failed)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _openai_compat_generate(prompt: str, timeout: float = 90.0) -> Optional[str]:
     """OpenAI 兼容端点生成（stdlib only），读取 AOS_LLM_BASE_URL / AOS_LLM_MODEL。
 
@@ -363,7 +411,8 @@ def _openai_compat_generate(prompt: str, timeout: float = 90.0) -> Optional[str]
         return None
     import json as _json
     import urllib.request
-    model = os.environ.get("AOS_LLM_MODEL", "qwen3:8b")
+    # 生命体真驱动：energy 低时自主降档到轻模型（非仅读 env）。
+    model = _lifeform_pick_model(os.environ.get("AOS_LLM_MODEL", "qwen3:8b"))
     url = base.rstrip("/") + "/chat/completions"
     body = _json.dumps({
         "model": model,
@@ -393,17 +442,25 @@ def _llm_generate(prompt: str, *, allow_zhipu: bool = True) -> Optional[str]:
     # 1) 开源/OpenAI 兼容端点优先
     out = _openai_compat_generate(prompt)
     if out:
+        _lifeform_after_run(failed=False)
         return out
-    # 2) 本机 Ollama 兜底
+    # 2) 本机 Ollama 兜底（同样受生命体降档支配）
     try:
-        ollama_out = _ollama_generate(prompt, model=os.environ.get("AOS_LLM_MODEL"))
+        _m = os.environ.get("AOS_LLM_MODEL")
+        ollama_out = _ollama_generate(
+            prompt, model=_lifeform_pick_model(_m) if _m else None)
         if ollama_out:
+            _lifeform_after_run(failed=False)
             return ollama_out
     except Exception:  # noqa: BLE001
         pass
     # 3) 智谱 opt-in（默认关闭，需显式开关）
     if allow_zhipu and os.environ.get("AOS_ZHIPU_OPTIN") == "1" and os.environ.get("ZHIPU_API_KEY"):
-        return _zhipu_generate(prompt)
+        z = _zhipu_generate(prompt)
+        _lifeform_after_run(failed=not z)
+        return z
+    # 4) 全链路不通：记一次失败体征（debt 上升 → 下次更保守）
+    _lifeform_after_run(failed=True)
     return None
 
 
@@ -725,7 +782,6 @@ def _ensure_parent_dirs(code: str) -> None:
 
 def _route(capability: str, payload: Dict[str, Any]) -> Any:
     """把 OrchestrationChiplet 的能力调用派发给真实适配器。"""
-    from core.fabric.adapter import InvokeRequest
 
     # 派发边界策略校验（理念6 诚实：让 PolicyEngine 在真实路径上具有约束力）。
     # 默认审计模式仅记录；设 AOS_POLICY_ENFORCE=1 时命中 deny 规则即阻断，
@@ -2090,19 +2146,35 @@ def _inject_fix_hints(task: str, hints: List[str]) -> str:
     )
 
 
-def _get_autopilot_core(tenant_id: Optional[str] = None) -> "AdaptiveCore":
+def _get_autopilot_core(tenant_id: Optional[str] = None) -> Any:
     """惰性取**该租户**的内核自适应中枢（避免模块级循环依赖：adaptive→learning_loop
     在方法内 import autopilot.run，故这里也惰性 import）。
 
     tenant_id=None → 共享默认实例（自用模式，行为与之前一致）；
     非空 → 该租户独占稳态与失败记忆库，教训不跨租户串味（母纲「主权归你」）。
     """
-    from kernel.adaptive import get_adaptive_core, StageGuard
+    from kernel.adaptive import get_adaptive_core
     return get_adaptive_core(tenant_id=tenant_id)
 
 
 # 让 StageGuard 在本模块可见（供 run()/_advance_cycle 环节隔离使用）
 from kernel.adaptive import StageGuard  # noqa: E402  (置于函数后，惰性确保无环)
+
+
+def _maybe_install_default_auditor():
+    """MEA Auditor 接线（只读审计关卡）：autopilot 跑任务时让 Gate 真正生效。
+
+    仅在 run_state_store 尚未注册审计器时，接入默认环境事实审计器；
+    若调用方（如测试）已 set_auditor，则不被覆盖。失败静默放行，绝不因审计器
+    装配问题阻塞 run。
+    """
+    try:
+        import kernel.run_state_store as _rss
+        if _rss._AUDITOR is None:
+            from kernel.auditor import build_default_auditor
+            _rss.set_auditor(build_default_auditor())
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def run(task: str, planner: str = "ag2", run_id: Optional[str] = None,
@@ -2121,6 +2193,7 @@ def run(task: str, planner: str = "ag2", run_id: Optional[str] = None,
     Returns: 顶层含 reflection 字段（轮次/是否达上限）+ run_id。
     """
     start = time.time()
+    _maybe_install_default_auditor()  # MEA：让 AuditorGate 在真实 run 中生效
     # 环节1：规划（动态——规划死则降级为「空计划」，以结构化结果收尾，不崩整轮）
     core = _get_autopilot_core(tenant_id)
     # PREFLIGHT（自进化闭环「读回」）：查共享失败记忆库，命中已知修复则注入规划输入，
@@ -2181,6 +2254,7 @@ def resume_run(run_id: str) -> Dict[str, Any]:
     不重跑已完成的轮次（checkpoint 已保存其成功产出与步骤），只续跑断点之后。
     status 已是 done 却来 resume → 直接返回已存结果，不重跑。
     """
+    _maybe_install_default_auditor()  # MEA：让 AuditorGate 在 resume 中同样生效
     snap = load_checkpoint(run_id)
     if not snap:
         return {"error": f"无 checkpoint: {run_id}"}

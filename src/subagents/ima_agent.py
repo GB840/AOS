@@ -149,8 +149,8 @@ class IMASubagent:
             "operation": input_data.get("operation"),
             "configured": False,
             "error": (
-                "IMA 未配置：请在 .env 设置 IMA_OPENAPI_APIKEY（Client ID 已有默认值 "
-                "b1f8f7574dc75ac48e7bb0624ff72482）。未配置时不返回伪造的知识库结果。"
+                "IMA 未配置：请在 .env 设置 IMA_OPENAPI_CLIENTID 与 IMA_OPENAPI_APIKEY。"
+                "未配置时不返回伪造的知识库结果。"
             ),
         }
 

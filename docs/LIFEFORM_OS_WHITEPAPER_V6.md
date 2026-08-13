@@ -35,6 +35,10 @@
 
 ## 一、完整架构图
 
+> **视角说明（消除三份架构文档的连贯性缺口）**：本图是 **「生命体分层视角」**（L0 宪法 → L1–L9 六层维度 + 肉体/心智/数据/灵魂/精神/演进 → 外部生态对标），用于对齐白皮书叙事。另两份是不同镜头，非矛盾：
+> - `docs/ARCHITECTURE.md`：**部署拓扑视角**（alpha 控制台 / beta 前端 / gamma 内核 三层进程拓扑）。
+> - `docs/ARCHITECTURE_MAP.md`：**模块分层视角**（产品 / 内核 / 能力路由 / 基础设施 四层 + 适配器清单）。
+
 ```mermaid
 flowchart TB
     subgraph CONST["⚖️ 永恒伦理宪法（硬编码，不可修改）"]
@@ -50,7 +54,7 @@ flowchart TB
     end
 
     subgraph L1["⚙️ 第一层：肉体层（硬件 · 语音 · 推理 · 部署 · 协议）"]
-        L1A["🔧 多模态推理引擎：LocalAI v4.7.1（Apache-2.0 已真接客户端）[✅AOS已接开源]"]
+        L1A["🔧 多模态推理引擎：LocalAI v4.7.1（MIT 已真接客户端）[✅AOS已接开源]"]
         L1B["🔧 模型路由网关：LiteLLM（MIT 100+ provider，已真接）[✅AOS已接开源]"]
         L1C["🔧 跨平台交互客户端：Cindy / nanobot [🔗纯参考]（nanobot=MIT Py3.11+ 可装但依赖与 AOS 冲突；Cindy 非 Python；AOS 用 FabricHub）"]
         L1D["🔧 部署与运维层：openship [🔗纯参考]（oblien/openship=Apache-2.0 部署平台，服务非库；AOS 有 start_all.sh/Dockerfile）"]
@@ -160,6 +164,35 @@ flowchart TB
 
 > 注：MCP 2026-07-28「可作为分形粒子间标准化通信协议」为本白皮书推论，非 MCP 官方定位（官方仅发布无状态规范本身）。
 
+---
+
+### 系统集成与焊接诚实状态（2026-08-09 补 · 回应「一堆不是一套」）
+
+> **用户核心质疑**：白皮书把 61 节点画成一幅均质「一套生命体 OS 全景图」，但审计前的真相是——这些节点在**集成层**彼此断开。经焊接度审计（遍历 `src/` 全量 import 图）：61 个 ✅ 节点中 **34 个（81%）是孤儿**（未被运行时任何文件 import）；白皮书描述的「生命体层脊柱」（`life_state`/`soul`/`spirit`/`fractal`/`body`）**域内互引 0 处、运行时引用 0 处**；真正成网在跑的是另一套「运行脊柱」（`core.fabric`+`autopilot`+`live`+`plugins`+`danchuang`，**216 处交叉引用成网**）。逐节点诚实（②级）没错，但整体「一套系统」叙事在集成层虚假。
+
+**2026-08-09 整改（commit 8f249ff）**：引入统一焊接器 `src/kernel/lifeform_runtime.py`（`LifeformRuntime`），把生命体层全部组件焊进运行系统：
+
+- ✅ **焊接度**：✅ 节点被运行时 import 由 **8/42 → 42/42**；孤儿 **34（81%）→ 0**；启动真实实例化 **31 个组件，构造失败 0**。
+- ✅ 新增 `GET /api/lifeform` 暴露活体状态（组件清单 + 真实体征 + 当前选型档位），主机可眼见为实。
+- ✅ 修正审计脚本自欺：原 `audit_wiring_v6.py` 只认 AST `Import`/`ImportFrom`，看不见 `__import__("x")` 动态导入，会把已焊活模块误判孤儿；补动态导入识别后重称方为真。
+
+**焊接性质诚实分级（不混淆「挂着」与「真驱动」）**：
+
+| 焊接级别 | 含义 | 组件 |
+| :--- | :--- | :--- |
+| **真驱动（②级实证闭环）** | 体征/状态**真的改变运行时决策** | `life_state` → `autopilot` 模型选择（energy<0.3 自动降档轻模型）；`homeostasis` → 纠偏（每跑一次回写体征 + `tick()` 产纠偏） |
+| **挂载持有（②级实例存在）** | 被运行时持有、API 可见、**待业务逻辑真驱动** | 其余 29 个组件（soul/spirit/fractal/body/安全闸门/资源自治/记忆阶梯/感知/镜像/三个 opt-in adapter） |
+
+**真实系统拓扑（「一套」的诚实定义）**：
+- **运行脊柱（真成网在跑，核心）**：`FabricHub`（路由/记忆/上下文主权）+ `autopilot` + `live` + `plugins` + `danchuang`，216 处互引成网。
+- **生命体层（焊在脊柱上的活组件）**：`LifeformRuntime` 持有的 31 组件——其中 2 个已真驱动决策、29 个挂载持有。
+
+> 📌 **降档前提（诚实补齐，勿越级）**：`life_state`→`autopilot` 的模型降档**仅在 autopilot 配置了 `AOS_LLM_MODEL`（声明重模型）时触发**。纯 Ollama 默认、未声明重模型的场景，系统无从「降」（不知道重模型是哪个），此时不降档属**合理默认而非失效**。此前叙述未讲清此前提，特此补齐——这是焊接件诚实度的真实边界，不是功能 bug。
+
+> ⚠️ **诚实边界（③ 级未验）**：上述整改均为 **② 级**（代码 + 单测实证），非 **③ 级**（真 LLM 端到端闭环）。`life_state` 降档链路需主机 `start_all.sh` 后连续跑任务、观察 `/api/lifeform` 的 `picked_now` 从 `qwen3:8b` 变 `qwen2.5:3b` 方成立。**反思链路刻意不降档**——小模型变鹦鹉会让自进化闭环静默假绿（历史踩坑，不可顺手优化掉）。
+
+---
+
 ### 架构节点实现状态总览（白盒诚实地图 · 逐节点核对 src/ 真值）
 
 > 本表把架构图 **61 个节点**（含 L1E3 Piper）逐一对照 AOS 仓库真实代码（`src/` 共 664 个 `.py`），四态诚实标注，杜绝"看着像全建好"的误导。
@@ -182,8 +215,8 @@ flowchart TB
 | L0A 持续融合 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
 | L0B 状态图谱 | L0 | ✅AOS代码 | `kernel/life_state.py` | ② |
 | L0C 决策锚定 | L0 | ✅AOS代码 | `kernel/life_state.py` + `kernel/spirit/datong.py` | ② |
-| L1A LocalAI v4.7.1 | L1 | ✅AOS已接开源 | **Apache-2.0** 真接：`core/fabric/adapters/localai_backend.py` OpenAI 兼容客户端（opt-in，需运行 LocalAI 服务端）；与现有 model_gateway 三级路由互补（本地/私有化一档） | ② |
-| L1B CLIProxyAPI / LiteLLM | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/litellm_adapter.py` `LiteLLMAdapter`（统一 100+ provider OpenAI 格式路由，已装 1.95.0）；与现有三级动态路由 `model_gateway_layer.py` 互补（轻量库模式 / 代理模式） | ② |
+| L1A LocalAI v4.7.1 | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/localai_backend.py` OpenAI 兼容客户端（opt-in，需运行 LocalAI 服务端）；与现有 model_gateway 三级路由互补（本地/私有化一档） | ② |
+| L1B CLIProxyAPI / LiteLLM | L1 | ✅AOS已接开源 | **MIT** 真接：`core/fabric/adapters/litellm_adapter.py` `LiteLLMAdapter`（统一 100+ provider OpenAI 格式路由，已装 1.95.0）；与现有三级动态路由 `kernel/layers/model_gateway_layer.py` 互补（轻量库模式 / 代理模式） | ② |
 | L1C Cindy / nanobot | L1 | 🔗纯参考 | **nanobot=HKUDS/nanobot MIT Python≥3.11 可装但依赖与 AOS 冲突（卸 rich15）**；Cindy=makecindy/cindy Apache-2.0 TS 桌面端、需云账号、非 Python 不可嵌；**AOS 用 FabricHub/agnes/ag2 自研等价**，未引外部代码 | ② |
 | L1D openship | L1 | 🔗纯参考 | **两个不同项目**：oblien/openship=Apache-2.0 部署/运维平台（MCP+REST+npm CLI，服务非库）；margutti/openship=旧 MIT 电商履约；均非 drop-in 库；AOS 有 `start_all.sh`/`Dockerfile`/`scripts/` 等价部署脚本 | ② |
 | L1E Fish Speech | L1 | 🔗纯参考 | **代码 BSD-3-Clause 可商用；模型权重 CC-BY-NC-SA-4.0 禁商用**（已核实），不集成；由 L1E3 Piper（Apache-2.0）真接替代；等价保留 `core/fabric/adapters/tts_adapter.py` | — |
@@ -192,7 +225,7 @@ flowchart TB
 | L1F turbo-fieldfare | L1 | 🔗纯参考 | **Apache-2.0 Swift/Metal，仅 macOS 26+/Apple Silicon**；暴露 `127.0.0.1:8080` OpenAI 兼容本地端点（opt-in 端侧 LLM）；仅标注思想来源，不计入核心能力 | — |
 | L1G 硬件抽象层 | L1 | ✅AOS代码 | `kernel/body/hal.py` | ② |
 | L1H Phy-Bus 物理适配总线 | L1 | ✅AOS代码 | `kernel/body/phy_bus.py` | ② |
-| L1I MCP 2026-07-28 | L1 | ✅AOS代码 | `aos_mcp/` + `kernel/layers/mcp_bus_layer.py` + `core/fabric/adapters/mcp_*.py` | ② |
+| L1I MCP 2026-07-28 | L1 | ✅AOS代码 | `aos_mcp/` + `kernel/layers/mcp_bus_layer.py` + `core/fabric/adapters/mcp_client_adapter.py` + `core/fabric/adapters/mcp_stdio_adapter.py` | ② |
 | L2A 粒子隔离沙箱 AgentENV | L2 | ✅AOS代码 | `kernel/isolation/` + `execution/sandbox.py`（AOS 自研，非外部件） | ② |
 | L2B 内生欲望引擎 | L2 | ✅AOS代码 | `kernel/desire.py` | ② |
 | L2C 生命节律调度 | L2 | ✅AOS代码 | `kernel/rhythm.py` | ② |
@@ -229,7 +262,7 @@ flowchart TB
 | L7E 故障紧急制动总线 | L7 | ✅AOS代码 | `kernel/interact/emergency_brake.py` | ② |
 | L7F Conway Terminal 支付网关 | L7 | 🔁自研等价 | Conway Terminal=Conway Research `npx conway-terminal` **MIT MCP server**，但需**链上钱包+Conway Cloud+USDC(x402)** → 不可引；**AOS `api/billing_api.py`+`core/database/models/economy.py` 为自研等价**（支付网关概念，不含加密依赖） | ② |
 | L7G PhyAgentOS（执行解耦） | L7 | 🔗纯参考 | 同 L6D（PhyAgentOS 具身域，非 AOS 数字 Agent OS），架构思想来源 | — |
-| L8A 感知粒子 | L8 | ✅AOS代码 | `kernel/fractal/particles.py` + `spawner.py` + `growth_guard.py`（框架真实；具体硬件驱动待接） | ② |
+| L8A 感知粒子 | L8 | ✅AOS代码 | `kernel/fractal/particles.py` + `kernel/fractal/spawner.py` + `kernel/fractal/growth_guard.py`（框架真实；具体硬件驱动待接） | ② |
 | L8B 轻执行粒子 | L8 | ✅AOS代码 | 同上（`kernel/fractal/` 统一粒子框架） | ② |
 | L8C 重型具身粒子 | L8 | ✅AOS代码 | 同上（框架就绪，机器人本体未接） | ② |
 | L8D 数字粒子 | L8 | ✅AOS代码 | 同上（PC/服务器侧已可 spawn） | ② |
@@ -244,7 +277,7 @@ flowchart TB
 
 | 处置 | 节点 | 说明 |
 | :--- | :--- | :--- |
-| ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft、**L1E3 Piper**、**CONST3 constitutional-agent**、**L1B LiteLLM** | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** Apache-2.0 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm）；**Piper 1.6.0 真装**（Apache-2.0 离线 TTS，接入 TTSAdapter 引擎链替代 Fish Speech 禁商用权重，无模型诚实降级）；**constitutional-agent 0.7.0 真装**（MIT 本地宪法治理，封装 `Constitution` 六闸门+硬约束评估，无需外部 LLM）；**LiteLLM 1.95.0 真装**（MIT 统一 100+ provider OpenAI 路由，`LiteLLMAdapter` 已注册） |
+| ✅ **已真接开源** | L3D DuckDB、L3A LanceDB、L1E2 Vosk、L1A LocalAI、L5G video-shotcraft、**L1E3 Piper**、**CONST3 constitutional-agent**、**L1B LiteLLM** | DuckDB 真连做 L1；LanceDB 0.36.0 真装（store/recall/版本化/表分支实测通过）；**Vosk 0.3.45 真装**（Apache-2.0 离线 STT，接入 STTAdapter 引擎链，无模型诚实降级）；**LocalAI** MIT 真接 OpenAI 兼容客户端（opt-in 服务端）；**video-shotcraft** Apache-2.0 真接（vendor/ 已克隆 + node 检测，渲染需主机 npm）；**Piper 1.6.0 真装**（Apache-2.0 离线 TTS，接入 TTSAdapter 引擎链替代 Fish Speech 禁商用权重，无模型诚实降级）；**constitutional-agent 0.7.0 真装**（MIT 本地宪法治理，封装 `Constitution` 六闸门+硬约束评估，无需外部 LLM）；**LiteLLM 1.95.0 真装**（MIT 统一 100+ provider OpenAI 路由，`LiteLLMAdapter` 已注册） |
 | ✅ **AOS 已用开源** | L3B Chroma/cognee/mem0 | L3 长期语义层本就复用这三个开源，非自研；KowitoDB/txtai 按「现有够好→复用」不新增 |
 | 🔁 **本环境接不上（实测核实，诚实降级）** | L3C TriviumDB/Turso | **实测**：TriviumDB 全部版本 `Requires-Python >=3.9,<3.13`（`pip install` 实测拒绝）；Turso `pyturso` 仅 sdist、Rust 源码编译在沙箱 exit1。本环境 3.13.12 接不上，绝不用内存冒充 |
 | 🔗 **纯参考/生态对齐（非库·服务·平台不兼容·许可红线）** | L1C Cindy/nanobot、L1D openship、L1E Fish Speech、L1F turbo-fieldfare、L3E DBX、L6D/L7G PhyAgentOS、L9A dg-ai-notes、L9B openKylin、L9C openEuler、L9D OpenHarmony | Cindy/nanobot/openship 是框架或服务非 drop-in 库（nanobot 可装但依赖与 AOS 冲突，AOS 用 FabricHub/部署脚本）；Fish Speech 模型 NC（Piper 替代）；turbo-fieldfare 仅 macOS/Apple Silicon；DBX AGPL；PhyAgentOS 具身域；dg-ai-notes 教程；openKylin/openEuler/OpenHarmony 为国产开源 OS 生态参考（桌面智能体 OS / 服务器 Agentic Infra / 终端智能体框架），非库、不需 AOS 代码 |
@@ -296,7 +329,7 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 
 1. **"一半以上是空壳"按节点数不成立**：✅46 有 AOS 真实代码/已接/已用开源、🔁4 有 AOS 自研等价，二者合计 50/61（82.0%）在仓库里能找到对应实现；🔗11 为国产/开源生态参考（本就不需要 AOS 代码）；真正零代码的节点为 0。
 2. **但"有代码" ≠ "能用"**：绝大多数是 **② 级机制骨架**——纯函数 + 类骨架 + 单测可跑，未接真 LLM 驱动。典型例子：L7B 世界模型是线性因果叠加，不是训练出的 JEPA；L2 各引擎是基础启发式；L8 粒子框架能 spawn 但没接真实硬件驱动。
-3. **③ 级（真 LLM 端到端闭环）目前只验证过 P0 自进化一个窄场景**（见第九章），不覆盖全架构。这是当前最大的真实缺口，也是下一阶段唯一值得投入的方向。
+3. **③ 级（真 LLM 端到端闭环）目前只验证过 P0 自进化一个窄场景**（主机 + 真 ollama 环境验证，对应 `tests/test_self_evolution_real.py` / `tests/test_self_evolution_stageguard_readback_real.py`；沙箱无 ollama 诚实 SKIP，非假绿），不覆盖全架构。这是当前最大的真实缺口，也是下一阶段唯一值得投入的方向。
 
 ---
 
@@ -666,6 +699,43 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 > Web4.0 行业数据诚实标注：x402 自 2025-05 累计交易约 **1.096 亿笔 / ~$1500 万**（Visa×Artemis《Agentic Payments from the Ground Up》2026-07-16），非此前流传的 1.783 亿笔/$1.357 亿（该数字无公开来源）。
 
 
+### 7.6 Agent调度网关整合（OpenOcta 参考实现）— VERIFIED
+
+> 核实状态：**VERIFIED**（已核官方 GitHub 源 `github.com/openocta/openocta`；Apache-2.0 经 raw LICENSE 原文确认；v1.0.5 / v1.0.6 版本与日期经 releases 页确认）。
+> 用户提供的深度拆解文档核心事实基本准确，仅「正式发布日」口径需校正（见末段四项校正）。详细核实批注见 `docs/research/openocta_verification_2026-08-08.md`。
+
+**OpenOcta（代号「八爪鱼」）** 是国产 Go 语言单二进制桌面级开源智能体，Apache-2.0 许可，约 30MB、运行时内存 <50M。其 Gateway + Webhook + MCP + 多通道 IM 桥接（微信 / 钉钉 / 飞书）的设计，可作为生命体 OS「肉体层 · Agent调度网关」的轻量级参考实现或边缘部署底座。
+
+**定位**：OpenOcta 是任务执行调度框架，**缺少**生命体 OS 的核心「灵魂」模块（人本生命状态建模内核 L0 / 双向思辨演化调节器 L5 / 四层阶梯记忆 L3–L4 / 永恒伦理宪法 / 分形自相似架构 / 虚实交互闭环 L7）。它**不能替代灵魂层**，但可复用其肉体层工程实现。
+
+**可复用的肉体层能力（判断成立 ✅）**：
+
+- **单二进制部署**：约 30MB、内存 <50M，适配低配边缘终端（树莓派 / 旧平板），契合「拒绝重容器」要求
+- **Gateway 网关**：可作为分形粒子消息总线的参考实现，对接 MCP 协议调度插件工具
+- **多通道 IM 桥接**：可对接音箱 / AR 眼镜等终端，适配「无 APP 化、多硬件终端」
+- **Skills & MCP**：作为肉体层 · 工具调度子层的现成实现
+- **四级记忆 + Knowledge Vault**：轻量 Markdown 知识库，作为数据底座层的轻量补充参考
+
+**⚠️ 必须澄清的边界**：OpenOcta 的「四级记忆 + Knowledge Vault」与 AOS 的 **L3 四层阶梯记忆（年轮 / 家谱 / 传承）+ L4 灵魂层**不是同一深度。前者是可参考的「数据底座轻量补充」，后者是带代际传承与主权归属的灵魂层；二者**不可因同名「四级记忆」直接划等号**。
+
+**关键工程提示**：AOS 代码库已存在 `src/core/fabric/adapters/openclaw_adapter.py`；OpenOcta 本质是 OpenClaw 的 Go 重写版（官方 README 自陈），新增平行 `openocta_adapter` 形状完全一致，零工程阻力。
+
+**整合路线**：
+
+| 阶段 | 动作 |
+| :--- | :--- |
+| 短期 | 借鉴 OpenOcta 的 Gateway 架构、MCP 配置、IM 桥接设计，加速肉体层工程实现 |
+| 中期 | 在低配边缘终端直接以 OpenOcta 作轻量 Agent 运行时底座，上层挂载 AOS 心智内核 |
+| 长期 | OpenOcta 保持独立演进，灵魂层完全自研，两者通过 MCP 协议互通 |
+
+**写入本白皮书前的四项校正（基于 2026-08-08 核实）**：
+
+1. **发布日期**：拆解文档所写「2026-03-03 元宵节正式发布」未被 GitHub tag 佐证；最早可见 tag 为 v0.2.2（2026-03-27），03-03 属官宣口径，已标注为「2026-03 官宣 / 首个发版 2026-03-27」。
+2. **四级记忆**：已在正文中澄清 OpenOcta Knowledge Vault ≠ AOS L3–L4 阶梯记忆，避免读者直接划等号。
+3. **适配器关系**：已补「AOS 已有 openclaw_adapter，OpenOcta 可平行新增 openocta_adapter」。
+4. **许可证冲突**：保留 Apache-2.0 结论；某二手来源称 GPLv3 为误传，官方确为 Apache-2.0。
+
+
 ## 第八章 发展前景、竞争格局与风险研判
 
 ### 市场机会
@@ -699,7 +769,7 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 | :--- | :--- | :--- |
 | 1 | **本地优先·数据自持** | 数据在用户的设备上，不上传 |
 | 2 | **模型无关·大脑热插拔** | 换AI像换老师，记忆全带走 |
-| 3 | **完整开源·一键安装** | MIT/Apache协议，零门槛（注：被集成组件中 DBX 为 AGPL-3.0，须履行相应开源义务） |
+| 3 | **完整开源·一键安装** | MIT/Apache协议，零门槛（注：DBX 为 AGPL-3.0，仅作纯参考**不集成**，AOS 代码层从未 import，零 AGPL 真接组件；若未来真接须过 §0.0.3 四硬检验 + 母纲双重过审） |
 | 4 | **主权归你·永不收割** | 用户是主人，系统是伙伴 |
 | 5 | **无平台·无抽成·无中心节点** | 系统只提供协议 |
 | 6 | **价值回流·劳动有报** | 用户创造的价值流回用户口袋 |
@@ -707,6 +777,10 @@ python scripts/run_tests_nopytest.py     # 内置最小 pytest stub，托管 Pyt
 | 8 | **终身陪伴·代际传承** | 从0岁到100岁，有尊严地告别 |
 | 9 | **自动进化·终身学习** | 系统自己会感知、会分析、会成长 |
 | 10 | **身体延伸·灵魂唯一** | 同一个灵魂，在不同设备里 |
+
+> **诚实边界（原则 7「22 种方言」）**：22 种为宪法目标；当前代码真值见 `AGENTS.md` §0.0.5 第 7 条——真实能力矩阵 **18/22**（已就绪引擎覆盖），普通话已达 ③ 级真识别、方言仍处 ② 级；剩余 4 种（兰银官话 / 徽语 / 平话 / 儋州话）全球暂无已核实引擎，是**真实缺口不脑补**。本白皮书其余表述（如节点对照表 §13 端到端用例待主机验证）与此一致。
+
+> **宪法原则的可验证承接（对齐 `AGENTS.md` §0.0.3「不收割四硬检验」）**：上述十条不是口号——凡新增功能 / 商业化动作，必须能过 **断网 / 出走 / 付费墙 / 抽成** 四条硬检验，任一条不过即判定「在收割」，须改。其可执行版本为 `tests/test_no_harvest_charter.py`（**33 项守门测试 = 32 通过 + 1 资源跳过**，经反向验证真拦得住功能墙 / 锁定 / 抽成；详见审计报告第 10 节实跑记录）。本白皮书所有能力声明与商业化边界，默认服从该守门器；代码层当前为 **零 AGPL 真接组件**（DBX 仅为纯参考、从未 import）。
 
 
 ## 第十一章 前沿演进维度（2026 生态深度推演 · 诚实核验版）

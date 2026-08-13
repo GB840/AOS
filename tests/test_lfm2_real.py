@@ -8,7 +8,6 @@
 """
 import os
 
-import pytest
 
 from core.fabric.adapters.lfm_adapter import LFMAdapter
 from core.fabric.adapter import InvokeRequest
@@ -59,4 +58,4 @@ def test_invoke_path_strips_prompt_prefix(monkeypatch):
 
 def test_tier_is_edge():
     a = LFMAdapter()
-    assert a.tier == "edge"
+    assert a.tier() == "edge"  # tier 是方法（覆盖基类），需调用而非属性访问

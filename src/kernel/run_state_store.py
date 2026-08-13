@@ -14,16 +14,39 @@ State is a JSON-serializable dict produced by ``autopilot._RunState.to_dict``:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 import time
+import uuid
 
-_DB_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "_traces", "aos_runs.db"
+_LOG = logging.getLogger("run_state_store")
+
+# P2 架构修复：支持 AOS_STATE_DIR 环境变量覆盖状态存储位置，
+# 落地"本地优先·数据自持"——用户可自定义状态目录（如外置盘/加密卷）。
+# 未设置时回退到项目根 _traces/ 目录（向后兼容）。
+_STATE_DIR = os.environ.get("AOS_STATE_DIR") or os.path.join(
+    os.path.dirname(__file__), "..", "..", "_traces"
 )
+_DB_PATH = os.path.join(_STATE_DIR, "aos_runs.db")
 _LOCK = threading.Lock()
 _CONN: sqlite3.Connection | None = None
+
+# MEA 对齐（2026-08-05）：可选「只读审计关卡」。写入持久状态前若已注册 auditor，
+# 则由 auditor 基于环境事实独立验证；未通过则拒绝覆盖旧快照（错误前提不污染状态）。
+# 默认 None = 向后兼容（行为与旧版一致，任何调用方都不必改动）。
+#   auditor 契约：callable(state: dict, run_id: str) -> bool
+#     - True / truthy  → 放行写入
+#     - False / falsy  → 拒绝写入（保留上一已验证快照）
+#     - 抛异常          → 降级放行 + 告警（绝不因审计器故障阻塞 run）
+_AUDITOR = None
+
+
+def set_auditor(fn):
+    """注册只读审计器（MEA AuditorGate）。传 None 关闭。"""
+    global _AUDITOR
+    _AUDITOR = fn
 
 
 def _conn() -> sqlite3.Connection:
@@ -56,6 +79,17 @@ def _conn() -> sqlite3.Connection:
                    state   TEXT
                )"""
         )
+        # MEA Gap1：独立的「已验证事实」层。与 runs.state（executor 进度快照）分离——
+        # 只有经 auditor 验证的里程碑才进此表；未验证的"声称"绝不落盘（错误前提不污染状态）。
+        _CONN.execute(
+            """CREATE TABLE IF NOT EXISTS verified_milestones (
+                   run_id       TEXT,
+                   milestone_id TEXT,
+                   payload      TEXT,
+                   verified_at  REAL,
+                   PRIMARY KEY (run_id, milestone_id)
+               )"""
+        )
     return _CONN
 
 
@@ -68,18 +102,42 @@ def create_run(run_id: str, task: str, planner: str) -> None:
         )
 
 
-def save_checkpoint(run_id: str, state: dict) -> None:
+def save_checkpoint(run_id: str, state: dict) -> bool:
     """Persist a full run-state snapshot. Called after every cycle.
 
     ``default=str`` guards against any stray non-serializable leaf so a
     checkpoint never fails to write (a failed checkpoint must not crash the run).
+
+    MEA AuditorGate：若已注册 ``_AUDITOR``，写盘前由其基于环境事实独立验证。
+    验证未通过则**不覆盖**旧快照（错误前提不污染持久状态），返回 False；
+    auditor 自身抛异常时降级放行并告警，绝不阻塞 run。
+    无 auditor 时行为与原版完全一致。
     """
+    if _AUDITOR is not None:
+        try:
+            verdict = _AUDITOR(state, run_id)
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("AuditorGate 异常，降级放行: %s", e)
+            verdict = True
+        if not verdict:
+            _LOG.warning(
+                "AuditorGate 拒绝写入 run=%s verdict=%r（保留上一已验证快照）",
+                run_id, verdict,
+            )
+            # 仅刷新 updated 时间戳，state 保持旧值，避免错误前提污染。
+            with _LOCK, _conn() as c:
+                c.execute(
+                    "UPDATE runs SET updated=? WHERE run_id=?",
+                    (time.time(), run_id),
+                )
+            return False
     blob = json.dumps(state, ensure_ascii=False, default=str)
     with _LOCK, _conn() as c:
         c.execute(
             "UPDATE runs SET state=?, updated=?, status='running' WHERE run_id=?",
             (blob, time.time(), run_id),
         )
+    return True
 
 
 def load_checkpoint(run_id: str):
@@ -97,6 +155,55 @@ def load_checkpoint(run_id: str):
         "task": row[2],
         "planner": row[3],
     }
+
+
+def propose_milestone(run_id: str, milestone: dict) -> str:
+    """MEA Gap1：把一条里程碑写入「已验证事实」层。
+
+    - 若已注册 ``_AUDITOR``：写盘前由其基于环境事实独立验证；
+      验证未通过则**抛 ValueError 且不写入**（声称的里程碑不污染已验证状态）。
+    - 若未注册 auditor：默认放行（向后兼容；设计意图是 autopilot 接上真实探针）。
+    - auditor 自身抛异常：降级放行 + 告警（绝不因审计器故障阻塞 run）。
+
+    返回 milestone_id。调用方（autopilot）应把"经此验证的里程碑"作为
+    Manager 角色可依赖的「已验证进度」，而非依赖 runs.state 的原始快照。
+    """
+    mid = f"m_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
+    if _AUDITOR is not None:
+        # 直接把 milestone 本身交给 auditor：其 verify 规格在顶层，与 checkpoint
+        # 的 verify 取址一致（auditor 只看 state.get("verify")）。
+        try:
+            verdict = _AUDITOR(milestone, run_id)
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("AuditorGate(里程碑) 异常，降级放行: %s", e)
+            verdict = True
+        if not verdict:
+            raise ValueError(
+                f"auditor rejected milestone for run={run_id}: {milestone!r}"
+            )
+    with _LOCK, _conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO verified_milestones "
+            "(run_id, milestone_id, payload, verified_at) VALUES (?,?,?,?)",
+            (run_id, mid, json.dumps(milestone, ensure_ascii=False, default=str),
+             time.time()),
+        )
+    return mid
+
+
+def get_verified_milestones(run_id: str) -> list:
+    """返回某 run 经审计验证的全部里程碑（按验证时间升序）。
+
+    与 ``load_checkpoint(run_id)['state']['steps']`` 的关键区别：
+    这里是**经 auditor 验证过的事实集**，而非 executor 自称的进度快照。
+    """
+    with _LOCK, _conn() as c:
+        rows = c.execute(
+            "SELECT payload FROM verified_milestones "
+            "WHERE run_id=? ORDER BY verified_at ASC",
+            (run_id,),
+        ).fetchall()
+    return [json.loads(r[0]) for r in rows]
 
 
 def mark_done(run_id: str) -> None:

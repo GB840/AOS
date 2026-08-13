@@ -15,10 +15,12 @@ trace → distill → registry 回读 三段都是真实代码路径，不是 mo
 """
 import enum
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from core.fabric.adapter import BaseAgentAdapter, InvokeRequest, InvokeResult
-from core.fabric.capability import TIER_HIGH, TIER_MEDIUM
+from core.fabric.capability import TIER_HIGH
 from core.fabric.registry import FabricRegistry
 from core.fabric.trace_store import TaskTraceStore, TracedRoute, _traces_dir
 
@@ -274,7 +276,7 @@ def _write_distilled(path: Path, cap: str, engine: str, ok: int, total: int):
 
 
 def test_registry_penalizes_unreliable_engine_and_orders_down():
-    distilled = Path("/tmp/aos_wb_distilled_pen.json")
+    distilled = Path(tempfile.gettempdir(), "aos_wb_distilled_pen.json")
     _write_distilled(distilled, "demo.cap", "bad", ok=0, total=10)  # 成功率 0 < 0.5
 
     reg = FabricRegistry(distilled_memory_path=str(distilled), distilled_min_samples=5)
@@ -292,7 +294,7 @@ def test_registry_penalizes_unreliable_engine_and_orders_down():
 
 def test_registry_insufficient_samples_no_mis_kill():
     """置信门控：样本 < min_samples 不施加惩罚（不误杀可用引擎）。"""
-    distilled = Path("/tmp/aos_wb_distilled_insuff.json")
+    distilled = Path(tempfile.gettempdir(), "aos_wb_distilled_insuff.json")
     _write_distilled(distilled, "demo.cap", "bad", ok=0, total=3)  # 3 < 5
 
     reg = FabricRegistry(distilled_memory_path=str(distilled), distilled_min_samples=5)
@@ -307,7 +309,7 @@ def test_registry_insufficient_samples_no_mis_kill():
 
 def test_registry_reliable_engine_not_penalized():
     """成功率高（>= 阈值）的引擎不惩罚，哪怕样本充足。"""
-    distilled = Path("/tmp/aos_wb_distilled_reliable.json")
+    distilled = Path(tempfile.gettempdir(), "aos_wb_distilled_reliable.json")
     _write_distilled(distilled, "demo.cap", "bad", ok=9, total=10)  # 90% > 50%
 
     reg = FabricRegistry(distilled_memory_path=str(distilled), distilled_min_samples=5)
@@ -320,7 +322,7 @@ def test_registry_reliable_engine_not_penalized():
 
 def test_registry_incremental_reload_on_mtime_change():
     """蒸馏器常驻持续写，路由软偏好应按文件 mtime 增量重加载，闭环活起来。"""
-    distilled = Path("/tmp/aos_wb_distilled_reload.json")
+    distilled = Path(tempfile.gettempdir(), "aos_wb_distilled_reload.json")
     _write_distilled(distilled, "demo.cap", "bad", ok=0, total=10)
     reg = FabricRegistry(distilled_memory_path=str(distilled), distilled_min_samples=5)
     assert "demo.cap|bad" in reg._distilled_penalties
@@ -349,7 +351,7 @@ def test_registry_incremental_reload_on_mtime_change():
 # ══════════════════════════════════════════════════════════════
 def test_registry_distilled_missing_file_zero_impact():
     reg = FabricRegistry(
-        distilled_memory_path="/tmp/aos_wb_distilled_does_not_exist.json",
+        distilled_memory_path=os.path.join(tempfile.gettempdir(), "aos_wb_distilled_does_not_exist.json"),
         distilled_min_samples=5)
     diag = reg.distilled_diagnostics()
     assert diag["enabled"] is True
@@ -362,7 +364,7 @@ def test_registry_distilled_missing_file_zero_impact():
 
 
 def test_registry_distilled_empty_file_zero_impact():
-    distilled = Path("/tmp/aos_wb_distilled_empty.json")
+    distilled = Path(tempfile.gettempdir(), "aos_wb_distilled_empty.json")
     distilled.write_text("", encoding="utf-8")
     reg = FabricRegistry(distilled_memory_path=str(distilled), distilled_min_samples=5)
     assert reg.distilled_diagnostics()["penalty_count"] == 0
@@ -374,7 +376,7 @@ def test_registry_distilled_empty_file_zero_impact():
 
 def test_registry_distilled_malformed_lines_ignored():
     """损坏行被跳过，合法行仍解析，不抛。"""
-    distilled = Path("/tmp/aos_wb_distilled_malformed.json")
+    distilled = Path(tempfile.gettempdir(), "aos_wb_distilled_malformed.json")
     distilled.write_text(
         "{这不是合法json\n"                              # 损坏行
         + json.dumps({                                   # 合法不可靠记录

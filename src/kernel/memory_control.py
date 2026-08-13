@@ -30,6 +30,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# 理念8「限最大存储条数防磁盘打满」：controllable_memory.jsonl 事件日志硬上限。
+# 与 trace_store._MAX_TRACE_FILES=500 / route_outcome_store._MAX_ROUTE_OUTCOMES=2000
+# 同源纪律。本文件是 append-only 事件日志（同一 memory_id 的 add/edit/delete/rollback
+# 各 append 一条），膨胀主要来自 edit 历史累积。达上限时做语义化 compact：基于内存
+# 视图（_mem，每 id 已是最新状态）重写文件，每 id 只留 1 条最新记录——审计信息已
+# 嵌入 edit_history（每条含 ts/action/snapshot），故丢弃中间事件不丢审计；deleted
+# 记录保留（软删可恢复，数据保全铁律）。
+_MAX_CONTROLLABLE = 2000
+# 每次 _append 都读全文件行数开销大，用内存计数器每 N 次才检查一次。
+# 进程重启计数器归零只会让首次 compact 晚到 N 次后，不影响正确性。
+_TRIM_CHECK_EVERY = 50
+
+
 class MemoryControlStore:
     """可编辑/可回滚的项目级记忆库（JSONL 事件日志后端）。"""
 
@@ -43,6 +56,8 @@ class MemoryControlStore:
         self._lock = threading.Lock()
         self._mem: Dict[str, Dict[str, Any]] = {}
         self._load()
+        # 理念8 轮转计数器（_compact 触发节流）
+        self._since_last_trim = 0
 
     # ---- 加载（事件日志 → 内存最新视图）----
     def _load(self) -> None:
@@ -70,6 +85,41 @@ class MemoryControlStore:
         with open(self._path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         self._mem[rec["id"]] = rec
+        # 理念8：事件日志防膨胀的节流 compact（调用方已持 self._lock，安全）
+        self._since_last_trim += 1
+        if self._since_last_trim >= _TRIM_CHECK_EVERY:
+            self._since_last_trim = 0
+            self._compact()
+
+    def _compact(self) -> None:
+        """达 _MAX_CONTROLLABLE 上限时压缩事件日志：每 id 只留最新一条记录。
+
+        _mem 已是「同 id 后者覆盖前者」的最新视图（含完整 edit_history），故直接
+        基于 _mem 重写文件即可去重——审计信息（ts/action/snapshot）已嵌入每条
+        记录的 edit_history，丢弃中间事件不丢审计；deleted 记录保留（软删可恢复）。
+        原子写回（先写 .tmp 再 replace），避免中途崩溃损坏事件日志。
+        compact 失败不致命（best-effort，与本模块整体纪律一致）。
+        """
+        try:
+            if not self._path.is_file():
+                return
+            # 看文件实际行数（_mem 是去重视图，行数远大于 _mem 大小才需 compact）
+            with open(self._path, "r", encoding="utf-8") as f:
+                count = sum(1 for ln in f if ln.strip())
+            if count < _MAX_CONTROLLABLE:
+                return
+            # 按 updated_at 排序，最新在后（与 append 时间序一致）
+            records = sorted(self._mem.values(),
+                             key=lambda r: r.get("updated_at", ""))
+            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in records:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            tmp.replace(self._path)
+        except Exception as e:  # noqa: BLE001 - compact 失败不致命
+            import logging
+            logging.getLogger(__name__).debug(
+                "controllable_memory compact failed: %s", e)
 
     # ---- CRUD ----
     def add(self, text: str, category: str, source: str = "manual",

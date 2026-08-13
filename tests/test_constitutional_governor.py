@@ -11,6 +11,8 @@ import sys
 
 import pytest
 
+pytest.importorskip("constitutional_agent")  # 缺 constitutional-agent 包（MIT）；装齐后自动跑
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from core.fabric.adapters.constitutional_governor import (  # noqa: E402

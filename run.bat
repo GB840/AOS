@@ -3,7 +3,14 @@ chcp 65001 >nul
 title AOS v5.0
 cd /d D:\AOS
 
-set PYTHON=C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe
+REM 优先用 WorkBuddy managed 环境（绕过系统 Python 3.14 损坏；项目依赖装在 aos venv，已实跑验证可跑）
+if exist "C:\Users\Administrator\.workbuddy\binaries\python\envs\aos\Scripts\python.exe" (
+  set PYTHON=C:\Users\Administrator\.workbuddy\binaries\python\envs\aos\Scripts\python.exe
+) else if exist "C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe" (
+  set PYTHON=C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe
+) else (
+  set PYTHON=C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe
+)
 set PYTHONPATH=D:\AOS\src;D:\AOS
 set AOS_API_BASE=http://127.0.0.1:8000
 

@@ -3,7 +3,15 @@ chcp 65001 >nul
 title AOS v1.0 — 能体操作系统
 cd /d D:\AOS
 
-set PYTHON=C:\Users\Administrator\.workbuddy\binaries\python\envs\aos\Scripts\python.exe
+REM 优先用 WorkBuddy managed 环境（绕过系统 Python 3.14 损坏；aos venv 已实跑验证可跑）
+if exist "C:\Users\Administrator\.workbuddy\binaries\python\envs\aos\Scripts\python.exe" (
+  set PYTHON=C:\Users\Administrator\.workbuddy\binaries\python\envs\aos\Scripts\python.exe
+) else if exist "C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe" (
+  set PYTHON=C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe
+) else (
+  set PYTHON=C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe
+)
+set PYTHONPATH=D:\AOS\src;D:\AOS
 
 :menu
 cls

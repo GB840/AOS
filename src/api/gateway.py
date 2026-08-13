@@ -21,6 +21,7 @@ import os
 import time
 import asyncio
 import logging
+import threading
 from urllib.parse import urlparse, urlunparse
 
 from fastapi import Request, WebSocket
@@ -44,6 +45,9 @@ _DEFAULTS = {
 }
 
 _session: aiohttp.ClientSession | None = None
+# P2 并发修复：get_session 可能在 liveness_loop 和请求处理中并发调用，
+# 无锁 check-then-act 会导致两个 ClientSession 被创建（句柄泄漏）。
+_session_lock = threading.Lock()
 
 # 上游存活缓存：label -> 最近一次成功探测的 monotonic 时间；用于快速 fail-fast / 友好降级，
 # 避免上游未启动时请求挂起等待。仅缓存、不泄露内部地址。
@@ -99,9 +103,12 @@ async def _liveness_loop(interval: float = 15.0) -> None:
 def get_session() -> aiohttp.ClientSession:
     global _session
     if _session is None or _session.closed:
-        # trust_env=False: 反向代理到 127.0.0.1 上游时绝不经 HTTP(S)_PROXY 转发，
-        # 否则环境中若设了代理（含 localhost 拦截）会导致 "Connection closed"。
-        _session = aiohttp.ClientSession(trust_env=False)
+        with _session_lock:
+            # DCL：持锁后二次检查，防并发首调各自创建 ClientSession（句柄泄漏）
+            if _session is None or _session.closed:
+                # trust_env=False: 反向代理到 127.0.0.1 上游时绝不经 HTTP(S)_PROXY 转发，
+                # 否则环境中若设了代理（含 localhost 拦截）会导致 "Connection closed"。
+                _session = aiohttp.ClientSession(trust_env=False)
     return _session
 
 

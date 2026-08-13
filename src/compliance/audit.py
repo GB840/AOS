@@ -38,6 +38,14 @@ _DEFAULT_AUDIT_PATH = str(
     Path(__file__).resolve().parents[2] / "data" / "audit" / "audit.jsonl"
 )
 
+# 理念8「限最大存储条数防磁盘打满」：audit.jsonl 单文件追加硬上限。
+# 与 trace_store._MAX_TRACE_FILES=500 / route_outcome_store._MAX_ROUTE_OUTCOMES=2000 同源纪律。
+# 审计日志高频写（每次工具调用/模型请求/子代理调用），query/get_stats 全文件扫描；
+# 合规数据不可物理删，上限 5000，达上限搬最旧到 audit.archived.jsonl 冷存（数据保全）。
+_MAX_AUDIT = 5000
+_TRIM_CHECK_EVERY = 100
+_ARCHIVED_SUFFIX = ".archived.jsonl"
+
 
 class AuditLogger:
     """线程安全的 jsonl 审计日志器。
@@ -49,6 +57,8 @@ class AuditLogger:
         self._path = path or os.environ.get("AOS_AUDIT_PATH", _DEFAULT_AUDIT_PATH)
         self._lock = threading.Lock()
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        # 理念8 轮转计数器（_enforce_rotation 触发节流）
+        self._since_last_trim = 0
 
     def log(
         self,
@@ -71,6 +81,39 @@ class AuditLogger:
         with self._lock:
             with open(self._path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            # 理念8：防磁盘打满的节流轮转（每 N 条追加检查一次上限）
+            self._since_last_trim += 1
+            if self._since_last_trim >= _TRIM_CHECK_EVERY:
+                self._since_last_trim = 0
+                self._enforce_rotation()
+
+    def _enforce_rotation(self) -> None:
+        """达 _MAX_AUDIT 上限时把最旧条目搬到 audit.archived.jsonl 冷存。
+
+        合规数据不可物理删（数据保全铁律）。audit.jsonl 时间序追加，开头最旧、
+        末尾最新；按行切分（不解析 JSON，避免每条 loads 开销）。冷存文件同样
+        append-only，供合规审计回溯。轮转失败不致命（best-effort）。
+        """
+        try:
+            if not os.path.exists(self._path):
+                return
+            with open(self._path, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f if ln.strip()]
+            if len(lines) < _MAX_AUDIT:
+                return
+            keep = lines[-_MAX_AUDIT:]
+            archive = lines[:-_MAX_AUDIT]
+            if not archive:
+                return
+            arch_path = self._path + _ARCHIVED_SUFFIX
+            with open(arch_path, "a", encoding="utf-8") as f:
+                f.writelines(archive)
+            with open(self._path, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).debug(
+                "audit rotation failed: %s", e)
 
     def query(
         self, event_type: Optional[str] = None, limit: int = 100

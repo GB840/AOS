@@ -21,11 +21,62 @@ import time
 import urllib.request
 import urllib.error
 
+import pytest
+
 # 阻止 trio 导入：httpcore 会尝试 import trio（TrioBackend），而 trio 的
 # import 扫描 sys.path 时会触发 _path_stat 命中沙箱限制路径，导致整个进程
 # HANG。设 sys.modules['trio']=None 让 Python 认为 trio 不存在，httpcore
 # 会优雅降级到 sync backend。
 sys.modules.setdefault("trio", None)
+
+
+@pytest.fixture(autouse=True, scope="function")
+def _aos_reset_global_singletons():
+    """每个测试结束后重置已知全局单例，避免测试间状态污染。
+
+    根因：AOS 在多个模块用模块级单例（FabricHub / AdaptiveCore 租户表 /
+    HubStore / autopilot 缓存的 hub 等）。部分测试构造或注册后未清理，
+    后续测试读到脏状态，导致『单独跑绿、全量跑红』的顺序相关失败。
+
+    此夹具在每个测试结束后统一清空这些单例，让测试彼此隔离。所有重置都
+    用 try/except 包裹，绝不因重置失败而让测试本身崩溃。这不改变任何业务
+    代码，只恢复测试隔离所需的干净全局状态。
+    """
+    yield
+    _reset_aos_singletons()
+
+
+def _reset_aos_singletons() -> None:
+    # FabricHub 单例（aos_mcp.protocol._get_hub 返回的全局 hub）
+    try:
+        import aos_mcp.protocol as m
+        if hasattr(m, "_HUB"):
+            m._HUB = None
+    except Exception:
+        pass
+    # AdaptiveCore 租户注册表
+    try:
+        import kernel.adaptive as m
+        if hasattr(m, "_cores"):
+            m._cores.clear()
+    except Exception:
+        pass
+    # autopilot 缓存的 hub
+    try:
+        import kernel.autopilot as m
+        if hasattr(m, "_HUB"):
+            m._HUB = None
+        if hasattr(m, "_HUB_ATTEMPTED"):
+            m._HUB_ATTEMPTED = False
+    except Exception:
+        pass
+    # HubStore 单例
+    try:
+        import kernel.hub.hub_store as m
+        if hasattr(m, "_hub"):
+            m._hub = None
+    except Exception:
+        pass
 
 
 def pytest_configure(config):

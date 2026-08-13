@@ -29,6 +29,14 @@ _DEFAULT_EVOLUTION_LOG = str(
     Path(__file__).resolve().parents[2] / "data" / "evolution" / "evolution_log.jsonl"
 )
 
+# 理念8「限最大存储条数防磁盘打满」：evolution_log.jsonl 单文件追加硬上限。
+# 与 trace_store._MAX_TRACE_FILES=500 / route_outcome_store._MAX_ROUTE_OUTCOMES=2000 同源纪律。
+# route_intent 是 brain.py 主循环每条消息必经路径，高频写入；query_priority 全量
+# readlines+reversed 找最近一条，文件越大越慢。上限 5000，达上限删最旧 80%（与
+# autopilot 反思记忆同比例）。元调度审计价值随时间衰减，删最旧可接受。
+_MAX_EVOLUTION_LOG = 5000
+_TRIM_CHECK_EVERY = 50
+
 
 # 分层语义(启发式 → 不调 LLM):
 # - L1: 简单对话/问答(hi / 你好 / 是什么)
@@ -38,7 +46,7 @@ _DEFAULT_EVOLUTION_LOG = str(
 _INTENT_RULES: list[tuple[str, str, str, str]] = [
     # (正则, layer, complexity, workflow_id)
     (
-        r"(自己改|自修改|调整策略|元层|meta|self.?modif|propose)",
+        r"(自己改|自修改|调整策略|元层|self.?modif|propose|进化|自我进化|修改策略|演化)",
         "L3.5",
         "high",
         "meta_orchestration",
@@ -96,6 +104,8 @@ class MetaOrchestratorEngine:
             "AOS_EVOLUTION_LOG", _DEFAULT_EVOLUTION_LOG
         )
         os.makedirs(os.path.dirname(self._evolution_log), exist_ok=True)
+        # 理念8 轮转计数器（_enforce_rotation 触发节流）
+        self._since_last_trim = 0
         logger.info("MetaOrchestratorEngine ready (L3.5 dispatch)")
 
     def route_intent(
@@ -194,5 +204,27 @@ class MetaOrchestratorEngine:
         try:
             with open(self._evolution_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            # 理念8：防磁盘打满的节流轮转（每 N 条追加检查一次上限）
+            self._since_last_trim += 1
+            if self._since_last_trim >= _TRIM_CHECK_EVERY:
+                self._since_last_trim = 0
+                self._enforce_evolution_rotation()
         except OSError as e:
             logger.warning("evolution_log append failed: %s", e)
+
+    def _enforce_evolution_rotation(self) -> None:
+        """达 _MAX_EVOLUTION_LOG 上限时删最旧 80%（与 autopilot 反思记忆同比例）。"""
+        try:
+            if not os.path.exists(self._evolution_log):
+                return
+            with open(self._evolution_log, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f if ln.strip()]
+            if len(lines) < _MAX_EVOLUTION_LOG:
+                return
+            # 保留最新 1/5（删最旧 80%），与 autopilot 反思记忆同比例
+            keep = lines[_MAX_EVOLUTION_LOG // 5:]
+            with open(self._evolution_log, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+            logger.info("evolution_log 轮转：%d → %d 条", len(lines), len(keep))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("evolution_log rotation failed: %s", e)

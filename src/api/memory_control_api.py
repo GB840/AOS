@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -26,12 +27,16 @@ from kernel.memory_control import MemoryControlStore
 logger = logging.getLogger(__name__)
 
 _store: Optional[MemoryControlStore] = None
+# P1 并发修复：FastAPI 线程池中并发调用 _get_store → check-then-act 竞态。
+_store_lock = threading.Lock()
 
 
 def _get_store() -> MemoryControlStore:
     global _store
     if _store is None:
-        _store = MemoryControlStore()
+        with _store_lock:
+            if _store is None:
+                _store = MemoryControlStore()
     return _store
 
 

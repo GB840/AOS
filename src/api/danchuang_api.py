@@ -15,12 +15,83 @@ API 分区：
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Header, Query
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+# ── 请求模型（必须定义在模块级）────────────────────────────────
+#
+# 2026-08-08 实跑发现的真 bug：这 7 个模型原先定义在 register_routes() 函数体内，
+# 而本文件头部有 `from __future__ import annotations`，所有类型注解都变成字符串
+# 延迟求值。FastAPI 用 get_type_hints() 解析端点签名时只查【模块全局命名空间】，
+# 函数内的局部类它根本看不见 —— 导致：
+#   1. GET /openapi.json → 500（PydanticUserError: ForwardRef not fully defined），
+#      连带 /docs 文档页整页空白；
+#   2. 更严重：POST /api/danchuang/tenant/register 等所有带 body 的端点，
+#      FastAPI 解析不出模型就把参数 fallback 成 query 参数，实测返回
+#      422 {"loc":["query","req"],"msg":"Field required"} —— 整个单创OS 写接口全废。
+# 修法就是把模型提到模块级，让 ForwardRef 能在全局命名空间里解析到。
+# 回归守门见 tests/test_danchuang_api_schema.py。
+
+class TenantRegisterRequest(BaseModel):
+    name: str = Field(..., description="租户名称")
+    email: str = Field(..., description="联系邮箱")
+    plan: str = Field("free", description="套餐: free/standard/professional/enterprise")
+    industry: str = Field("general", description="行业模板")
+
+
+class SetGoalRequest(BaseModel):
+    goal: str = Field(..., description="创业目标描述")
+    industry: Optional[str] = Field(None, description="行业（默认取租户配置）")
+
+
+class ReviewRequest(BaseModel):
+    iteration: str = Field("weekly", description="迭代周期: weekly/monthly")
+
+
+class AdjustRequest(BaseModel):
+    feedback: str = Field(..., description="反馈内容")
+
+
+class CreateWorkflowRequest(BaseModel):
+    goal: str = Field(..., description="工作流目标")
+    template_id: Optional[str] = Field(None, description="模板ID（不传则自动推荐）")
+    context: Optional[Dict[str, Any]] = Field(None, description="初始上下文")
+
+
+class CompleteStepRequest(BaseModel):
+    output: Optional[str] = Field(None, description="步骤产出")
+    context_updates: Optional[Dict[str, Any]] = Field(None, description="上下文更新")
+
+
+class CrewRunRequest(BaseModel):
+    template_name: str = Field("startup_mvp", description="Crew模板名称")
+
+
+# ── 第九区：BYOK 模型供应商请求模型（同样必须在模块级，原因同上）──
+
+class ByokSaveRequest(BaseModel):
+    provider: str = Field(..., description="供应商 id，见 /byok/presets")
+    api_key: str = Field(..., description="用户自己的 API Key")
+    model: Optional[str] = Field(None, description="模型 id，默认取预设首个")
+    api_base: Optional[str] = Field(None, description="自定义端点，默认取预设")
+    is_default: bool = Field(False, description="是否设为租户默认")
+
+
+class ByokTestRequest(BaseModel):
+    provider: str = Field(..., description="供应商 id")
+    api_key: str = Field(..., description="待测试的 API Key")
+    model: Optional[str] = Field(None, description="模型 id")
+    api_base: Optional[str] = Field(None, description="自定义端点")
+
+
+class ByokChatRequest(BaseModel):
+    prompt: str = Field(..., description="对话内容")
+    provider: Optional[str] = Field(None, description="指定供应商，缺省用租户默认")
 
 
 def register_routes(app: FastAPI) -> None:
@@ -31,36 +102,6 @@ def register_routes(app: FastAPI) -> None:
     """
 
     router = APIRouter(prefix="/api/danchuang", tags=["danchuang"])
-
-    # ── 请求模型 ────────────────────────────────────────────
-
-    class TenantRegisterRequest(BaseModel):
-        name: str = Field(..., description="租户名称")
-        email: str = Field(..., description="联系邮箱")
-        plan: str = Field("free", description="套餐: free/standard/professional/enterprise")
-        industry: str = Field("general", description="行业模板")
-
-    class SetGoalRequest(BaseModel):
-        goal: str = Field(..., description="创业目标描述")
-        industry: Optional[str] = Field(None, description="行业（默认取租户配置）")
-
-    class ReviewRequest(BaseModel):
-        iteration: str = Field("weekly", description="迭代周期: weekly/monthly")
-
-    class AdjustRequest(BaseModel):
-        feedback: str = Field(..., description="反馈内容")
-
-    class CreateWorkflowRequest(BaseModel):
-        goal: str = Field(..., description="工作流目标")
-        template_id: Optional[str] = Field(None, description="模板ID（不传则自动推荐）")
-        context: Optional[Dict[str, Any]] = Field(None, description="初始上下文")
-
-    class CompleteStepRequest(BaseModel):
-        output: Optional[str] = Field(None, description="步骤产出")
-        context_updates: Optional[Dict[str, Any]] = Field(None, description="上下文更新")
-
-    class CrewRunRequest(BaseModel):
-        template_name: str = Field("startup_mvp", description="Crew模板名称")
 
     # ── 辅助函数 ────────────────────────────────────────────
 
@@ -424,23 +465,6 @@ def register_routes(app: FastAPI) -> None:
     #  第九区：BYOK 模型供应商（自助填 Key + 加密隔离）
     # ═══════════════════════════════════════════════════════
 
-    class ByokSaveRequest(BaseModel):
-        provider: str = Field(..., description="供应商 id，见 /byok/presets")
-        api_key: str = Field(..., description="用户自己的 API Key")
-        model: Optional[str] = Field(None, description="模型 id，默认取预设首个")
-        api_base: Optional[str] = Field(None, description="自定义端点，默认取预设")
-        is_default: bool = Field(False, description="是否设为租户默认")
-
-    class ByokTestRequest(BaseModel):
-        provider: str = Field(..., description="供应商 id")
-        api_key: str = Field(..., description="待测试的 API Key")
-        model: Optional[str] = Field(None, description="模型 id")
-        api_base: Optional[str] = Field(None, description="自定义端点")
-
-    class ByokChatRequest(BaseModel):
-        prompt: str = Field(..., description="对话内容")
-        provider: Optional[str] = Field(None, description="指定供应商，缺省用租户默认")
-
     try:
         from kernel.danchuang.tenant.byok import ByokStore
         _byok = ByokStore()
@@ -486,6 +510,29 @@ def register_routes(app: FastAPI) -> None:
 
     except Exception as e:  # BYOK 模块异常不应拖垮整个 API
         logger.error("BYOK 路由加载失败（已跳过）: %s", e, exc_info=True)
+
+    # ── 让租户 key 能穿过全局安全中间件（多租户死锁修复，2026-08-08）──
+    #
+    # 全局中间件校验的是平台级 config.API_KEY，而租户拿的是本子系统签发的
+    # sk-xxx。两者共用 X-API-Key 头，中间件又是 fail-closed，导致租户
+    # 带 key 被中间件 401、不带 key 被本模块 401 —— 两头堵死，多租户不可用。
+    # 这里把「本子系统认不认这个 key」注册进去，中间件放行后，
+    # 具体租户身份仍由每个端点的 _get_tenant_from_key 自行解析（权限即边界）。
+    try:
+        from api.security import register_api_key_validator
+
+        def _is_valid_tenant_key(api_key: str) -> bool:
+            if not api_key or not api_key.startswith("sk-"):
+                return False
+            try:
+                return _get_os().validate_api_key(api_key) is not None
+            except Exception:  # noqa: BLE001 — 校验失败等价于「不是本子系统的 key」
+                return False
+
+        register_api_key_validator(_is_valid_tenant_key)
+        logger.info("单创OS 租户 Key 校验器已注册到全局安全中间件")
+    except Exception as e:  # noqa: BLE001
+        logger.error("租户 Key 校验器注册失败（多租户模式将不可用）: %s", e, exc_info=True)
 
     app.include_router(router)
     logger.info("单创OS API v2.0 已挂载: /api/danchuang (含 BYOK 第九区)")

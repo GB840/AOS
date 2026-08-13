@@ -75,15 +75,26 @@ def test_lfm_honest_not_live_by_default():
     assert det["runtime_available"] in (True, False)  # 不报错即可
 
 
-def test_lnn_http_dispatch():
-    """进程内直调 handler，绕过沙箱残留服务进程干扰。"""
+def test_lnn_http_dispatch(monkeypatch):
+    """进程内直调 handler，绕过沙箱残留服务进程干扰。
+
+    FabricHub HTTP 面已强制 Bearer 鉴权（_check_auth fail-closed：
+    未设 AOS_FABRIC_HTTP_TOKEN 直接 500），故这里注入测试 token 并带上
+    Authorization 头，测的是路由分发本身而非鉴权。
+    """
     import io
     from core.fabric.http_server import FabricHubHTTPHandler
+
+    token = "test-lnn-token"
+    monkeypatch.setenv("AOS_FABRIC_HTTP_TOKEN", token)
 
     def make_handler(path, body=None):
         h = FabricHubHTTPHandler.__new__(FabricHubHTTPHandler)
         h.path = path
-        h.headers = {"Content-Length": str(len(body or b""))}
+        h.headers = {
+            "Content-Length": str(len(body or b"")),
+            "Authorization": f"Bearer {token}",
+        }
         h.rfile = io.BytesIO(body or b"")
         h.wfile = io.BytesIO()
         h._code = 200
