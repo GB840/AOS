@@ -308,3 +308,39 @@
 
 ### 15.4 结论
 **HTTP/API 服务边界实证为真**：31 组件运行脊柱已通过 `startup` 真实焊入 FastAPI、并经 `/api/lifeform` 对外暴露真实活体快照（31/0、降档决策 qwen3:8b→qwen2.5:3b 全部真发生），且受真实鉴权网关保护。这把「一套系统」从**内部焊接**（第 12 节）推到**对外可观测的服务边界**——用户原焦虑「一堆不是一套」在 ② 级下被闭环坐实：**一套（焊接成网、31/31 活、0 失败、对外可观测、鉴权生效）**。**本轮无白皮书硬伤、无新增待修点。**
+
+---
+
+## 第 16 节 · 第 17 遍（自适应中枢 + 自进化引擎核心能力实证：②③级诚实分级坐实）
+
+### 16.1 镜头与动机
+- 白皮书把"自进化"当立身之本（L6 演进层、母纲"可验证即真理"、九理念"失败即训练/自动进化"）。历史诚实分级标注"②级全真、③级门禁就绪但未验"。本轮专锤这条核心能力是否真在跑、还是口头核心。
+- 两条线须分开核：①内核自适应中枢 `src/kernel/adaptive.py`（稳态+失败学习闭环）；②个体自进化引擎 `src/lifeform/self_evolve_engine.py`（白皮书 11.5/922 的 Mobius 转化项）。
+
+### 16.2 代码真值（先读再实证）
+- `src/kernel/adaptive.py`（32938B，08-05）：`AdaptiveCore` 真把成败→体征读数（Homeostasis 真实稳态，含 latency_ms 补注册）+ 写入 `FailureMemory`；`StageGuard` 环节级隔离（高重度写记忆、动态降级续跑）；`apply_corrections` 真实作用到 `LiveEvolutionEngine` 并发上限（非错配 evolution_interval）。docstring 诚实标②级。
+- `src/lifeform/self_evolve_engine.py`（4792B，08-05）：`SelfEvolveEngine` 真骨架——`propose_rewrite`（空反馈返回原码、不伪造改进 line64-67 硬判定）、`can_evolve`（五维 EvolutionLimit 护栏：迭代/深度/子节点/成本/时间 line29-41）、`apply_rewrite`（受护栏约束）、`assess_fitness`（纯函数）。**非空壳**：每方法带硬判定+护栏。诚实标②级。
+
+### 16.3 金标准实证（managed Py3.13 venv，PYTHONPATH=.:src，AOS_FORCE_EXIT=1）
+合并跑 8 个测试文件，**39 收集 → 37 PASSED + 2 SKIPPED**：
+- `test_adaptive_loop_real.py`(4)：记录失败+稳态检测不稳定、LiveEvolutionEngine 真实接活(reduce_concurrency 真降并发) ✅
+- `test_stage_guard_real.py`(4)：环节隔离+高重度写记忆、evolve 死不杀整轮、autopilot execute 死结构化收尾 ✅
+- `test_self_evolution_readback_real.py`(2)：autopilot.run() 写→读闭环(run1 失败写记忆→run2 PREFLIGHT 注入已知修复，行为输入真变) ✅
+- `test_self_evolution_real.py`(1)：**SKIP**（③级真 LLM 循环，沙箱无 ollama，诚实跳过）
+- `test_self_evolution_stageguard_readback_real.py`(1)：**SKIP**（#533 ③级门禁，同理诚实跳过）
+- `test_adaptive_runtime_metrics_real.py`(11)：体征来自真实 runtime、energy 跟踪真实预算、reduce_concurrency 命中真旋钮且恢复 → 对应 #531 真指标 11 项 ✅
+- `test_adaptive_tenant_isolation_real.py`(6)：两租户独立 core+记忆、跨租户 PREFLIGHT 不泄露 → 对应 #532 租户隔离 6 项 ✅
+- `test_lifeform_selfbuild.py`(9)：self_evolve 护栏/空反馈不伪造/适应度 + FractalHoloAgent + WorldModelEngine + MemoryLifecycle → 与白皮书 927 行"四项②级骨架"逐字吻合 ✅
+
+### 16.4 白皮书声称对照（宣称 vs 真值）
+- 白皮书 11.5 节(854-865)：自进化诚实标"运行时自我重写仍处早期，业界仅厂商自述(Raven)/作者自承递归自改进未实现" → ✅诚实。
+- 白皮书 922 行：Mobius 转化项 ⚡已落地 `src/lifeform/self_evolve_engine.py`(②级骨架) → 实测代码存在+真机制+单测覆盖 ✅吻合。
+- 白皮书 927 行：四项均自研骨架(②级代码+单测，见 `tests/test_lifeform_selfbuild.py`)，非端到端；真 LLM 自我重写属③级待真机 → 实测 selfbuild 9 全过、③级 2 SKIP ✅吻合。
+- **唯一小瑕疵（已修正）**：白皮书 332 行"③级只验证过 P0 自进化窄场景（见第九章）"——"见第九章"引用指向偏差（第九章=落地路线表 754-763，不含③级验证实证）。已改为指向真实③级测试文件 `tests/test_self_evolution_real.py`/`test_self_evolution_stageguard_readback_real.py`，并标注"沙箱无 ollama 诚实 SKIP"。声称实质（仅一个③级窄场景、最大缺口）本身诚实，未夸大。
+
+### 16.5 结论
+**核心能力"自进化"声称坐实且诚实**：
+- ②级（代码+单测）：自适应中枢 28 项全过 + 个体自进化引擎 9 项全过 = **37 项②级实证全绿**；
+- ③级（真 LLM 端到端）：2 项诚实 SKIP（沙箱无 ollama），与白皮书"③级待真机验证"边界一致，非假绿；
+- 无"把骨架谎称闭环"——白皮书明写"不得谎报闭环/非端到端跑通"，代码 docstring 同步标②级；
+- 唯一引用偏差已自纠。**本轮 deliverable：审计报告第16节 + 白皮书 332 行最小修正。无系统性编造、无越级吹③。**
