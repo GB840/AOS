@@ -256,3 +256,30 @@
 **项目级"42 表"硬数字经金标准实证为真**——42 个表类全部被引擎 `create_all` 真建出、五层分布与架构宣称完全吻合，坐实 infra 层 ✅ 底座诚实。**本轮未发现硬伤、无新增待修点**；白皮书诚实性结论维持：**整体诚实、无系统性编造、无越级吹③**。
 
 （说明：本轮为只读实证，未改动白皮书/代码文件；仅把核查结论记入本报告与项目日志。）
+
+---
+
+## 第 14 节 · 第 15 遍（LLM Router 标 ✅AOS代码/② 真实注册与路由逻辑实证）
+
+### 14.1 镜头与措辞校准
+- 用户长期画像 / 项目记忆反复引用 AOS「LLM Router 已接入 **15/16** provider（deepseek、scnet×12、siliconflow、zhipu，ollama 不可用，另有 3 个本地 GGUF 待接入）」。这是一个硬、可证伪数字，且直刺核心路由底座诚实度——但**白皮书 V6 字面未写该串数字**。
+- **白皮书真实写法**（grep 实证）：第 58 行 mermaid「L1B 模型路由网关：LiteLLM（MIT 100+ provider，已真接）」、第 219 行表格「`LiteLLMAdapter` 统一 100+ provider OpenAI 格式路由，已装 1.95.0」、第 285 行把「LiteLLM 多 provider 真路由」**诚实标为 ③ 端到端待主机验证项**。
+- 故本轮验证对象 = **「LLM Router 标 ✅AOS代码/②」这项能力是否真注册 provider、路由逻辑是否活（非桩）**，而非白皮书某句数字；白皮书 ②/③ 边界本身正确，无需改。
+
+### 14.2 实证（真实例化 `LLMRouter()`，managed Py3.13 venv：openai/litellm/requests/sqlmodel 已装，仅 websocket 缺）
+- `ModelProvider` 枚举共 **8** 个成员（ZHIPU / SILICONFLOW / BAIDU / XFYUN / OLLAMA / MISTRALRS_GENERAL / MISTRALRS_CODING / MISTRALRS_REASONING）。
+- **真实运行环境实际注册 7 个 provider**（`available=True`）：智谱GLM-4-Flash、硅基流动(DeepSeek-V2.5)、百度ERNIE、Ollama本地(qwen2.5:7b)、MistralRS-MiniCPM5 / QwenCoder / DeepSeek。
+- 唯一未注册 = **XFYUN（讯飞星火）**，原因 = venv 缺 `websocket-client` 库，代码 `_init_providers()` 明写「websocket-client库未安装，讯飞星火不可用」——**诚实降级，非虚假缺失**。
+- 注册为**条件式**（依赖 `config.XXX_ENABLED` + API key 非空 + 依赖库可用），无 key 则不注册；本沙箱 `.env` 已配真实 key，故 7 个上线。
+
+### 14.3 路由逻辑活性（非桩）
+- `_get_provider_priority(TaskType.CODING)` 真实返回优先级链 `['mistralrs_coding','ollama','zhipu','siliconflow','baidu']`——按任务类型动态选路；
+- `_call_provider` 实为 **32 行**真实分发函数（按 provider 路由到 `_call_zhipu/_call_siliconflow/_call_baidu/_call_xfyun/_call_ollama/_call_openai_compatible`）；
+- `chat()` 实为 **62 行**真实 dispatch（默认走 `_call_litellm_fallback` 统一推理平面，失败才降级逐 provider 试）——**全链路真实代码，零 `pass`/空壳**。
+
+### 14.4 结论与诚实备注
+- **LLM Router 标 ✅AOS代码/② 经实证非桩**：provider 注册机制真工作（实跑注册 7/8）、路由逻辑全活、与白皮书 ② 级边界一致（库已真接 litellm 1.95.0、路由逻辑活、「多 provider 真路由」③ 待主机）。**本轮无白皮书硬伤、无新增待修点。**
+- **记忆/画像裂缝（须校准、非白皮书硬伤）**：记忆中的「15/16 provider / scnet×12 / ollama 不可用」与代码真值**不符**——代码枚举仅 8、无 `scnet` 这个 provider、ollama 在沙箱真实注册且 `available=True`。属历史画像过时，建议在后续会话以代码真值（8 枚举 / 实跑 7 注册 / 讯飞因缺 websocket 降级）覆盖旧记忆；白皮书因未写该串数字而不受影响。
+- 细节观察（③ 级待验证，非 ② 级硬伤）：三个 `MISTRALRS_*` provider 的 `model` 字段在 `.env` 缺对应值时为空串；真推理时需补 config。白皮书已诚实把「真路由」标 ③，故在此边界内。
+
+（说明：本轮为只读实证，未改动白皮书/代码文件；仅把核查结论记入本报告与项目日志。）
