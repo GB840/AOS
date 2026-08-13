@@ -235,3 +235,24 @@
 本轮**未发现"标 ✅ 实一堆"的虚假宣称**；用户原焦虑"一套 vs 一堆"在 ② 级运行态下被实证为**一套（焊接成网、31/31 活、0 失败）**。白皮书诚实性结论维持：**整体诚实、无系统性编造、无越级吹③**。
 
 （说明：本轮为只读实证，未改动白皮书/代码文件；仅把核查结论记入本报告与项目日志。）
+
+---
+
+## 第 13 节 · 第 14 遍（infra 层 "42 表" 数据库金标准实证）
+
+### 13.1 镜头与措辞校准
+- 用户长期画像 / 项目记忆均引用 AOS 数据库为 **"42 表跨 infra/ecosystem/evolution/economy/immune 五层（SQLModel/ORM、WAL）"**。这是一个**硬、可证伪**的数字，直接关乎 infra 层 ✅ 底座是否诚实。
+- **诚实校准**：白皮书 V6 字面**未写"42 表"**（grep "42 表/42张/张表" 零命中）；白皮书第 175 行唯一的"42"是**运行时 import 覆盖率**（42 个 ✅ 类节点由 8 焊到 42，与第 12 节 31 组件实例化属同一焊接叙事的不同度量，**不是 42 张表**）。故本轮验证对象为**项目级"42 表"硬数字**，而非白皮书某句措辞——结论不影响白皮书诚实性判定，但坐实 infra 层真实底座。
+
+### 13.2 三重验证（防漏数 / 防空心）
+1. **类定义精确计数**（脚本 `grep -rEo "class X(... table=True ...)"`，非手工）：全 `src/` 共 **42** 个 `table=True` SQLModel 表类，全集中于 `src/core/database/models/` 五层文件（infra 13 / immune 4 / evolution 10 / ecosystem 10 / economy 5）。`grep -rEl` 在 `src/kernel/evolution.py`、`src/kernel/live.py` 误报的"table=True"经核查为 `Gene(... immutable=True)` 子串带偏，**非表类**。
+2. **引擎焊接核实**：`src/core/database/engine.py::init_db()` 先 `from core.database import models`（把所有表注册进 metadata），再 `SQLModel.metadata.create_all(engine)`，docstring 明写"幂等创建全部 42 张表"——**表非孤儿定义，被引擎焊接**。
+3. **金标准实证（真实 SQLite 建表）**：managed Py3.13 隔离 venv 装 `sqlalchemy 2.0.51 + sqlmodel 0.0.39`，指向临时 SQLite 跑 `init_db()`：
+   - `sqlite_master` 实际建出表数 = **42**；
+   - `SQLModel.metadata` 注册表数 = **42**；
+   - 42 张表名按五层逐一对应（infra: users/agents/threads/messages/checkpoints/conversations/knowledge/tasks/audit_log/notifications/event_store/snapshots/cold_memories；immune: compliance_records/identity_vault/semantic_firewall_rules/sandbox_policies；evolution: task_fingerprints/orchestration_specs/workflow_definitions/evolution_log/learning_experiences/model_routing_history/performance_metrics/prompt_templates/negotiation_sessions/self_modification_proposals；ecosystem: skills/skill_versions/tool_registry/mcp_connectors/agent_cards/subagent_registry/knowledge_graph_nodes/knowledge_graph_edges/agency_roles/capability_registry；economy: token_ledger/cost_accounting/reward_events/budget_pools/economic_transactions）——**零重名、零垃圾表**。
+
+### 13.3 结论
+**项目级"42 表"硬数字经金标准实证为真**——42 个表类全部被引擎 `create_all` 真建出、五层分布与架构宣称完全吻合，坐实 infra 层 ✅ 底座诚实。**本轮未发现硬伤、无新增待修点**；白皮书诚实性结论维持：**整体诚实、无系统性编造、无越级吹③**。
+
+（说明：本轮为只读实证，未改动白皮书/代码文件；仅把核查结论记入本报告与项目日志。）
