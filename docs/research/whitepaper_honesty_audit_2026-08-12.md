@@ -386,3 +386,35 @@
 - 代际传承 `lineage.py` 真实衰减逻辑 + 37 项单测全过，母纲原则8「代际传承」有工程承接；
 - 诚实降级机制（接不上即 `ImportError`、绝不内存冒充）是全域亮点，体现诚实纪律。
 - **本轮无白皮书硬伤、无新增待修点**（第 17 遍已修的 332 行引用偏差不在本遍范围）。记忆域 55 项实证全绿，整域非空壳。
+
+---
+
+## 第 18 节 · 第 19 遍（「六层免疫塔 + OWASP Agentic AI Top 10 2026」声称核验：愿景与文档演进偏差 + 代码安全能力真值）
+
+### 18.1 镜头与动机
+- 用户长期记忆反复描述项目特征含「6层免疫塔 + OWASP Agentic AI Top 10 2026 安全合规」。本轮专锤：白皮书/AGENTS.md 是否真有此正式宣称？代码是否真有等价的分层安全免疫能力？避免把「愿景记忆」误当「当前文档事实」。
+
+### 18.2 文档声称层核查（金标准：全文检索，非凭记忆）
+- **白皮书 V6 全文**：`grep "六层免疫塔|免疫塔|OWASP"` **零命中**；`grep "免疫"` **零命中**；`grep "六层"` 仅命中「生命体六层维度（L0 宪法→L1–L9 六层维度）」与「第六层演进层」——**「六层」指生命体分层架构，非安全免疫塔**；`grep "合规"` 仅命中 6.3 节「合规约束体系」= **语音克隆合规**（民事保护/行业监管/刑事惩戒三层），属窄域，非广义安全免疫塔。
+- **AGENTS.md**：仅 594 行「OWASP 常识过关（呼应 §0.7.1）」一笔带过，**无「免疫塔」架构声称**。
+- **结论**：「六层免疫塔 + OWASP Agentic AI Top 10 2026」在白皮书/AGENTS.md **查无正式宣称**。这是**用户记忆的愿景/早期整合描述**，文档已演进为更精确的工程措辞：免疫层 4 表 + 合规安全层 + 工具级护栏 + 6.3 语音合规约束。属「记忆与文档演进的时间差」，非项目编造。
+
+### 18.3 代码安全能力真值（金标准：真实跑测试）
+**真实分层安全能力存在且非空壳**：
+- **免疫层 4 表真建**（`src/core/database/models/immune.py`）：`compliance_records`（GB-Z 185 合规）/ `identity_vault`（身份凭证保险库）/ `semantic_firewall_rules`（语义防火墙）/ `sandbox_policies`（执行沙箱策略）——属 42 表（第 14 遍金标准已验建）。
+- **合规安全层 `src/kernel/compliance.py`**：真实审计（链式哈希 `AuditEntry.prev_hash/chain_hash` 防篡改）+ 敏感信息递归脱敏（phone/email/id_card/api_key/token/password 等 15+ 模式）+ 内容安全 + 规则引擎（allow/deny + 速率限制），零依赖 stdlib。
+- **工具级护栏 `src/deerflow/guardrails_bridge.py`**：真实桥接 DeerFlow guardrails 子系统（AllowlistProvider 工具 allow/deny 闸门 + 审计日志 + `get_stats()`），`scheduler.guardrails` 经懒加载接入。
+
+**安全域测试 `test_kernel_security_fixes + test_security + test_security_audit_adapter + test_security_audit_selfheal + test_security_jwt + test_security_middleware`：6 文件 55 项全 PASSED（0 失败 0 跳过）**——compliance/guardrails/jwt/middleware/audit/kernel_security_fixes 真实机制全活。
+
+### 18.4 诚实边界（必须如实标注）
+- **「六层免疫塔 + OWASP Top 10 2026」在文档查无**：这是用户 memory 的愿景整合表述，与白皮书/AGENTS.md 当前正式措辞存在偏差。文档实际用「免疫层 4 表 + 合规安全层 + 工具护栏 + 6.3 语音合规」的精确工程语言——**愿景→落地的措辞演进本身是诚实进步**，但审计必须指出此偏差，不能默认愿景记忆等同当前文档事实。
+- **代码底层安全能力真实可验证**，比空泛「六层塔」愿景更实：4 表真建 + 审计脱敏真机制 + 护栏真闸门 + 55 项单测全过。无「空壳桩」、无「越级吹③」。
+- **OWASP Agentic AI Top 10 2026 这一具体标准在代码与文档均未显式对标**（grep `OWASP` 在 src/白皮书均零命中，AGENTS.md 仅 594 行「OWASP 常识」一笔）。若用户要求正式对标该标准，属**新增工作**，非既有声称的核实。
+
+### 18.5 结论
+**本轮核心产出是「宣称来源厘清」而非「编造指控」**：
+- 白皮书/AGENTS.md **无「六层免疫塔 + OWASP Top 10 2026」正式宣称**——用户 memory 该表述是愿景/早期描述，文档已演进；
+- 但代码**真实具备分层安全免疫能力**（免疫 4 表 + 合规安全层 + 工具护栏 + 紧急制动 L7E），且安全域 **55 项单测全绿**，非空壳；
+- 诚实建议：若要将「六层免疫塔」作为正式架构对外宣称，需先在文档补「六层」定义并与代码 4 表+合规层+护栏+制动对位；若要正式对标 OWASP Agentic AI Top 10 2026，属新增合规工作（当前仅「OWASP 常识」级）。
+- **本轮无白皮书/AGENTS.md 硬伤修正**（偏差在用户 memory 层，非文档虚假）；代码安全能力坐实为真。
