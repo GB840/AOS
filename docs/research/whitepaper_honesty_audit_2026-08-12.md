@@ -283,3 +283,28 @@
 - 细节观察（③ 级待验证，非 ② 级硬伤）：三个 `MISTRALRS_*` provider 的 `model` 字段在 `.env` 缺对应值时为空串；真推理时需补 config。白皮书已诚实把「真路由」标 ③，故在此边界内。
 
 （说明：本轮为只读实证，未改动白皮书/代码文件；仅把核查结论记入本报告与项目日志。）
+
+---
+
+## 第 15 节 · 第 16 遍（HTTP/API 服务边界实证："/api/lifeform" 真返回 31 组件活体快照）
+
+### 15.1 镜头与动机
+- 用户最原始的焦虑是「AOS 是一套系统，还是一堆散件」。前 15 遍已验证内部焊接（第 12 节：31/31 组件实例化、0 失败）、DB 底座（42 表）、路由（LLM Router 7/8），但**从未在对外服务边界锤过**——即 `GET /api/lifeform` 这类端点是否真把运行脊柱的活体快照暴露出去。
+- 白皮书第 169–192 节整节回答「一堆不是一套」，第 192 行明确可测断言：`/api/lifeform` 的 `picked_now` 应在体征降档时**从 `qwen3:8b` 变 `qwen2.5:3b`**。本轮即锤此服务边界。
+
+### 15.2 服务层焊接定位（先读代码，再实证）
+- 服务端 `src/api/main.py` 真实存在：`@app.on_event("startup")`（line 666-675）把 `LifeformRuntime` 挂到 `app.state.lifeform`（`get_lifeform_runtime()`），并 `lf.register_with_hub(hub)` 焊入 FabricHub；构造失败 best-effort 跳过。
+- `@app.get("/api/lifeform")`（line 830-851）直接读 `app.state.lifeform` → 调真实 `lf.status()`（活体快照）+ `lf.pick_model(heavy)`（真实降档决策），docstring 明写「证明白皮书生命体 OS 是运行系统的一部分，不是磁盘上的孤儿」。
+- 端点由真实 `APISecurityMiddleware`（`src/api/security.py:315`）保护：本环境 `.env` 配了 `AOS_API_KEY`，故中间件激活——不带凭据直接返回 **401 Unauthorized**（证明鉴权网关**真生效、非摆设**，符合母纲「本地优先、打开即用」外的真实安全边界）。
+
+### 15.3 金标准实证（managed Py3.13 venv：fastapi/starlette/httpx/uvicorn/pydantic 均 OK）
+- 用 `fastapi.testclient.TestClient` 真实拉起 `api.main:app`（触发 startup 挂载），**清空 `AOS_API_KEY`/`AOS_API_KEY_HASH` 让 dev 模式放开鉴权**，走完整 HTTP 路径：
+  - `GET /health` → **200** `{"status":"alive","service":"aos",...}`（应用真启动）；
+  - `GET /api/lifeform` → **200**，返回：
+    - `components 数 = 31`、`errors 数 = 0` —— **与第 12 节内部实例化逐字吻合**（同一运行脊柱，服务边界与内部态一致）；
+    - `model_decision = {"heavy":"qwen3:8b","picked_now":"qwen2.5:3b",...}` —— **真实降档逻辑生效**，与白皮书第 192 行断言精确一致；
+    - 顶层键含 `lifeform_runtime / components_loaded / components_failed / vital_sample / model_decision` —— **真实体征采样，非编造**。
+- 反向证明：端点带 `AOS_API_KEY` 时返回 401（鉴权真拦），再次确认服务不是裸奔。
+
+### 15.4 结论
+**HTTP/API 服务边界实证为真**：31 组件运行脊柱已通过 `startup` 真实焊入 FastAPI、并经 `/api/lifeform` 对外暴露真实活体快照（31/0、降档决策 qwen3:8b→qwen2.5:3b 全部真发生），且受真实鉴权网关保护。这把「一套系统」从**内部焊接**（第 12 节）推到**对外可观测的服务边界**——用户原焦虑「一堆不是一套」在 ② 级下被闭环坐实：**一套（焊接成网、31/31 活、0 失败、对外可观测、鉴权生效）**。**本轮无白皮书硬伤、无新增待修点。**
